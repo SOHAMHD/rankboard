@@ -1,0 +1,29 @@
+# Secrets — never commit
+.env
+seo-dashboard-499607-25e8ccaf16ad.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+
+# Node / Vite frontend
+node_modules/
+dist/
+build/
+.vite/
+
+# SQLite database (client data — back up separately)
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db

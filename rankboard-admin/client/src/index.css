@@ -1,0 +1,35 @@
+@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap");
+@import "tailwindcss";
+
+body {
+  font-family: "Instrument Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.font-display {
+  font-family: "Bricolage Grotesque", "Instrument Sans", system-ui, sans-serif;
+}
+.font-data {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+/* Skeleton shimmer — a soft "smear" sweeping across loading placeholders. */
+@keyframes skeleton-sweep {
+  0% {
+    background-position: -150% 0;
+  }
+  100% {
+    background-position: 150% 0;
+  }
+}
+.skeleton {
+  background-color: #e7e5e4; /* stone-200 */
+  background-image: linear-gradient(
+    90deg,
+    rgba(231, 229, 228, 0) 0%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(231, 229, 228, 0) 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-sweep 1.3s ease-in-out infinite;
+}

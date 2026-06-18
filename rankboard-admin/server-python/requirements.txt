@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+bcrypt
+PyJWT
+openpyxl
+python-multipart
+google-analytics-data
