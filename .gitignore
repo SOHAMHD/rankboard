@@ -1,0 +1,23 @@
+# ─── Secrets / local env files ───────────────────────────────────────
+# (.env.example files are intentionally NOT ignored — they document vars.)
+rankboard-admin/server-python/.env
+rankboard-admin/client/.env
+rankboard-admin/client/.env.local
+
+# ─── Local SQLite database files ─────────────────────────────────────
+rankboard-admin/server-python/*.db
+rankboard-admin/server-python/*.db-journal
+
+# ─── Google service-account key (Search Console / GA4) ───────────────
+rankboard-admin/server-python/seo-dashboard-*.json
+
+# ─── Python bytecode caches (any depth) ──────────────────────────────
+__pycache__/
+*.pyc
+
+# ─── Python virtual environment ──────────────────────────────────────
+rankboard-admin/server-python/.venv/
+
+# ─── Node dependencies / build output ────────────────────────────────
+rankboard-admin/client/node_modules/
+rankboard-admin/client/dist/

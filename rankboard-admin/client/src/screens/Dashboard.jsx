@@ -51,7 +51,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { api, getToken } from "../api";
+import { api, getToken, BASE } from "../api";
 import { Modal, ErrorNote, can, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { MozOverview } from "./MozOverview";
 
@@ -2671,7 +2671,7 @@ function BulkImportModal({ projectId, onClose, onImported }) {
     // Fetch with the auth header, then trigger a browser download from
     // the returned blob — you can't put headers on a plain <a href>.
     try {
-      const res = await fetch("/api/projects/keywords/sample-template", {
+      const res = await fetch(`${BASE}/api/projects/keywords/sample-template`, {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
       if (!res.ok) throw new Error("Couldn't download the template.");
@@ -2695,7 +2695,7 @@ function BulkImportModal({ projectId, onClose, onImported }) {
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch(`/api/projects/${projectId}/keywords/bulk-import`, {
+      const res = await fetch(`${BASE}/api/projects/${projectId}/keywords/bulk-import`, {
         method: "POST",
         headers: { Authorization: `Bearer ${getToken()}` }, // no Content-Type: the browser sets the multipart boundary
         body: form,

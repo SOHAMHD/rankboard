@@ -11,12 +11,16 @@
    ════════════════════════════════════════════════════════════════════ */
 const TOKEN_KEY = "rankboard_token";
 
+// API origin for production (separate static-site deploy). Empty in dev so the
+// Vite proxy (vite.config.js) keeps handling /api on the same origin.
+export const BASE = import.meta.env.VITE_API_BASE_URL || "";
+
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t) =>
   t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
 
 export async function api(path, { method = "GET", body } = {}) {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${BASE}/api${path}`, {
     method,
     headers: {
       "Content-Type": "application/json",
