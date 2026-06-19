@@ -99,6 +99,24 @@ REPORT_METRICS = ALLOWED_METRICS | set(DERIVED_METRICS)
 ALLOWED_MATCH_TYPES = {"EXACT", "CONTAINS", "BEGINS_WITH", "ENDS_WITH", "FULL_REGEXP"}
 
 
+def _analytics_client():
+    """Build a GA4 BetaAnalyticsDataClient from the service-account key.
+
+    GOOGLE_SERVICE_ACCOUNT_JSON may hold the full JSON key CONTENT (an env var
+    on hosts like Render, where there's no key file on disk) or a PATH to a key
+    file (the local-dev default). JSON content is detected by its leading "{";
+    anything else is treated as a file path so dev is unchanged. Raises on a
+    missing/invalid key — every caller wraps this in try/except so the failure
+    degrades to a friendly message instead of crashing."""
+    from google.analytics.data_v1beta import BetaAnalyticsDataClient
+
+    raw = GOOGLE_SERVICE_ACCOUNT_JSON
+    if raw.lstrip().startswith("{"):
+        import json
+        return BetaAnalyticsDataClient.from_service_account_info(json.loads(raw))
+    return BetaAnalyticsDataClient.from_service_account_json(raw)
+
+
 def build_dimension_filter(filters: list[dict] | None, match: str = "AND"):
     """Build a GA4 dimension FilterExpression from a list of
     {dimension, operator, value, exclude} conditions, or return None when
@@ -217,7 +235,7 @@ def get_analytics(
         }
 
     try:
-        client = BetaAnalyticsDataClient.from_service_account_json(GOOGLE_SERVICE_ACCOUNT_JSON)
+        client = _analytics_client()
     except Exception as exc:
         return {"error": f"Could not load the Google service-account key: {exc}"}
 
@@ -343,7 +361,7 @@ def get_dimension_breakdown(
         return {"error": "GA4 is not configured on the server (no service-account key set).", "dimension": dimension}
 
     try:
-        client = BetaAnalyticsDataClient.from_service_account_json(GOOGLE_SERVICE_ACCOUNT_JSON)
+        client = _analytics_client()
     except Exception as exc:
         return {"error": f"Could not load the Google service-account key: {exc}", "dimension": dimension}
 
@@ -437,7 +455,7 @@ def run_custom_report(
         return {"error": "GA4 is not configured on the server (no service-account key set)."}
 
     try:
-        client = BetaAnalyticsDataClient.from_service_account_json(GOOGLE_SERVICE_ACCOUNT_JSON)
+        client = _analytics_client()
     except Exception as exc:
         return {"error": f"Could not load the Google service-account key: {exc}"}
 
@@ -563,7 +581,7 @@ def get_returning_users(
 
         if not GOOGLE_SERVICE_ACCOUNT_JSON:
             return 0
-        client = BetaAnalyticsDataClient.from_service_account_json(GOOGLE_SERVICE_ACCOUNT_JSON)
+        client = _analytics_client()
         prop = str(property_id).strip()
         resource = prop if prop.startswith("properties/") else f"properties/{prop}"
         request = RunReportRequest(

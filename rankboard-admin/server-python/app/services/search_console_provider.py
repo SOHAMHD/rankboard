@@ -48,9 +48,20 @@ def _build_service():
         return None, "The google-api-python-client package is not installed on the server."
 
     try:
-        credentials = Credentials.from_service_account_file(
-            GOOGLE_SERVICE_ACCOUNT_JSON, scopes=_SCOPES
-        )
+        # GOOGLE_SERVICE_ACCOUNT_JSON may hold the full JSON key CONTENT (an env
+        # var on hosts like Render, where there's no key file on disk) or a PATH
+        # to a key file (the local-dev default). JSON content is detected by its
+        # leading "{"; anything else is treated as a file path so dev is unchanged.
+        raw = GOOGLE_SERVICE_ACCOUNT_JSON
+        if raw.lstrip().startswith("{"):
+            import json
+            credentials = Credentials.from_service_account_info(
+                json.loads(raw), scopes=_SCOPES
+            )
+        else:
+            credentials = Credentials.from_service_account_file(
+                raw, scopes=_SCOPES
+            )
     except Exception as exc:
         return None, f"Could not load the Google service-account key: {exc}"
 
