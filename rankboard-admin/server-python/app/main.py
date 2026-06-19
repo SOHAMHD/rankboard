@@ -31,9 +31,16 @@ app = FastAPI(
 # Browser CORS: an explicit allowlist (never "*"), so only the known frontend
 # origin(s) may call the API. Auth uses the Authorization header, but
 # allow_credentials stays on so cookie-based flows aren't silently broken.
+# The deployed frontend (Render) and local dev (Vite) are always allowed;
+# CORS_ORIGINS (env, default http://localhost:5173) adds any extra origins.
+ALLOWED_ORIGINS = list(dict.fromkeys([
+    "https://rankboard-1.onrender.com",  # deployed frontend (Render)
+    "http://localhost:5173",             # local dev (Vite)
+    *CORS_ORIGINS,
+]))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
