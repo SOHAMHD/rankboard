@@ -203,21 +203,23 @@ def init_db() -> None:
 
     (count,) = conn.execute("SELECT COUNT(*) FROM users").fetchone()
     if count == 0:
-        # Never ship a known password. Generate a random one-time password,
-        # print it ONCE to the server console for the operator, and force a
-        # reset on first login (must_change_password = 1, status 'invited').
-        temp_password = "".join(secrets.choice(_SEED_PW_CHARS) for _ in range(12))
+        # Fixed, known seed credential so the Super Admin can always sign in on
+        # a fresh database — essential on hosts (e.g. Render) that reset the DB
+        # on every deploy. The password is a known value by design; it is still
+        # bcrypt-hashed, never stored in plain text. Created active with no
+        # forced change so `admin123` logs straight in after each redeploy.
+        temp_password = "admin123"
         pw_hash = bcrypt.hashpw(temp_password.encode(), bcrypt.gensalt()).decode()
         conn.execute(
             "INSERT INTO users (name, email, role, password_hash, must_change_password, status)"
-            " VALUES (?, ?, ?, ?, 1, 'invited')",
+            " VALUES (?, ?, ?, ?, 0, 'active')",
             ("Soham Dhokiya", "soham@infyappdevelopment.com", "Super Admin", pw_hash),
         )
         print("=" * 64)
-        print("Seeded first Super Admin (must set a new password on first login):")
+        print("Seeded first Super Admin:")
         print("  email:    soham@infyappdevelopment.com")
         print(f"  password: {temp_password}")
-        print("  ^ shown ONCE here only — stored as a bcrypt hash, not in plain text.")
+        print("  ^ stored as a bcrypt hash, not in plain text.")
         print("=" * 64)
 
     (pcount,) = conn.execute("SELECT COUNT(*) FROM projects").fetchone()
