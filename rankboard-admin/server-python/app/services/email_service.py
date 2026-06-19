@@ -36,7 +36,13 @@ def send_invite_email(db: sqlite3.Connection, *, name: str, email: str, role: st
             req = urllib.request.Request(
                 "https://api.resend.com/emails",
                 data=json.dumps({"from": EMAIL_FROM, "to": [email], "subject": subject, "text": body}).encode(),
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                    # Cloudflare (in front of Resend's API) returns 403 "error code: 1010"
+                    # to urllib's default "Python-urllib/x.y" UA, so send an explicit one.
+                    "User-Agent": "RankBoard/1.0",
+                },
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=10) as res:
