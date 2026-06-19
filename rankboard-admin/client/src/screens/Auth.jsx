@@ -55,13 +55,6 @@ export function LoginView({ onLogin }) {
         <button onClick={submit} disabled={!email || !password || busy} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
           {busy ? <LoaderCircle size={16} className="animate-spin" /> : "Sign in"}
         </button>
-
-        <div className="mt-5 pt-4 border-t border-stone-100">
-          <p className="text-xs text-stone-400 text-center">
-            First run seeds a Super Admin: <span className="font-data text-stone-600">soham@infyappdevelopment.com</span> /{" "}
-            <span className="font-data text-stone-600">admin123</span>
-          </p>
-        </div>
       </div>
     </DarkShell>
   );
