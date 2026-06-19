@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from ..config import DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD, RANK_LOCATION_CODE
 from ..db import get_db
-from ..security import require_auth, require_permission
+from ..security import require_active_user, require_permission
 from ..services.analytics_provider import (
     ALLOWED_DIMENSIONS,
     ALLOWED_MATCH_TYPES,
@@ -25,7 +25,7 @@ from ..services.search_console_provider import get_search_console, query_perform
 from ..services.excel_service import build_sample_workbook, parse_keyword_workbook
 from ..services.snapshot_service import create_snapshot
 
-router = APIRouter(dependencies=[Depends(require_auth)])
+router = APIRouter(dependencies=[Depends(require_active_user)])
 
 
 def row_to_project(p: sqlite3.Row, keyword_count: int | None = None) -> dict:
@@ -579,7 +579,7 @@ def check_project_ranks(project_id: int, db: sqlite3.Connection = Depends(get_db
 # ── Bulk import via Excel ───────────────────────────────────────────
 
 @router.get("/keywords/sample-template")
-def download_sample_template(user=Depends(require_auth)):
+def download_sample_template(user=Depends(require_active_user)):
     """Serve the .xlsx template. A GET that returns a file, not JSON:
     the Content-Disposition header tells the browser to download it
     with a filename instead of trying to render it."""

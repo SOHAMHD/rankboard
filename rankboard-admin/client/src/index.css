@@ -1,15 +1,64 @@
-@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
 @import "tailwindcss";
 
+/* ════════════════════════════════════════════════════════════════════
+   DESIGN TOKENS — premium B2B SaaS skin (Linear / Stripe / Vercel-ish).
+
+   Tailwind v4 exposes its palette as CSS variables, so re-skinning the
+   whole app is a matter of redefining them here — no markup churn:
+
+     • accent  → purple #5B5BF7  (re-maps the `orange-*` scale)
+     • surface → cool grays      (re-maps the warm `stone-*` scale:
+                                   bg #FAFAFC, borders #E7EAF0)
+     • radius  → 16px cards       (bumps `rounded-xl`)
+   Anything reading `orange-600` / `stone-200` / `rounded-xl` shifts
+   automatically to the new look.
+   ════════════════════════════════════════════════════════════════════ */
+@theme {
+  /* Accent — anchored on #5B5BF7 (the primary), with a soft tint ramp for
+     icon chips & selected states and a darker step for hovers. */
+  --color-orange-50: #eeeefe;
+  --color-orange-100: #e3e3fd;
+  --color-orange-200: #cbcbfb;
+  --color-orange-300: #a9a9f9;
+  --color-orange-400: #8b8bf9;
+  --color-orange-500: #6e6ef8;
+  --color-orange-600: #5b5bf7;
+  --color-orange-700: #4a47e0;
+  --color-orange-800: #3b38b5;
+  --color-orange-900: #312f90;
+
+  /* Surface — cool neutral ramp. stone-100 is the app background (#FAFAFC)
+     and stone-200 is the hairline border (#E7EAF0). */
+  --color-stone-50: #f7f8fa;
+  --color-stone-100: #fafafc;
+  --color-stone-200: #e7eaf0;
+  --color-stone-300: #d5dae3;
+  --color-stone-400: #99a1b0;
+  --color-stone-500: #6a7383;
+  --color-stone-600: #4b5563;
+  --color-stone-700: #364152;
+  --color-stone-800: #1f2733;
+  --color-stone-900: #121826;
+
+  /* 16px corners on cards (rounded-xl) to match the target's soft radius. */
+  --radius-xl: 1rem;
+}
+
 body {
-  font-family: "Instrument Sans", system-ui, sans-serif;
+  font-family: "Inter", system-ui, sans-serif;
+  background-color: var(--color-stone-100);
   -webkit-font-smoothing: antialiased;
 }
+/* Display + data both ride on Inter now (one type family, premium look);
+   data keeps tabular figures so columns of numbers stay aligned. */
 .font-display {
-  font-family: "Bricolage Grotesque", "Instrument Sans", system-ui, sans-serif;
+  font-family: "Inter", system-ui, sans-serif;
+  letter-spacing: -0.011em;
 }
 .font-data {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-family: "Inter", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Skeleton shimmer — a soft "smear" sweeping across loading placeholders. */
@@ -22,14 +71,30 @@ body {
   }
 }
 .skeleton {
-  background-color: #e7e5e4; /* stone-200 */
+  background-color: #e7eaf0; /* stone-200 */
   background-image: linear-gradient(
     90deg,
-    rgba(231, 229, 228, 0) 0%,
+    rgba(231, 234, 240, 0) 0%,
     rgba(255, 255, 255, 0.85) 50%,
-    rgba(231, 229, 228, 0) 100%
+    rgba(231, 234, 240, 0) 100%
   );
   background-size: 200% 100%;
   background-repeat: no-repeat;
   animation: skeleton-sweep 1.3s ease-in-out infinite;
+}
+
+/* Gentle rise-in for KPI cards / panels — the prompt's "smooth animations"
+   without pulling in a motion library. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise-in {
+  animation: rise-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
 }

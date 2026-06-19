@@ -108,7 +108,7 @@ export function DarkShell({ children }) {
   return (
     <div
       className="min-h-screen flex items-center justify-center p-6"
-      style={{ background: "radial-gradient(70% 55% at 50% 0%, rgba(234,88,12,0.18), transparent 70%), #0f172a" }}
+      style={{ background: "radial-gradient(70% 55% at 50% 0%, rgba(91,91,247,0.22), transparent 70%), #0f172a" }}
     >
       <div className="w-full max-w-sm">
         <div className="flex items-center justify-center gap-3 mb-8">

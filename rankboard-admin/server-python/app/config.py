@@ -26,8 +26,28 @@ if _env_file.exists():
             os.environ.setdefault(_key.strip(), _value.strip())
 
 PORT = int(os.environ.get("PORT", 4000))
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me-in-production")
+
+# Signing key for auth tokens. REQUIRED — no fallback. An empty or missing
+# value is a hard startup error (fail fast) rather than a silent insecure
+# default that would let anyone forge tokens. Set a long random value in the
+# environment (or server-python/.env) before starting the server.
+JWT_SECRET = os.environ.get("JWT_SECRET", "").strip()
+if not JWT_SECRET:
+    raise RuntimeError(
+        "JWT_SECRET is not set. Set a long random value (32+ bytes) in the "
+        "environment or server-python/.env before starting the server."
+    )
+
 APP_URL = os.environ.get("APP_URL", "http://localhost:5173")  # link in invite emails
+
+# Interactive API docs (/docs, /redoc, /openapi.json) expose the full API
+# surface, so they are OFF unless DEBUG is explicitly enabled. Keep DEBUG
+# false in production.
+DEBUG = os.environ.get("DEBUG", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+# Browser CORS allowlist — comma-separated origins, defaulting to the frontend
+# (APP_URL). NEVER "*", especially with credentials.
+CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", APP_URL).split(",") if o.strip()]
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "RankBoard <onboarding@resend.dev>")
 

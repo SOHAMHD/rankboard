@@ -28,11 +28,17 @@ import {
   Trash2,
   TrendingDown,
   TrendingUp,
+  Users,
+  UserPlus,
+  UserCheck,
+  Clock,
   X,
 } from "lucide-react";
 import {
   LineChart,
   Line,
+  AreaChart,
+  Area,
   BarChart,
   Bar,
   PieChart,
@@ -140,32 +146,32 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
 
   return (
     <div className="min-h-screen bg-stone-100 lg:pl-64">
-      {/* ── Fixed sidebar (desktop) ── */}
-      <aside className="hidden lg:flex fixed inset-y-0 left-0 w-64 bg-slate-900 flex-col">
-        <div className="p-4 border-b border-slate-800">
+      {/* ── Fixed sidebar (desktop) — light premium rail ── */}
+      <aside className="hidden lg:flex fixed inset-y-0 left-0 w-64 bg-white border-r border-stone-200 flex-col">
+        <div className="p-4 border-b border-stone-200">
           <button
             onClick={onBack}
-            className="flex items-center gap-1 text-xs text-slate-400 hover:text-white mb-4 transition-colors"
+            className="flex items-center gap-1 text-xs text-stone-400 hover:text-stone-700 mb-4 transition-colors"
           >
             <ChevronLeft size={14} /> All projects
           </button>
           <div className="flex items-center gap-2.5">
-            <div className="h-8 w-8 rounded-lg bg-orange-600 flex items-center justify-center shrink-0">
-              <BarChart3 size={16} className="text-white" />
+            <div className="h-9 w-9 rounded-xl bg-orange-600 flex items-center justify-center shrink-0 shadow-sm">
+              <BarChart3 size={17} className="text-white" />
             </div>
             <div className="min-w-0">
-              <p className="text-white text-sm font-semibold leading-tight truncate font-display">{project.name}</p>
-              <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
-                <span className={`h-1.5 w-1.5 rounded-full ${project.active ? "bg-emerald-400" : "bg-slate-500"}`} />
+              <p className="text-stone-900 text-sm font-semibold leading-tight truncate font-display">{project.name}</p>
+              <p className="text-xs text-stone-500 flex items-center gap-1.5 mt-0.5">
+                <span className={`h-1.5 w-1.5 rounded-full ${project.active ? "bg-emerald-500" : "bg-stone-300"}`} />
                 {project.active ? "Active" : "Inactive"}
               </p>
-              {project.domain && <p className="text-xs text-slate-500 font-data truncate mt-0.5">{project.domain}</p>}
+              {project.domain && <p className="text-xs text-stone-400 font-data truncate mt-0.5">{project.domain}</p>}
             </div>
           </div>
         </div>
 
         <nav className="flex-1 p-3 overflow-y-auto">
-          <p className="px-3 text-xs uppercase tracking-wider text-slate-500 mb-2">SEO tools</p>
+          <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-2">SEO tools</p>
           {NAV_GROUPS.map((group) => {
             const children = group.children || null;
 
@@ -176,7 +182,9 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
                   key={group.id}
                   onClick={() => setActiveNav(group.id)}
                   className={`w-full flex items-center gap-2.5 px-3 py-2 mb-1 rounded-lg text-sm font-medium transition-colors ${
-                    activeNav === group.id ? "bg-orange-600 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"
+                    activeNav === group.id
+                      ? "bg-orange-50 text-orange-700"
+                      : "text-stone-500 hover:text-stone-900 hover:bg-stone-100"
                   }`}
                 >
                   <group.icon size={16} /> {group.label}
@@ -192,7 +200,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
                   onClick={() => toggleGroup(group.id)}
                   aria-expanded={expanded}
                   className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    groupActive ? "text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"
+                    groupActive ? "text-stone-900" : "text-stone-500 hover:text-stone-900 hover:bg-stone-100"
                   }`}
                 >
                   <group.icon size={16} />
@@ -200,15 +208,15 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
                   <ChevronDown size={14} className={`transition-transform ${expanded ? "" : "-rotate-90"}`} />
                 </button>
                 {expanded && (
-                  <div className="mt-0.5 ml-[1.6rem] pl-3 border-l border-slate-800 flex flex-col gap-0.5">
+                  <div className="mt-0.5 ml-[1.6rem] pl-3 border-l border-stone-200 flex flex-col gap-0.5">
                     {children.map((child) => (
                       <button
                         key={child.id}
                         onClick={() => setActiveNav(child.id)}
                         className={`w-full text-left px-3 py-1.5 rounded-lg text-sm transition-colors ${
                           activeNav === child.id
-                            ? "bg-orange-600 text-white font-medium"
-                            : "text-slate-400 hover:text-white hover:bg-slate-800"
+                            ? "bg-orange-50 text-orange-700 font-medium"
+                            : "text-stone-500 hover:text-stone-900 hover:bg-stone-100"
                         }`}
                       >
                         {child.label}
@@ -221,30 +229,35 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-800 flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-sm text-white truncate">{user.name}</p>
-            <p className="text-xs text-slate-500">{user.role}</p>
+        <div className="p-4 border-t border-stone-200 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="h-8 w-8 rounded-full bg-orange-100 text-orange-700 flex items-center justify-center text-xs font-semibold shrink-0">
+              {user.name?.[0]?.toUpperCase() || "?"}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm text-stone-900 truncate font-medium">{user.name}</p>
+              <p className="text-xs text-stone-400">{user.role}</p>
+            </div>
           </div>
           <button
             onClick={onLogout}
             aria-label="Sign out"
             title="Sign out"
-            className="p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
+            className="p-1.5 rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors shrink-0"
           >
             <LogOut size={16} />
           </button>
         </div>
       </aside>
 
-      {/* ── Compact header (mobile) — same nav, different shape ── */}
-      <div className="lg:hidden bg-slate-900 text-white">
+      {/* ── Compact header (mobile) — same nav, light theme ── */}
+      <div className="lg:hidden bg-white border-b border-stone-200 sticky top-0 z-20">
         <div className="px-4 pt-4 pb-3 flex items-center justify-between gap-3">
-          <button onClick={onBack} className="flex items-center gap-1 text-xs text-slate-400 hover:text-white">
+          <button onClick={onBack} className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900">
             <ChevronLeft size={14} /> Projects
           </button>
-          <p className="text-sm font-semibold truncate font-display">{project.name}</p>
-          <button onClick={onLogout} aria-label="Sign out" className="p-1 text-slate-400 hover:text-white">
+          <p className="text-sm font-semibold text-stone-900 truncate font-display">{project.name}</p>
+          <button onClick={onLogout} aria-label="Sign out" className="p-1 text-stone-400 hover:text-stone-900">
             <LogOut size={15} />
           </button>
         </div>
@@ -254,8 +267,10 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
               <button
                 key={child.id}
                 onClick={() => setActiveNav(child.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${
-                  activeNav === child.id ? "bg-orange-600 text-white" : "bg-slate-800 text-slate-300"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                  activeNav === child.id
+                    ? "bg-orange-600 text-white"
+                    : "bg-stone-100 text-stone-600 hover:bg-stone-200"
                 }`}
               >
                 <group.icon size={13} /> {child.label}
@@ -864,13 +879,13 @@ const MONTH_NAMES = [
 
 // Chart palette — orange is the app accent; sky is the established second
 // series colour (see role styles / rank "New" badge).
-const COLOR_ACTIVE = "#ea580c"; // orange-600 — active users
+const COLOR_ACTIVE = "#5b5bf7"; // brand purple — active users
 const COLOR_NEW = "#0284c7"; // sky-600 — new users
 
 // Categorical palette for composition donuts (Channels, Devices, Language…).
 // Leads with the two series colours, then distinct hues; greens/reds are left
 // out — those are reserved app-wide for rank movement. "Other" uses stone-400.
-const DONUT_COLORS = ["#ea580c", "#0284c7", "#f59e0b", "#7c3aed", "#0891b2", "#db2777", "#4f46e5", "#475569"];
+const DONUT_COLORS = ["#5b5bf7", "#0284c7", "#f59e0b", "#7c3aed", "#0891b2", "#db2777", "#4f46e5", "#475569"];
 
 // Seconds → "1m 23s" (or "23s" under a minute), matching GA's display.
 function formatEngagement(seconds) {
@@ -1091,15 +1106,25 @@ function TrafficTool({ project, view }) {
                 {data.error}
               </div>
             ) : (
-              <div className="space-y-6 mb-6">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <Stat label="Active users" value={data.summary?.activeUsers ?? 0} />
-                  <Stat label="New users" value={data.summary?.newUsers ?? 0} />
-                  <Stat label="Returning users" value={data.summary?.returningUsers ?? 0} />
-                  <Stat label="Avg. engagement time" value={formatEngagement(data.summary?.avgEngagementSeconds)} />
-                </div>
-                <TrafficTrendChart byDate={data.byDate || { rows: [] }} />
-              </div>
+              (() => {
+                // Sparklines come straight from the real per-day series — no
+                // invented comparison numbers. Returning = active − new per day.
+                const rows = data.byDate?.rows || [];
+                const active = rows.map((r) => Number(r.activeUsers) || 0);
+                const fresh = rows.map((r) => Number(r.newUsers) || 0);
+                const returning = rows.map((_, i) => Math.max(0, active[i] - fresh[i]));
+                return (
+                  <div className="space-y-6 mb-6">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+                      <Stat label="Active users" value={(data.summary?.activeUsers ?? 0).toLocaleString()} icon={Users} spark={active} />
+                      <Stat label="New users" value={(data.summary?.newUsers ?? 0).toLocaleString()} icon={UserPlus} spark={fresh} />
+                      <Stat label="Returning users" value={(data.summary?.returningUsers ?? 0).toLocaleString()} icon={UserCheck} spark={returning} />
+                      <Stat label="Avg. engagement time" value={formatEngagement(data.summary?.avgEngagementSeconds)} icon={Clock} />
+                    </div>
+                    <TrafficTrendChart byDate={data.byDate || { rows: [] }} />
+                  </div>
+                );
+              })()
             ))}
 
           {/* Every Traffic page IS the full Explore builder, pre-set to that
@@ -1448,25 +1473,41 @@ function TrafficTrendChart({ byDate }) {
   const chartData = rows.map((r) => ({ ...r, label: formatGADate(r.date) }));
 
   return (
-    <div>
-      <h2 className="text-sm font-semibold text-stone-700 mb-2 font-display">Users over time</h2>
-      <div className="bg-white rounded-xl border border-stone-200 p-4">
-        {chartData.length === 0 ? (
-          <p className="py-12 text-center text-sm text-stone-400">No data for this range.</p>
-        ) : (
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#a8a29e" }} tickLine={false} axisLine={{ stroke: "#e7e5e4" }} minTickGap={24} />
-              <YAxis tick={{ fontSize: 11, fill: "#a8a29e" }} tickLine={false} axisLine={false} allowDecimals={false} width={40} />
-              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e7e5e4" }} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Line type="monotone" dataKey="activeUsers" name="Active users" stroke={COLOR_ACTIVE} strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="newUsers" name="New users" stroke={COLOR_NEW} strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
+    <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-4 sm:p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-sm font-semibold text-stone-900 font-display">Users over time</h2>
+          <p className="text-xs text-stone-400 mt-0.5">Active vs. new users across the range</p>
+        </div>
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-stone-600 border border-stone-200 rounded-lg px-2.5 py-1">
+          Daily <ChevronDown size={13} className="text-stone-400" />
+        </span>
       </div>
+      {chartData.length === 0 ? (
+        <p className="py-12 text-center text-sm text-stone-400">No data for this range.</p>
+      ) : (
+        <ResponsiveContainer width="100%" height={260}>
+          <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+            <defs>
+              <linearGradient id="fillActive" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={COLOR_ACTIVE} stopOpacity={0.28} />
+                <stop offset="100%" stopColor={COLOR_ACTIVE} stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="fillNew" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={COLOR_NEW} stopOpacity={0.18} />
+                <stop offset="100%" stopColor={COLOR_NEW} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#eef0f5" vertical={false} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={{ stroke: "#e7eaf0" }} minTickGap={24} />
+            <YAxis tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={false} allowDecimals={false} width={40} />
+            <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e7eaf0", boxShadow: "0 4px 16px rgba(18,24,38,0.08)" }} />
+            <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" />
+            <Area type="monotone" dataKey="activeUsers" name="Active users" stroke={COLOR_ACTIVE} strokeWidth={2.5} fill="url(#fillActive)" dot={false} activeDot={{ r: 4 }} />
+            <Area type="monotone" dataKey="newUsers" name="New users" stroke={COLOR_NEW} strokeWidth={2} fill="url(#fillNew)" dot={false} activeDot={{ r: 4 }} />
+          </AreaChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
 }
@@ -2415,13 +2456,64 @@ function SearchConsoleRowsTable({ label, rows, onPick }) {
   );
 }
 
-function Stat({ label, value, tone }) {
-  const toneClass = tone === "up" ? "text-emerald-600" : tone === "down" ? "text-red-500" : "text-stone-900";
+/* KPI card — premium analytics tile: a soft-purple icon chip, a colored
+   comparison pill, the headline value, and an optional sparkline. Every
+   prop beyond label/value is optional, so the simpler Rank Ledger stats
+   (which pass only label + value, sometimes a `tone`) render cleanly too. */
+function Stat({ label, value, tone, icon: Icon, delta, deltaDown, spark }) {
+  const valueClass = tone === "up" ? "text-emerald-600" : tone === "down" ? "text-red-500" : "text-stone-900";
   return (
-    <div className="bg-white rounded-xl border border-stone-200 px-4 py-3">
-      <p className="text-xs uppercase tracking-wider text-stone-400">{label}</p>
-      <p className={`text-2xl font-semibold mt-1 font-data ${toneClass}`}>{value}</p>
+    <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-4 sm:p-5 flex flex-col rise-in">
+      {(Icon || delta) && (
+        <div className="flex items-center justify-between mb-3">
+          {Icon ? (
+            <span className="h-9 w-9 rounded-full bg-orange-50 text-orange-600 flex items-center justify-center shrink-0">
+              <Icon size={17} />
+            </span>
+          ) : (
+            <span />
+          )}
+          {delta != null && (
+            <span
+              className={`inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded-md ${
+                deltaDown ? "text-red-600 bg-red-50" : "text-emerald-600 bg-emerald-50"
+              }`}
+            >
+              {deltaDown ? <TrendingDown size={12} /> : <TrendingUp size={12} />}
+              {delta}
+            </span>
+          )}
+        </div>
+      )}
+      <p className={`text-2xl font-bold font-data tracking-tight ${valueClass}`}>{value}</p>
+      <p className="text-xs font-medium text-stone-500 mt-0.5">{label}</p>
+      {spark && spark.length > 1 && <Sparkline data={spark} down={deltaDown} />}
     </div>
+  );
+}
+
+/* Dependency-free SVG sparkline — a soft area under a 2px line. Purple for an
+   upward/neutral series, red when the card is flagged as declining. */
+function Sparkline({ data, down }) {
+  const w = 120;
+  const h = 32;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const span = max - min || 1;
+  const pts = data.map((v, i) => {
+    const x = data.length === 1 ? w : (i / (data.length - 1)) * w;
+    const y = h - 3 - ((v - min) / span) * (h - 6);
+    return [x, y];
+  });
+  const line = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+  const area = `${line} L${w} ${h} L0 ${h} Z`;
+  const stroke = down ? "#dc2626" : "#5b5bf7";
+  const fill = down ? "#fee2e2" : "#e3e3fd";
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full h-8 mt-3 overflow-visible">
+      <path d={area} fill={fill} opacity="0.55" />
+      <path d={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 

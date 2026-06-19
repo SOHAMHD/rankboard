@@ -28,8 +28,11 @@ def require_auth(
     authorization: str | None = Header(default=None),
     db: sqlite3.Connection = Depends(get_db),
 ) -> sqlite3.Row:
-    """Proves WHO is calling, then loads them fresh from the DB so role
-    changes and deletions apply immediately (never trust stale token data)."""
+    """Base authentication: proves WHO is calling and loads them fresh from the
+    DB so role changes and deletions apply immediately (never trust stale token
+    data). Does NOT enforce account standing — used directly only by /me and
+    /set-password, the two endpoints a must-change / not-yet-active user must
+    still reach. Everything else depends on require_active_user below."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Sign in required.")
     token = authorization[7:]
@@ -47,9 +50,21 @@ def require_auth(
     return user
 
 
+def require_active_user(user: sqlite3.Row = Depends(require_auth)) -> sqlite3.Row:
+    """Strict gate for every data/action endpoint: the caller must be ACTIVE
+    and must not owe a password reset. A must-change / invited user is blocked
+    here (403) but can still log in, load /me, and POST /set-password (which use
+    the base require_auth) to get themselves into good standing."""
+    if user["status"] != "active":
+        raise HTTPException(403, "Your account isn't active yet — set your password to continue.")
+    if user["must_change_password"]:
+        raise HTTPException(403, "You must set a new password before continuing.")
+    return user
+
+
 def require_permission(action: str):
     """Proves the caller is ALLOWED, by asking the matrix."""
-    def checker(user: sqlite3.Row = Depends(require_auth)) -> sqlite3.Row:
+    def checker(user: sqlite3.Row = Depends(require_active_user)) -> sqlite3.Row:
         if not can(user["role"], action):
             raise HTTPException(403, "You don't have permission to do that.")
         return user

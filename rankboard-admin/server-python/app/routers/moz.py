@@ -16,10 +16,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..db import get_db
-from ..security import require_auth, require_permission
+from ..security import require_active_user, require_permission
 from ..services.moz_provider import MozApiError, fetch_moz_metrics
 
-router = APIRouter(dependencies=[Depends(require_auth)])
+router = APIRouter(dependencies=[Depends(require_active_user)])
 
 
 def row_to_moz(row: sqlite3.Row) -> dict:

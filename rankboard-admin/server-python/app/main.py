@@ -11,14 +11,33 @@ the Node server established, so this server honors it exactly.
 """
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .config import CORS_ORIGINS, DEBUG
 from .db import init_db
 from .routers import auth, moz, projects, users
 
 init_db()
 
-app = FastAPI(title="RankBoard API (Python)")
+app = FastAPI(
+    title="RankBoard API (Python)",
+    # Docs expose the full API surface — disabled unless DEBUG is set.
+    docs_url="/docs" if DEBUG else None,
+    redoc_url="/redoc" if DEBUG else None,
+    openapi_url="/openapi.json" if DEBUG else None,
+)
+
+# Browser CORS: an explicit allowlist (never "*"), so only the known frontend
+# origin(s) may call the API. Auth uses the Authorization header, but
+# allow_credentials stays on so cookie-based flows aren't silently broken.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(HTTPException)

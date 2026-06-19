@@ -8,9 +8,14 @@ equivalent of Express middleware that prepares something for the
 handler.
 """
 import sqlite3
+import secrets
 from pathlib import Path
 
 import bcrypt
+
+# Readable one-time seed password: cryptographically random (secrets, not
+# random) and skips lookalike characters (0/O, 1/l/I).
+_SEED_PW_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
 
 DB_PATH = Path(__file__).resolve().parent.parent / "rankboard.db"
 
@@ -198,13 +203,22 @@ def init_db() -> None:
 
     (count,) = conn.execute("SELECT COUNT(*) FROM users").fetchone()
     if count == 0:
-        pw_hash = bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode()
+        # Never ship a known password. Generate a random one-time password,
+        # print it ONCE to the server console for the operator, and force a
+        # reset on first login (must_change_password = 1, status 'invited').
+        temp_password = "".join(secrets.choice(_SEED_PW_CHARS) for _ in range(12))
+        pw_hash = bcrypt.hashpw(temp_password.encode(), bcrypt.gensalt()).decode()
         conn.execute(
             "INSERT INTO users (name, email, role, password_hash, must_change_password, status)"
-            " VALUES (?, ?, ?, ?, 0, 'active')",
+            " VALUES (?, ?, ?, ?, 1, 'invited')",
             ("Soham Dhokiya", "soham@infyappdevelopment.com", "Super Admin", pw_hash),
         )
-        print("Seeded first Super Admin -> soham@infyappdevelopment.com / admin123")
+        print("=" * 64)
+        print("Seeded first Super Admin (must set a new password on first login):")
+        print("  email:    soham@infyappdevelopment.com")
+        print(f"  password: {temp_password}")
+        print("  ^ shown ONCE here only — stored as a bcrypt hash, not in plain text.")
+        print("=" * 64)
 
     (pcount,) = conn.execute("SELECT COUNT(*) FROM projects").fetchone()
     if pcount == 0:
