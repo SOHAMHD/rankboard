@@ -1408,6 +1408,17 @@ function ExploreReport({ projectId, range, defaultDimension }) {
   const updateFilter = (i, patch) => setFilters((f) => f.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
   const removeFilter = (i) => setFilters((f) => f.filter((_, idx) => idx !== i));
 
+  // Drill-down: clicking a dimension value in the result table adds it as an
+  // EXACT filter on that dimension, narrowing the report to that row's data
+  // (same click-to-filter the GSC report uses). De-dupes identical filters so
+  // repeated clicks don't stack the same condition.
+  const drillDown = (dimension, value) =>
+    setFilters((f) =>
+      f.some((x) => x.dimension === dimension && x.operator === "EXACT" && x.value === value && !x.exclude)
+        ? f
+        : [...f, { dimension, operator: "EXACT", value, exclude: false }]
+    );
+
   // The server reports incompatible combinations / no data as {error}; a thrown
   // api() error lands in `error`. Either way we show the same muted message.
   const failed = error || result?.error;
@@ -1631,7 +1642,7 @@ function ExploreReport({ projectId, range, defaultDimension }) {
           </p>
         </div>
       ) : (
-        <ReportResult report={result} />
+        <ReportResult report={result} onDrill={drillDown} />
       )}
     </div>
   );
@@ -1795,7 +1806,7 @@ const TIME_DIMENSIONS = new Set(DIMENSION_GROUPS["Time"].map(([, name]) => name)
    always use the bar. table-fixed + a colgroup gives the metric columns a fixed
    width and lets the dimension columns take the rest and truncate (ellipsis +
    title), so long values never push columns off-screen — no horizontal scroll. */
-function ReportResult({ report }) {
+function ReportResult({ report, onDrill }) {
   const dims = report?.dimensions || [];
   const mets = report?.metrics || [];
   const rows = report?.rows || [];
@@ -1920,10 +1931,24 @@ function ReportResult({ report }) {
               rows.map((r, i) => (
                 <tr key={i} className="hover:bg-stone-50">
                   {dims.map((d, di) => {
-                    const v = cleanDimValue((r.dims || [])[di]);
+                    const raw = (r.dims || [])[di];
+                    const v = cleanDimValue(raw);
                     return (
                       <td key={d} className="px-5 py-3 font-medium text-stone-800 truncate" title={v}>
-                        {v}
+                        {/* Clickable drill-down: applies the RAW value as an EXACT
+                            filter on this dimension (same pattern as the GSC report).
+                            Plain text for "(not set)"/empty rows — nothing to filter on. */}
+                        {onDrill && raw && String(raw).trim() ? (
+                          <button
+                            onClick={() => onDrill(d, raw)}
+                            title={`Filter by ${dimensionLabel(d)}: ${v}`}
+                            className="block w-full truncate text-left text-orange-700 hover:text-orange-800 hover:underline cursor-pointer"
+                          >
+                            {v}
+                          </button>
+                        ) : (
+                          v
+                        )}
                       </td>
                     );
                   })}
