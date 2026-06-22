@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import Depends, Header, HTTPException
 
+from .access import user_can_access_project
 from .config import JWT_SECRET
 from .db import get_db
 from .permissions import can
@@ -69,3 +70,18 @@ def require_permission(action: str):
             raise HTTPException(403, "You don't have permission to do that.")
         return user
     return checker
+
+
+def require_project_access(
+    project_id: int,
+    user: sqlite3.Row = Depends(require_active_user),
+    db: sqlite3.Connection = Depends(get_db),
+) -> sqlite3.Row:
+    """Per-project gate for every /{project_id}/... route: a Client may only
+    reach a project they're assigned to (user_projects); staff reach any.
+    Pulls project_id straight from the path. Deliberately does NOT check that
+    the project exists — that 404 stays the handler's job, so a missing project
+    still reads as "not found", not "forbidden". 403 when access is denied."""
+    if not user_can_access_project(user, project_id, db):
+        raise HTTPException(403, "You don't have access to this project.")
+    return user

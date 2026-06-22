@@ -26,7 +26,7 @@ def generate_temp_password() -> str:
     return "".join(secrets.choice(_CHARS) for _ in range(10))
 
 
-def row_to_user(u: sqlite3.Row) -> dict:
+def row_to_user(u: sqlite3.Row, project_ids: list[int] | None = None) -> dict:
     return {
         "id": u["id"],
         "name": u["name"],
@@ -34,7 +34,29 @@ def row_to_user(u: sqlite3.Row) -> dict:
         "role": u["role"],
         "status": u["status"],
         "createdAt": u["created_at"],
+        # Always present so the edit UI can pre-fill without a null check;
+        # only Clients ever have rows in user_projects.
+        "projectIds": project_ids or [],
     }
+
+
+def missing_project_ids(db: sqlite3.Connection, project_ids: list[int]) -> list[int]:
+    """Return the subset of project_ids that don't exist in projects (empty
+    list = all valid). Used to 400 before touching the join table."""
+    if not project_ids:
+        return []
+    placeholders = ",".join("?" * len(project_ids))
+    rows = db.execute(
+        f"SELECT id FROM projects WHERE id IN ({placeholders})", tuple(project_ids)
+    ).fetchall()
+    existing = {r["id"] for r in rows}
+    # Preserve caller order, drop duplicates, keep only the truly missing ones.
+    seen, bad = set(), []
+    for pid in project_ids:
+        if pid not in existing and pid not in seen:
+            bad.append(pid)
+        seen.add(pid)
+    return bad
 
 
 @router.get("")
@@ -42,13 +64,22 @@ def list_users(db: sqlite3.Connection = Depends(get_db)):
     rows = db.execute(
         "SELECT id, name, email, role, status, created_at FROM users ORDER BY created_at, id"
     ).fetchall()
-    return {"users": [row_to_user(r) for r in rows]}
+    # One grouped query for every assignment, bucketed by user, so the list
+    # stays a single round-trip regardless of how many users/projects exist.
+    assignments: dict[int, list[int]] = {}
+    for r in db.execute(
+        "SELECT user_id, project_id FROM user_projects ORDER BY project_id"
+    ).fetchall():
+        assignments.setdefault(r["user_id"], []).append(r["project_id"])
+    return {"users": [row_to_user(r, assignments.get(r["id"])) for r in rows]}
 
 
 class OnboardIn(BaseModel):
     name: str
     email: str
     role: str
+    # Only honoured for Client onboarding; ignored for staff roles.
+    project_ids: list[int] = []
 
 
 @router.post("", status_code=201)
@@ -62,6 +93,13 @@ def onboard_user(body: OnboardIn, db: sqlite3.Connection = Depends(get_db)):
         raise HTTPException(400, "A valid email is required.")
     if body.role not in ROLES:
         raise HTTPException(400, "Unknown role.")
+
+    # Validate any project assignments BEFORE creating the user, so a bad id
+    # can't leave behind an orphan account. Only Clients get assignments.
+    assign_ids = list(dict.fromkeys(body.project_ids)) if body.role == "Client" else []
+    bad = missing_project_ids(db, assign_ids)
+    if bad:
+        raise HTTPException(400, f"These projects don't exist: {', '.join(map(str, bad))}.")
 
     temp_password = generate_temp_password()
     pw_hash = bcrypt.hashpw(temp_password.encode(), bcrypt.gensalt()).decode()
@@ -77,6 +115,14 @@ def onboard_user(body: OnboardIn, db: sqlite3.Connection = Depends(get_db)):
         # against duplicates, even under race conditions.
         raise HTTPException(409, "Someone with this email already exists.")
 
+    # Link the validated projects to the new Client. INSERT OR IGNORE leans on
+    # the UNIQUE(user_id, project_id) constraint to stay idempotent.
+    for pid in assign_ids:
+        db.execute(
+            "INSERT OR IGNORE INTO user_projects (user_id, project_id) VALUES (?, ?)",
+            (cur.lastrowid, pid),
+        )
+
     email_record = send_invite_email(db, name=name, email=email, role=body.role, temp_password=temp_password)
     user = db.execute(
         "SELECT id, name, email, role, status, created_at FROM users WHERE id = ?", (cur.lastrowid,)
@@ -84,7 +130,7 @@ def onboard_user(body: OnboardIn, db: sqlite3.Connection = Depends(get_db)):
 
     # The ONLY time the temp password leaves the server in plain text —
     # after hashing it cannot be read back.
-    return {"user": row_to_user(user), "email": email_record}
+    return {"user": row_to_user(user, assign_ids), "email": email_record}
 
 
 @router.post("/{user_id}/resend-invite")
@@ -108,25 +154,52 @@ def resend_invite(user_id: int, db: sqlite3.Connection = Depends(get_db)):
     return {"email": email_record}
 
 
-class RoleIn(BaseModel):
-    role: str
+class UpdateUserIn(BaseModel):
+    # Both optional and independent: send role, project_ids, both, or neither.
+    role: str | None = None
+    project_ids: list[int] | None = None
 
 
 @router.patch("/{user_id}")
-def change_role(
+def update_user(
     user_id: int,
-    body: RoleIn,
+    body: UpdateUserIn,
     me: sqlite3.Row = Depends(require_permission("manageUsers")),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    if body.role not in ROLES:
-        raise HTTPException(400, "Unknown role.")
-    if user_id == me["id"]:
-        raise HTTPException(400, "You can't change your own role.")  # no lockouts
-
-    cur = db.execute("UPDATE users SET role = ? WHERE id = ?", (body.role, user_id))
-    if cur.rowcount == 0:
+    user = db.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+    if user is None:
         raise HTTPException(404, "User not found.")
+
+    if body.role is not None:
+        if body.role not in ROLES:
+            raise HTTPException(400, "Unknown role.")
+        if user_id == me["id"]:
+            raise HTTPException(400, "You can't change your own role.")  # no lockouts
+        db.execute("UPDATE users SET role = ? WHERE id = ?", (body.role, user_id))
+
+    if body.project_ids is not None:
+        # Validate up front so a bad id 400s before we delete anything.
+        new_ids = list(dict.fromkeys(body.project_ids))
+        bad = missing_project_ids(db, new_ids)
+        if bad:
+            raise HTTPException(400, f"These projects don't exist: {', '.join(map(str, bad))}.")
+        # Replace the whole set in ONE transaction: delete-then-insert can't
+        # leave a partial assignment behind if an insert fails mid-way. (The
+        # connection is autocommit, so we open an explicit transaction here.)
+        db.execute("BEGIN")
+        try:
+            db.execute("DELETE FROM user_projects WHERE user_id = ?", (user_id,))
+            for pid in new_ids:
+                db.execute(
+                    "INSERT OR IGNORE INTO user_projects (user_id, project_id) VALUES (?, ?)",
+                    (user_id, pid),
+                )
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+
     return {"ok": True}
 
 

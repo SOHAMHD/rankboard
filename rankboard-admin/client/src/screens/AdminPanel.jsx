@@ -3,10 +3,11 @@
    permissions include manageUsers (today: Super Admin only). The
    server gates every /api/users route with the same permission.
    ════════════════════════════════════════════════════════════════════ */
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   Check,
   ChevronLeft,
+  FolderCog,
   LoaderCircle,
   Mail,
   Send,
@@ -32,6 +33,7 @@ export function AdminPanelView({ user, onBack, onLogout }) {
   const [showWizard, setShowWizard] = useState(false);
   const [emailModal, setEmailModal] = useState(null);
   const [confirmId, setConfirmId] = useState(null);
+  const [manageUser, setManageUser] = useState(null); // Client whose projects are being edited
 
   const refresh = async () => {
     try {
@@ -171,6 +173,17 @@ export function AdminPanelView({ user, onBack, onLogout }) {
                       <td className="px-5 py-3 text-stone-400 text-xs whitespace-nowrap">{u.createdAt?.slice(0, 10)}</td>
                       <td className="px-3 py-3">
                         <span className="flex items-center justify-end gap-1">
+                          {u.role === "Client" && (
+                            <button
+                              onClick={() => setManageUser(u)}
+                              title="Manage assigned projects"
+                              aria-label={`Manage projects for ${u.name}`}
+                              className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-stone-500 hover:text-stone-800 hover:bg-stone-100 transition-colors"
+                            >
+                              <FolderCog size={15} />
+                              {u.projectIds?.length || 0}
+                            </button>
+                          )}
                           {u.status === "invited" && (
                             <button
                               onClick={() => resendInvite(u.id)}
@@ -217,6 +230,10 @@ export function AdminPanelView({ user, onBack, onLogout }) {
 
       {showWizard && <OnboardWizard onClose={() => setShowWizard(false)} onCreated={refresh} />}
 
+      {manageUser && (
+        <ManageProjectsModal user={manageUser} onClose={() => setManageUser(null)} onSaved={refresh} />
+      )}
+
       {emailModal && (
         <Modal title="Invite email" onClose={() => setEmailModal(null)} wide>
           <EmailPreview email={emailModal} />
@@ -226,24 +243,181 @@ export function AdminPanelView({ user, onBack, onLogout }) {
   );
 }
 
-/* ── Onboarding wizard: add person → choose role → send invite ── */
+/* ── Shared project picker: a scrollable checkbox list of projects.
+   Reused by the onboarding wizard and the "Manage projects" modal so the
+   two stay visually identical. `selected` is a Set of project ids. ── */
 
-const STEPS = ["Add person", "Choose role", "Send invite"];
+function ProjectChecklist({ projects, selected, onToggle, loading }) {
+  if (loading) {
+    return (
+      <div className="py-8 flex justify-center">
+        <LoaderCircle size={20} className="text-orange-600 animate-spin" />
+      </div>
+    );
+  }
+  if (!projects.length) {
+    return (
+      <p className="text-sm text-stone-500 rounded-xl border border-stone-200 px-4 py-6 text-center">
+        No projects exist yet. Create one first, then assign it here.
+      </p>
+    );
+  }
+  return (
+    <div className="max-h-64 overflow-y-auto rounded-xl border border-stone-200 divide-y divide-stone-100">
+      {projects.map((p) => {
+        const checked = selected.has(p.id);
+        return (
+          <label
+            key={p.id}
+            className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-stone-50 transition-colors"
+          >
+            {/* Native control kept for keyboard/AT; the square below is the visual. */}
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={() => onToggle(p.id)}
+              className="sr-only peer"
+            />
+            <span
+              className={`h-5 w-5 shrink-0 rounded-md border flex items-center justify-center transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-orange-500 peer-focus-visible:ring-offset-1 ${
+                checked ? "bg-orange-600 border-orange-600 text-white" : "bg-white border-stone-300"
+              }`}
+            >
+              {checked && <Check size={13} strokeWidth={3} />}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-stone-800 truncate">{p.name}</span>
+              {p.domain && <span className="block text-xs text-stone-400 font-data truncate">{p.domain}</span>}
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── Manage projects: edit an existing client's assignments. Loads all
+   projects, pre-checks the client's current set (from GET /api/users), and
+   PATCHes the chosen set as a full replacement. ── */
+
+function ManageProjectsModal({ user, onClose, onSaved }) {
+  const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(new Set(user.projectIds || []));
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const d = await api("/projects");
+        setProjects(d.projects);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const toggleProject = (id) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/users/${user.id}`, { method: "PATCH", body: { project_ids: [...selected] } });
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Manage projects" onClose={onClose} wide>
+      <p className="text-sm text-stone-500 -mt-0.5 mb-4">
+        {user.name} · <span className="text-stone-400">{user.role}</span>
+      </p>
+      <p className="text-xs font-medium text-stone-400 mb-2">
+        {selected.size} of {projects.length} assigned
+      </p>
+      <ProjectChecklist projects={projects} selected={selected} onToggle={toggleProject} loading={loading} />
+      <ErrorNote>{error}</ErrorNote>
+      <div className="flex justify-end gap-2 mt-5">
+        <button onClick={onClose} className={`${BTN_GHOST} px-4 py-2.5`}>
+          Cancel
+        </button>
+        <button onClick={save} disabled={busy || loading} className={`${BTN_PRIMARY} px-5 py-2.5`}>
+          {busy ? <LoaderCircle size={15} className="animate-spin" /> : "Save"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ── Onboarding wizard: add person → choose role → [Client: pick
+   projects] → send invite. The project step is inserted into the flow
+   only when the chosen role is "Client". ── */
+
+const STEP_LABELS = {
+  details: "Details",
+  role: "Role",
+  projects: "Projects",
+  review: "Review",
+};
 
 function OnboardWizard({ onClose, onCreated }) {
-  const [step, setStep] = useState(0); // 0,1,2 = steps, 3 = sent
+  const [step, setStep] = useState("details"); // details | role | projects | review | sent
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("Team");
+  const [projects, setProjects] = useState([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [selected, setSelected] = useState(new Set()); // project ids
   const [sentEmail, setSentEmail] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  // Load the project list once up front so the Client step is instant.
+  useEffect(() => {
+    (async () => {
+      try {
+        const d = await api("/projects");
+        setProjects(d.projects);
+      } catch {
+        // Non-fatal: the picker simply shows "no projects" on failure.
+      } finally {
+        setProjectsLoading(false);
+      }
+    })();
+  }, []);
+
+  const isClient = role === "Client";
+  // The project step only exists in the Client flow.
+  const flow = isClient ? ["details", "role", "projects", "review"] : ["details", "role", "review"];
+  const stepIndex = flow.indexOf(step);
+
+  const toggleProject = (id) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   const nextFromDetails = () => {
     if (!name.trim()) return setError("Please enter their full name.");
     if (!/\S+@\S+\.\S+/.test(email.trim())) return setError("That doesn't look like a valid email address.");
     setError(null);
-    setStep(1);
+    setStep("role");
   };
 
   const send = async () => {
@@ -252,10 +426,16 @@ function OnboardWizard({ onClose, onCreated }) {
     try {
       const d = await api("/users", {
         method: "POST",
-        body: { name: name.trim(), email: email.trim(), role },
+        body: {
+          name: name.trim(),
+          email: email.trim(),
+          role,
+          // Only Clients carry assignments; staff roles send none.
+          project_ids: isClient ? [...selected] : [],
+        },
       });
       setSentEmail(d.email);
-      setStep(3);
+      setStep("sent");
       onCreated();
     } catch (err) {
       setError(err.message);
@@ -265,26 +445,42 @@ function OnboardWizard({ onClose, onCreated }) {
   };
 
   return (
-    <Modal title={step === 3 ? "Invite sent" : "Onboard someone"} onClose={onClose} wide>
-      {step < 3 && (
-        <div className="flex items-center gap-2 mb-5 mt-2 flex-wrap">
-          {STEPS.map((label, i) => (
-            <div key={label} className="flex items-center gap-2">
-              <span
-                className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-semibold ${
-                  i < step ? "bg-emerald-500 text-white" : i === step ? "bg-orange-600 text-white" : "bg-stone-200 text-stone-500"
-                }`}
-              >
-                {i < step ? <Check size={13} /> : i + 1}
-              </span>
-              <span className={`text-xs font-medium ${i === step ? "text-stone-900" : "text-stone-400"}`}>{label}</span>
-              {i < STEPS.length - 1 && <span className="w-4 h-px bg-stone-200" />}
-            </div>
-          ))}
+    <Modal title={step === "sent" ? "Invite sent" : "Onboard someone"} onClose={onClose} wide>
+      {step !== "sent" && (
+        <div className="flex items-center mb-6 mt-1">
+          {flow.map((key, i) => {
+            const done = i < stepIndex;
+            const current = i === stepIndex;
+            return (
+              <Fragment key={key}>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
+                      done || current
+                        ? "bg-orange-600 text-white"
+                        : "border-2 border-stone-300 text-stone-400 bg-white"
+                    }`}
+                  >
+                    {done ? <Check size={13} strokeWidth={3} /> : i + 1}
+                  </span>
+                  <span
+                    className={`text-xs ${
+                      current ? "font-semibold text-stone-900" : done ? "font-medium text-stone-600" : "font-medium text-stone-400"
+                    }`}
+                  >
+                    {STEP_LABELS[key]}
+                  </span>
+                </div>
+                {i < flow.length - 1 && (
+                  <span className={`flex-1 h-px mx-2 ${done ? "bg-orange-300" : "bg-stone-200"}`} />
+                )}
+              </Fragment>
+            );
+          })}
         </div>
       )}
 
-      {step === 0 && (
+      {step === "details" && (
         <div>
           <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
             Full name
@@ -314,7 +510,7 @@ function OnboardWizard({ onClose, onCreated }) {
         </div>
       )}
 
-      {step === 1 && (
+      {step === "role" && (
         <div>
           <div className="space-y-2">
             {ROLES.map((r) => (
@@ -338,17 +534,36 @@ function OnboardWizard({ onClose, onCreated }) {
             ))}
           </div>
           <div className="flex gap-2 mt-5">
-            <button onClick={() => setStep(0)} className={`${BTN_GHOST} px-4 py-2.5`}>
+            <button onClick={() => setStep("details")} className={`${BTN_GHOST} px-4 py-2.5`}>
               <ChevronLeft size={15} /> Back
             </button>
-            <button onClick={() => setStep(2)} className={`${BTN_PRIMARY} flex-1 py-2.5`}>
-              Next: review
+            <button onClick={() => setStep(isClient ? "projects" : "review")} className={`${BTN_PRIMARY} flex-1 py-2.5`}>
+              {isClient ? "Next: pick projects" : "Next: review"}
             </button>
           </div>
         </div>
       )}
 
-      {step === 2 && (
+      {step === "projects" && (
+        <div>
+          <h3 className="text-sm font-semibold text-stone-900">Which projects can this client see?</h3>
+          <p className="text-xs text-stone-500 mt-0.5 mb-3">
+            They'll only see the projects you select here — you can change this later.
+          </p>
+          <ProjectChecklist projects={projects} selected={selected} onToggle={toggleProject} loading={projectsLoading} />
+          <p className="text-xs text-stone-400 mt-2">{selected.size} selected</p>
+          <div className="flex justify-end gap-2 mt-5">
+            <button onClick={() => setStep("role")} className={`${BTN_GHOST} px-4 py-2.5`}>
+              <ChevronLeft size={15} /> Back
+            </button>
+            <button onClick={() => setStep("review")} className={`${BTN_PRIMARY} px-5 py-2.5`}>
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === "review" && (
         <div>
           <div className="rounded-xl border border-stone-200 divide-y divide-stone-100 text-sm">
             <div className="px-4 py-2.5 flex justify-between gap-4">
@@ -365,6 +580,14 @@ function OnboardWizard({ onClose, onCreated }) {
                 {role === "Admin" ? "Admin (Manager)" : role}
               </span>
             </div>
+            {isClient && (
+              <div className="px-4 py-2.5 flex justify-between gap-4">
+                <span className="text-stone-400">Projects</span>
+                <span className="font-medium text-stone-800 text-right">
+                  {selected.size === 0 ? "None" : `${selected.size} selected`}
+                </span>
+              </div>
+            )}
           </div>
           <p className="text-xs text-stone-400 mt-3">
             Sending creates their account and emails them the website link, their email, and a temporary password
@@ -372,7 +595,7 @@ function OnboardWizard({ onClose, onCreated }) {
           </p>
           <ErrorNote>{error}</ErrorNote>
           <div className="flex gap-2 mt-4">
-            <button onClick={() => setStep(1)} className={`${BTN_GHOST} px-4 py-2.5`}>
+            <button onClick={() => setStep(isClient ? "projects" : "role")} className={`${BTN_GHOST} px-4 py-2.5`}>
               <ChevronLeft size={15} /> Back
             </button>
             <button onClick={send} disabled={busy} className={`${BTN_PRIMARY} flex-1 py-2.5`}>
@@ -382,7 +605,7 @@ function OnboardWizard({ onClose, onCreated }) {
         </div>
       )}
 
-      {step === 3 && sentEmail && (
+      {step === "sent" && sentEmail && (
         <div>
           <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 mb-4">
             <Check size={15} /> Account created and invite sent.

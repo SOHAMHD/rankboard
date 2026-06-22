@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..db import get_db
-from ..security import require_active_user, require_permission
+from ..security import require_active_user, require_permission, require_project_access
 from ..services.moz_provider import MozApiError, fetch_moz_metrics
 
 router = APIRouter(dependencies=[Depends(require_active_user)])
@@ -36,7 +36,7 @@ def row_to_moz(row: sqlite3.Row) -> dict:
     }
 
 
-@router.get("/{project_id}/moz")
+@router.get("/{project_id}/moz", dependencies=[Depends(require_project_access)])
 def get_moz(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     """The most recent stored Moz row for the project, or {"data": null} when
     none exists yet. Never calls Moz — cached values only."""
@@ -52,7 +52,7 @@ def get_moz(project_id: int, db: sqlite3.Connection = Depends(get_db)):
 
 @router.post(
     "/{project_id}/moz/refresh",
-    dependencies=[Depends(require_permission("addKeyword"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
 )
 def refresh_moz(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     """Look up the project's domain on Moz, store a NEW moz_metrics row, and

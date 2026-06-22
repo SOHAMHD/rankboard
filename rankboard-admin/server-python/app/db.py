@@ -101,6 +101,19 @@ CREATE TABLE IF NOT EXISTS moz_metrics (
   raw_json         TEXT,                              -- full Moz responses, for debugging
   fetched_at       TEXT NOT NULL                      -- ISO timestamp
 );
+
+-- Per-client project scoping: which Client users may see which projects.
+-- Staff roles (Super Admin / Admin / Team) ignore this table and see all
+-- projects; a Client sees only the projects they're linked to here. Both
+-- FKs cascade, so removing a user or a project cleans up its links. The
+-- UNIQUE(user_id, project_id) makes an assignment idempotent (re-assigning
+-- the same pair is a no-op rather than a duplicate row).
+CREATE TABLE IF NOT EXISTS user_projects (
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, project_id)
+);
 """
 
 

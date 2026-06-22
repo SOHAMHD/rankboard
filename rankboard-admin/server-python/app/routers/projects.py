@@ -8,9 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from ..access import accessible_project_ids
 from ..config import DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD, RANK_LOCATION_CODE
 from ..db import get_db
-from ..security import require_active_user, require_permission
+from ..security import require_active_user, require_permission, require_project_access
 from ..services.analytics_provider import (
     ALLOWED_DIMENSIONS,
     ALLOWED_MATCH_TYPES,
@@ -79,21 +80,42 @@ def row_to_snapshot_rank(r: sqlite3.Row) -> dict:
 
 
 @router.get("")
-def list_projects(db: sqlite3.Connection = Depends(get_db)):
-    """LEFT JOIN + GROUP BY: each project with its keywo
-    rd count in one
-    query. LEFT (not INNER) so projects with zero keywords still appear."""
-    rows = db.execute(
-        """SELECT p.*, COUNT(k.id) AS keyword_count
-           FROM projects p
-           LEFT JOIN keywords k ON k.project_id = p.id
-           GROUP BY p.id
-           ORDER BY p.created_at DESC, p.id DESC"""
-    ).fetchall()
+def list_projects(
+    user: sqlite3.Row = Depends(require_active_user),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """LEFT JOIN + GROUP BY: each project with its keyword count in one
+    query. LEFT (not INNER) so projects with zero keywords still appear.
+
+    Per-client scoping: staff (accessible_project_ids → None) see every
+    project as before; a Client sees only the projects assigned to them. An
+    empty set short-circuits to no projects without hitting the DB."""
+    allowed = accessible_project_ids(user, db)
+    if allowed is None:
+        rows = db.execute(
+            """SELECT p.*, COUNT(k.id) AS keyword_count
+               FROM projects p
+               LEFT JOIN keywords k ON k.project_id = p.id
+               GROUP BY p.id
+               ORDER BY p.created_at DESC, p.id DESC"""
+        ).fetchall()
+    elif not allowed:
+        rows = []
+    else:
+        placeholders = ",".join("?" * len(allowed))
+        rows = db.execute(
+            f"""SELECT p.*, COUNT(k.id) AS keyword_count
+               FROM projects p
+               LEFT JOIN keywords k ON k.project_id = p.id
+               WHERE p.id IN ({placeholders})
+               GROUP BY p.id
+               ORDER BY p.created_at DESC, p.id DESC""",
+            tuple(allowed),
+        ).fetchall()
     return {"projects": [row_to_project(r, r["keyword_count"]) for r in rows]}
 
 
-@router.get("/{project_id}")
+@router.get("/{project_id}", dependencies=[Depends(require_project_access)])
 def project_detail(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
@@ -150,7 +172,7 @@ def _validate_filters(filters: list[ReportFilterIn], match: str) -> str | None:
     return None
 
 
-@router.post("/{project_id}/analytics")
+@router.post("/{project_id}/analytics", dependencies=[Depends(require_project_access)])
 def project_analytics(
     project_id: int,
     body: AnalyticsIn,
@@ -199,7 +221,7 @@ def project_analytics(
     return {"analytics": analytics}
 
 
-@router.post("/{project_id}/analytics/breakdown")
+@router.post("/{project_id}/analytics/breakdown", dependencies=[Depends(require_project_access)])
 def project_analytics_breakdown(
     project_id: int,
     body: BreakdownIn,
@@ -235,7 +257,7 @@ def project_analytics_breakdown(
     return {"breakdown": breakdown}
 
 
-@router.post("/{project_id}/analytics/report")
+@router.post("/{project_id}/analytics/report", dependencies=[Depends(require_project_access)])
 def project_analytics_report(
     project_id: int,
     body: ReportIn,
@@ -282,7 +304,7 @@ def project_analytics_report(
     return {"report": report}
 
 
-@router.get("/{project_id}/search-console")
+@router.get("/{project_id}/search-console", dependencies=[Depends(require_project_access)])
 def project_search_console(
     project_id: int,
     start: str | None = None,
@@ -332,7 +354,7 @@ class SearchConsolePerformanceIn(BaseModel):
     filters: list[SearchConsoleFilterIn] = []
 
 
-@router.post("/{project_id}/search-console/performance")
+@router.post("/{project_id}/search-console/performance", dependencies=[Depends(require_project_access)])
 def project_search_console_performance(
     project_id: int,
     body: SearchConsolePerformanceIn,
@@ -479,7 +501,7 @@ class ProjectUpdateIn(BaseModel):
     gscSiteUrl: str | None = None
 
 
-@router.patch("/{project_id}", dependencies=[Depends(require_permission("toggleProject"))])
+@router.patch("/{project_id}", dependencies=[Depends(require_project_access), Depends(require_permission("toggleProject"))])
 def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connection = Depends(get_db)):
     """Started life as the active/inactive toggle; now also updates the
     domain. (Uses the toggleProject permission as a general "manage
@@ -510,7 +532,7 @@ def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connectio
     return {"ok": True}
 
 
-@router.delete("/{project_id}", dependencies=[Depends(require_permission("deleteProject"))])
+@router.delete("/{project_id}", dependencies=[Depends(require_project_access), Depends(require_permission("deleteProject"))])
 def delete_project(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     """The FK cascade in the schema deletes the project's keywords
     automatically — no manual cleanup, no orphans."""
@@ -522,7 +544,7 @@ def delete_project(project_id: int, db: sqlite3.Connection = Depends(get_db)):
 
 @router.post(
     "/{project_id}/check-ranks",
-    dependencies=[Depends(require_permission("addKeyword"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
 )
 def check_project_ranks(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     """Check every keyword in the project against the rank provider and
@@ -593,7 +615,7 @@ def download_sample_template(user=Depends(require_active_user)):
 
 @router.post(
     "/{project_id}/keywords/bulk-import",
-    dependencies=[Depends(require_permission("addKeyword"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
 )
 async def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Connection = Depends(get_db)):
     """Accept an uploaded .xlsx, validate every row, insert the good
@@ -650,7 +672,7 @@ class KeywordIn(BaseModel):
 
 @router.post(
     "/{project_id}/keywords", status_code=201,
-    dependencies=[Depends(require_permission("addKeyword"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
 )
 def add_keyword(project_id: int, body: KeywordIn, db: sqlite3.Connection = Depends(get_db)):
     project = db.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
@@ -679,7 +701,7 @@ class NewRankIn(BaseModel):
 
 @router.patch(
     "/{project_id}/keywords/{keyword_id}",
-    dependencies=[Depends(require_permission("addKeyword"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
 )
 def record_lookup(project_id: int, keyword_id: int, body: NewRankIn, db: sqlite3.Connection = Depends(get_db)):
     """Record a NEW LOOKUP: current -> previous, new number -> current,
@@ -704,7 +726,7 @@ def record_lookup(project_id: int, keyword_id: int, body: NewRankIn, db: sqlite3
 
 @router.delete(
     "/{project_id}/keywords/{keyword_id}",
-    dependencies=[Depends(require_permission("deleteKeyword"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("deleteKeyword"))],
 )
 def delete_keyword(project_id: int, keyword_id: int, db: sqlite3.Connection = Depends(get_db)):
     # Both ids in the WHERE clause: a keyword can only be deleted
@@ -721,7 +743,7 @@ def delete_keyword(project_id: int, keyword_id: int, db: sqlite3.Connection = De
 
 @router.post(
     "/{project_id}/snapshots", status_code=201,
-    dependencies=[Depends(require_permission("addKeyword"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
 )
 def save_snapshot(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     """Freeze the current month's ranks for this project. Gated by the
@@ -732,7 +754,7 @@ def save_snapshot(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     return {"snapshot": row_to_snapshot(summary, summary["keyword_count"])}
 
 
-@router.get("/{project_id}/snapshots")
+@router.get("/{project_id}/snapshots", dependencies=[Depends(require_project_access)])
 def list_snapshots(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     """All saved snapshots for the project, newest month first, each with
     its frozen keyword count. Read-only."""
@@ -751,7 +773,7 @@ def list_snapshots(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     return {"snapshots": [row_to_snapshot(r, r["keyword_count"]) for r in rows]}
 
 
-@router.get("/{project_id}/snapshots/{snapshot_id}")
+@router.get("/{project_id}/snapshots/{snapshot_id}", dependencies=[Depends(require_project_access)])
 def snapshot_detail(project_id: int, snapshot_id: int, db: sqlite3.Connection = Depends(get_db)):
     """One snapshot's meta plus its frozen rows (term, rank, last_checked),
     ranked best-first with never-checked keywords (NULL rank) last.
