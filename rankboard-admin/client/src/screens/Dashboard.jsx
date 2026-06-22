@@ -6,16 +6,18 @@
    <main>. The Rank Ledger fetches its data from the API, derives its
    stats at render time, and refetches after every mutation.
    ════════════════════════════════════════════════════════════════════ */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BarChart3,
   Camera,
+  Check,
   RefreshCw,
   Upload,
   FileSpreadsheet,
   Download,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Globe,
   ListOrdered,
   LoaderCircle,
@@ -579,16 +581,189 @@ function RankLedger({ user, project, onChanged }) {
   );
 }
 
+/* Group a flat, newest-first snapshot list into per-month buckets, keeping
+   both the months and the snapshots within each in their incoming order
+   (so newest month first, newest save first). */
+function groupByMonth(snapshots) {
+  const order = [];
+  const map = new Map();
+  for (const s of snapshots) {
+    if (!map.has(s.periodKey)) {
+      map.set(s.periodKey, { periodKey: s.periodKey, label: s.label, snapshots: [] });
+      order.push(s.periodKey);
+    }
+    map.get(s.periodKey).snapshots.push(s);
+  }
+  return order.map((k) => map.get(k));
+}
+
+/* "2026-06-22 16:29:00" (UTC, no tz marker from SQLite) -> "Jun 22 · 4:29 PM"
+   in the viewer's local time. Falls back to the raw value if unparseable. */
+function snapshotTimeLabel(iso) {
+  if (!iso) return "—";
+  const raw = String(iso);
+  const d = new Date(raw.replace(" ", "T") + (raw.endsWith("Z") ? "" : "Z"));
+  if (isNaN(d.getTime())) return raw;
+  const date = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${date} · ${time}`;
+}
+
+/* Windows-style cascading menu: a "Snapshots" trigger → level-1 list of
+   months (each with a right-chevron) → hover a month to fly out a submenu
+   of that month's saves. Hover opens the submenu; leaving schedules a
+   ~150ms close that re-entering the submenu cancels. Outside-click / Escape
+   close the whole thing; the submenu flips to the left when it would spill
+   past the right edge of the viewport. No popover library — just state. */
+function SnapshotMenu({ groups, selectedId, onSelect, onDownload }) {
+  const [open, setOpen] = useState(false);
+  const [openMonth, setOpenMonth] = useState(null); // periodKey of the open submenu
+  const [flip, setFlip] = useState(false); // submenu opens left instead of right
+  const rootRef = useRef(null);
+  const closeTimer = useRef(null);
+
+  const closeAll = () => {
+    clearTimeout(closeTimer.current);
+    setOpen(false);
+    setOpenMonth(null);
+  };
+
+  // Outside click + Escape close the menu — only while it's open.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => {
+      if (rootRef.current && !rootRef.current.contains(e.target)) closeAll();
+    };
+    const onKey = (e) => e.key === "Escape" && closeAll();
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // Never leave a timer running after unmount.
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
+
+  const SUBMENU_W = 256; // matches w-64; used only to decide the flip
+  const openSubmenu = (periodKey) => {
+    clearTimeout(closeTimer.current);
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (rect) setFlip(rect.right + SUBMENU_W > window.innerWidth);
+    setOpenMonth(periodKey);
+  };
+  const scheduleClose = () => {
+    clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setOpenMonth(null), 150);
+  };
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={`${BTN_GHOST} px-4 py-2`}
+      >
+        <Camera size={15} /> Snapshots
+        <ChevronDown size={14} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 z-30 mt-1 w-56 rounded-xl border border-stone-200 bg-white shadow-lg py-1">
+          {groups.map((g) => {
+            const isOpen = openMonth === g.periodKey;
+            return (
+              <div
+                key={g.periodKey}
+                className="relative"
+                onMouseEnter={() => openSubmenu(g.periodKey)}
+                onMouseLeave={scheduleClose}
+              >
+                <button
+                  className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-left transition-colors hover:bg-stone-50 ${
+                    isOpen ? "bg-stone-50" : ""
+                  }`}
+                >
+                  <span className="font-medium text-stone-800">{g.label}</span>
+                  <span className="flex items-center gap-1.5 text-stone-400">
+                    <span className="text-xs">{g.snapshots.length}</span>
+                    <ChevronRight size={14} />
+                  </span>
+                </button>
+
+                {isOpen && (
+                  <div
+                    onMouseEnter={() => clearTimeout(closeTimer.current)}
+                    onMouseLeave={scheduleClose}
+                    className={`absolute top-0 z-40 w-64 rounded-xl border border-stone-200 bg-white shadow-lg py-1 max-h-72 overflow-y-auto ${
+                      flip ? "right-full mr-1" : "left-full ml-1"
+                    }`}
+                  >
+                    {g.snapshots.map((s) => {
+                      const active = s.id === selectedId;
+                      return (
+                        <div
+                          key={s.id}
+                          onClick={() => {
+                            onSelect(s.id);
+                            closeAll();
+                          }}
+                          className={`group flex items-center justify-between gap-2 px-3 py-2 text-sm cursor-pointer transition-colors hover:bg-stone-50 ${
+                            active ? "bg-orange-50" : ""
+                          }`}
+                        >
+                          <span className="flex items-center gap-2 min-w-0">
+                            {active ? (
+                              <Check size={14} className="text-orange-600 shrink-0" />
+                            ) : (
+                              <span className="w-3.5 shrink-0" />
+                            )}
+                            <span className={`truncate ${active ? "font-semibold text-orange-700" : "text-stone-700"}`}>
+                              {snapshotTimeLabel(s.createdAt)}
+                            </span>
+                            <span className="text-xs text-stone-400 shrink-0 whitespace-nowrap">
+                              {s.keywordCount} kw
+                            </span>
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDownload(s);
+                            }}
+                            title="Download this snapshot as CSV"
+                            aria-label="Download snapshot as CSV"
+                            className="p-1 rounded text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors shrink-0"
+                          >
+                            <Download size={14} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ════════════════════════════════════════════════════════════════════
-   SNAPSHOTS — read-only monthly freezes of the ledger.
+   SNAPSHOTS — read-only freezes of the ledger.
 
    On mount we load the list (newest first) and auto-select the latest.
-   Picking a month fetches that snapshot and renders a plain table that
+   "Save this month" always captures a NEW snapshot (snapshots are no
+   longer one-per-month — there's no overwrite or confirm). Saved
+   snapshots are browsed through a cascading Snapshots menu grouped by
+   month; picking one fetches its rows and renders a plain table that
    REUSES the Live Ledger's table styling, trimmed to the three frozen
-   columns. "Save this month" captures the current ranks; if the month
-   already exists we confirm before replacing it. The button is gated by
-   the same write permission the rest of the ledger uses (addKeyword).
-   This view is comparison/export-free by design — that's a later phase.
+   columns. Each snapshot can be downloaded as CSV. The save button is
+   gated by the same write permission the rest of the ledger uses
+   (addKeyword).
    ════════════════════════════════════════════════════════════════════ */
 function SnapshotsView({ user, project }) {
   const [snapshots, setSnapshots] = useState(null); // null = still loading
@@ -635,13 +810,8 @@ function SnapshotsView({ user, project }) {
   }, [selectedId, project.id]);
 
   const save = async () => {
-    // The server picks the month authoritatively; we compute the current
-    // key only to decide whether to warn about replacing an existing one.
-    const now = new Date();
-    const periodKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const exists = (snapshots || []).some((s) => s.periodKey === periodKey);
-    if (exists && !window.confirm("Replace this month's snapshot?")) return;
-
+    // Always creates a NEW snapshot — no overwrite, no confirm. The server
+    // picks the month authoritatively and stamps created_at.
     setSaving(true);
     setError(null);
     try {
@@ -654,6 +824,26 @@ function SnapshotsView({ user, project }) {
     }
   };
 
+  const downloadSnapshot = async (s) => {
+    // Fetch with the auth header (can't put headers on a plain <a href>),
+    // then trigger a browser download from the returned CSV blob.
+    try {
+      const res = await fetch(`${BASE}/api/snapshots/${s.id}/download`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error("Couldn't download that snapshot.");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `snapshot-${s.periodKey}-${s.id}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   return (
     <div className="w-full">
       <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
@@ -663,18 +853,12 @@ function SnapshotsView({ user, project }) {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {snapshots && snapshots.length > 0 && (
-            <select
-              value={selectedId ?? ""}
-              onChange={(e) => setSelectedId(Number(e.target.value))}
-              aria-label="Choose a saved month"
-              className={`${INPUT_CLS} w-auto`}
-            >
-              {snapshots.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label} ({s.keywordCount} keyword{s.keywordCount === 1 ? "" : "s"})
-                </option>
-              ))}
-            </select>
+            <SnapshotMenu
+              groups={groupByMonth(snapshots)}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onDownload={downloadSnapshot}
+            />
           )}
           {maySave && (
             <button

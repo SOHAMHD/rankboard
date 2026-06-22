@@ -3,11 +3,10 @@ in time.
 
 create_snapshot() reads the keywords table's LAST-CHECKED values and
 copies them into snapshot_ranks; it never triggers a live rank lookup
-(that's check_ranks' job — see rank_provider.py). One snapshot per
-(project, month): re-saving an unlocked month refreshes it in place,
-a locked month is protected (409). The data model leaves room for a
-later month-over-month comparison / export phase, but this pass only
-stores and reads back.
+(that's check_ranks' job — see rank_provider.py). Every call inserts a
+NEW, immutable snapshot — snapshots are no longer one-per-month, so a
+month can hold many saves, each distinguished by its created_at
+timestamp. period_key/label still group them by month for the UI.
 """
 import sqlite3
 
@@ -35,13 +34,13 @@ def create_snapshot(
     period_key: str | None = None,
     source: str = "manual",
 ) -> dict:
-    """Freeze every keyword's current rank for `project_id` under one
-    month. Returns a summary of the saved snapshot.
+    """Freeze every keyword's current rank for `project_id` as a NEW
+    snapshot. Returns a summary of the saved snapshot.
 
       404 if the project doesn't exist.
-      409 if a snapshot for the month already exists and is locked.
-    An existing UNLOCKED month is refreshed: its rows are rebuilt and
-    captured_at is bumped to today.
+
+    Always inserts — never overwrites. The same month can be saved any
+    number of times; each save is its own row, ordered by created_at.
     """
     project = db.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
@@ -59,27 +58,14 @@ def create_snapshot(
         (project_id,),
     ).fetchall()
 
-    existing = db.execute(
-        "SELECT * FROM snapshots WHERE project_id = ? AND period_key = ?",
-        (project_id, period_key),
-    ).fetchone()
-
-    if existing is not None:
-        if existing["locked"]:
-            raise HTTPException(409, "This month's snapshot is locked and can't be replaced.")
-        snapshot_id = existing["id"]
-        db.execute("DELETE FROM snapshot_ranks WHERE snapshot_id = ?", (snapshot_id,))
-        db.execute(
-            "UPDATE snapshots SET label = ?, captured_at = date('now'), source = ? WHERE id = ?",
-            (label, source, snapshot_id),
-        )
-    else:
-        cur = db.execute(
-            "INSERT INTO snapshots (project_id, period_key, label, captured_at, source)"
-            " VALUES (?, ?, ?, date('now'), ?)",
-            (project_id, period_key, label, source),
-        )
-        snapshot_id = cur.lastrowid
+    # captured_at (day) and created_at (full timestamp) both default in the
+    # schema; created_at is what distinguishes multiple saves in one month.
+    cur = db.execute(
+        "INSERT INTO snapshots (project_id, period_key, label, captured_at, source)"
+        " VALUES (?, ?, ?, date('now'), ?)",
+        (project_id, period_key, label, source),
+    )
+    snapshot_id = cur.lastrowid
 
     for k in keywords:
         # current_rank -> rank (NULL stays NULL); term + last_checked copied.
@@ -95,6 +81,7 @@ def create_snapshot(
         "period_key": snap["period_key"],
         "label": snap["label"],
         "captured_at": snap["captured_at"],
+        "created_at": snap["created_at"],
         "source": snap["source"],
         "locked": snap["locked"],
         "keyword_count": len(keywords),

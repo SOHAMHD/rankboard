@@ -60,21 +60,22 @@ CREATE TABLE IF NOT EXISTS keywords (
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- A snapshot is a frozen, point-in-time copy of every keyword's rank
--- for a project, saved per month. UNIQUE(project_id, period_key) means
--- one snapshot per month per project (re-saving an unlocked month
--- refreshes it in place). The companion snapshot_ranks rows COPY each
--- keyword's term/rank in rather than referencing keywords live, so the
--- frozen values survive later edits or deletions of the keyword.
+-- A snapshot is a frozen, point-in-time copy of every keyword's rank for
+-- a project. Snapshots are NO LONGER one-per-month: every "Save this
+-- month" inserts a fresh, immutable row, distinguished by created_at (a
+-- full timestamp). period_key/label still group them by month for the UI.
+-- The companion snapshot_ranks rows COPY each keyword's term/rank in
+-- rather than referencing keywords live, so the frozen values survive
+-- later edits or deletions of the keyword.
 CREATE TABLE IF NOT EXISTS snapshots (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   period_key  TEXT NOT NULL,                       -- e.g. "2026-06"
   label       TEXT NOT NULL,                        -- e.g. "June 2026"
-  captured_at TEXT NOT NULL DEFAULT (date('now')),
+  captured_at TEXT NOT NULL DEFAULT (date('now')), -- the calendar day frozen
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')), -- full timestamp; distinguishes same-month saves
   source      TEXT NOT NULL DEFAULT 'manual',
-  locked      INTEGER NOT NULL DEFAULT 0,
-  UNIQUE(project_id, period_key)
+  locked      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS snapshot_ranks (
@@ -213,6 +214,47 @@ def init_db() -> None:
             """
         )
         print("Migrated keywords table: current_rank is now optional")
+
+    # One-time migration: the one-snapshot-per-month limit was a DB-level
+    # UNIQUE(project_id, period_key) constraint, and older snapshots tables
+    # lack the full-timestamp created_at column. SQLite can't drop a
+    # constraint or add a non-constant default in place, so rebuild the table
+    # — preserving every row and id. Fires only when the old shape is still
+    # present (idempotent; never on a fresh DB built from SCHEMA above).
+    #
+    # SAFE because foreign_keys defaults OFF on this connection (we never set
+    # it ON here): DROPping snapshots does NOT cascade-delete the
+    # snapshot_ranks rows that reference these ids, and the ids are preserved
+    # by the rebuild, so those references stay valid.
+    snap_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='snapshots'"
+    ).fetchone()
+    snap_cols = [c[1] for c in conn.execute("PRAGMA table_info(snapshots)").fetchall()]
+    needs_snap_rebuild = bool(snap_row) and (
+        "UNIQUE" in snap_row[0].upper() or "created_at" not in snap_cols
+    )
+    if needs_snap_rebuild:
+        conn.executescript(
+            """
+            CREATE TABLE snapshots_rebuild (
+              id          INTEGER PRIMARY KEY AUTOINCREMENT,
+              project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              period_key  TEXT NOT NULL,
+              label       TEXT NOT NULL,
+              captured_at TEXT NOT NULL DEFAULT (date('now')),
+              created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+              source      TEXT NOT NULL DEFAULT 'manual',
+              locked      INTEGER NOT NULL DEFAULT 0
+            );
+            -- Existing rows predate created_at: seed it from captured_at (the
+            -- best timestamp we have) so their ordering/labels stay sensible.
+            INSERT INTO snapshots_rebuild (id, project_id, period_key, label, captured_at, created_at, source, locked)
+              SELECT id, project_id, period_key, label, captured_at, captured_at, source, locked FROM snapshots;
+            DROP TABLE snapshots;
+            ALTER TABLE snapshots_rebuild RENAME TO snapshots;
+            """
+        )
+        print("Migrated snapshots table: dropped one-per-month UNIQUE, added created_at")
 
     (count,) = conn.execute("SELECT COUNT(*) FROM users").fetchone()
     if count == 0:

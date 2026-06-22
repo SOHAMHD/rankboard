@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 
 from .config import CORS_ORIGINS, DEBUG
 from .db import init_db
-from .routers import auth, moz, projects, users
+from .routers import auth, moz, projects, snapshots, users
 
 init_db()
 
@@ -61,3 +61,4 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(moz.router, prefix="/api/projects", tags=["moz"])
+app.include_router(snapshots.router, prefix="/api/snapshots", tags=["snapshots"])

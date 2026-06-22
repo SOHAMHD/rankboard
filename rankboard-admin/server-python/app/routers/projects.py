@@ -63,6 +63,7 @@ def row_to_snapshot(s, keyword_count: int | None = None) -> dict:
         "periodKey": s["period_key"],
         "label": s["label"],
         "capturedAt": s["captured_at"],
+        "createdAt": s["created_at"],  # full timestamp; distinguishes same-month saves
         "source": s["source"],
         "locked": bool(s["locked"]),
     }
@@ -756,8 +757,10 @@ def save_snapshot(project_id: int, db: sqlite3.Connection = Depends(get_db)):
 
 @router.get("/{project_id}/snapshots", dependencies=[Depends(require_project_access)])
 def list_snapshots(project_id: int, db: sqlite3.Connection = Depends(get_db)):
-    """All saved snapshots for the project, newest month first, each with
-    its frozen keyword count. Read-only."""
+    """All saved snapshots for the project, newest first, each with its
+    frozen keyword count. Ordered by created_at so multiple saves within the
+    same month come back newest-first (the UI groups them by month).
+    Read-only."""
     project = db.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(404, "Project not found.")
@@ -767,7 +770,7 @@ def list_snapshots(project_id: int, db: sqlite3.Connection = Depends(get_db)):
            LEFT JOIN snapshot_ranks sr ON sr.snapshot_id = s.id
            WHERE s.project_id = ?
            GROUP BY s.id
-           ORDER BY s.period_key DESC""",
+           ORDER BY s.created_at DESC, s.id DESC""",
         (project_id,),
     ).fetchall()
     return {"snapshots": [row_to_snapshot(r, r["keyword_count"]) for r in rows]}
