@@ -289,7 +289,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
           <TrafficTool project={project} view={activeNav.slice("traffic-".length)} />
         )}
         {activeNav === "search-console" && <SearchConsoleTool project={project} />}
-        {activeNav === "authority" && <MozOverview project={project} />}
+        {activeNav === "authority" && <MozOverview project={project} user={user} />}
       </main>
     </div>
   );

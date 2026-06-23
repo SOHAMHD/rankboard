@@ -6,16 +6,35 @@
    to navigate and review. The rule of thumb: split when a file has
    more than one reason to change.
    ════════════════════════════════════════════════════════════════════ */
-import { BarChart3, LogOut, Users, X } from "lucide-react";
+import { BarChart3, Eye, LogOut, Users, X } from "lucide-react";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
+
+// Display labels for roles. The STORED value stays the raw role string
+// (these are presentation only); "Team" is our read-only team-member role.
+export const ROLE_LABELS = {
+  "Super Admin": "Super Admin",
+  "Admin": "Admin (Manager)",
+  "Team": "Team Member (read-only)",
+  "Client": "Client",
+};
+
+export const roleLabel = (role) => ROLE_LABELS[role] || role;
 
 export const ROLE_DESCRIPTIONS = {
   "Super Admin": "Full control. Onboards people and assigns roles.",
   "Admin": "Also called Manager. Permissions to be decided.",
-  "Team": "Permissions to be decided.",
+  "Team": "Read-only. Sees every project's data and reports, but can't make any changes.",
   "Client": "Permissions to be decided — most likely read-only.",
 };
+
+// A user is read-only when the server granted them no write permission at
+// all (today: the Team member role). Derived from the permissions row the
+// server sends, so it stays in sync with the matrix without hardcoding role
+// names — used to show the "Read-only access" indicator.
+const WRITE_ACTIONS = ["manageUsers", "addProject", "toggleProject", "deleteProject", "addKeyword", "deleteKeyword"];
+export const isReadOnly = (user) =>
+  !!user && !WRITE_ACTIONS.some((a) => user.permissions?.[a]);
 
 export const ROLE_STYLES = {
   "Super Admin": "bg-violet-100 text-violet-700",
@@ -59,7 +78,15 @@ export function TopBar({ user, onLogout, onPeople, onHome }) {
             </button>
           )}
           <span className="text-sm text-stone-600 hidden sm:inline">{user.name}</span>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ROLE_STYLES[user.role]}`}>{user.role}</span>
+          {isReadOnly(user) && (
+            <span
+              title="Your access is read-only — you can view everything but can't make changes."
+              className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-stone-200 text-stone-600"
+            >
+              <Eye size={12} /> Read-only
+            </span>
+          )}
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ROLE_STYLES[user.role]}`}>{roleLabel(user.role)}</span>
           <button
             onClick={onLogout}
             aria-label="Sign out"

@@ -21,6 +21,7 @@ import {
   ErrorNote,
   ROLES,
   ROLE_DESCRIPTIONS,
+  roleLabel,
   INPUT_CLS,
   BTN_PRIMARY,
   BTN_GHOST,
@@ -156,7 +157,7 @@ export function AdminPanelView({ user, onBack, onLogout }) {
                         >
                           {ROLES.map((r) => (
                             <option key={r} value={r}>
-                              {r === "Admin" ? "Admin (Manager)" : r}
+                              {roleLabel(r)}
                             </option>
                           ))}
                         </select>
@@ -522,7 +523,7 @@ function OnboardWizard({ onClose, onCreated }) {
                 }`}
               >
                 <span className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-stone-900">{r === "Admin" ? "Admin (Manager)" : r}</span>
+                  <span className="text-sm font-semibold text-stone-900">{roleLabel(r)}</span>
                   <span
                     className={`h-4 w-4 rounded-full border-2 ${
                       role === r ? "border-orange-600 bg-orange-600" : "border-stone-300"
@@ -577,7 +578,7 @@ function OnboardWizard({ onClose, onCreated }) {
             <div className="px-4 py-2.5 flex justify-between gap-4">
               <span className="text-stone-400">Role</span>
               <span className="font-medium text-stone-800 text-right">
-                {role === "Admin" ? "Admin (Manager)" : role}
+                {roleLabel(role)}
               </span>
             </div>
             {isClient && (

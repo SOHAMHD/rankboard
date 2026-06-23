@@ -12,7 +12,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, LoaderCircle, ShieldCheck, Globe, Link as LinkIcon, KeyRound } from "lucide-react";
 import { api } from "../api";
-import { ErrorNote, BTN_PRIMARY } from "../ui";
+import { ErrorNote, BTN_PRIMARY, can } from "../ui";
 
 // 1437 -> "1.4k", 2_300_000 -> "2.3M". Plain numbers under 1000 keep their
 // thousands separators. null/non-finite -> the em-dash placeholder.
@@ -91,7 +91,11 @@ function NumberTile({ icon: Icon, label, value }) {
   );
 }
 
-export function MozOverview({ project }) {
+export function MozOverview({ project, user }) {
+  // Refreshing spends Moz quota and writes a new row, so it needs the same
+  // write right the POST /moz/refresh endpoint enforces. Read-only members
+  // (no addKeyword) see the cached metrics but not the Refresh button.
+  const mayRefresh = can(user, "addKeyword");
   const [data, setData] = useState(null); // the stored row, or null when none yet
   const [loading, setLoading] = useState(true); // first cached-values load
   const [refreshing, setRefreshing] = useState(false); // a Moz call is in flight
@@ -140,14 +144,16 @@ export function MozOverview({ project }) {
             <span className="font-data text-stone-700">{project.domain || "this project"}</span>, from Moz.
           </p>
         </div>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          title="Pull the latest metrics from the Moz API (uses quota)"
-          className={`${BTN_PRIMARY} px-4 py-2`}
-        >
-          {refreshing ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />} Refresh from Moz
-        </button>
+        {mayRefresh && (
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            title="Pull the latest metrics from the Moz API (uses quota)"
+            className={`${BTN_PRIMARY} px-4 py-2`}
+          >
+            {refreshing ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />} Refresh from Moz
+          </button>
+        )}
       </div>
 
       <ErrorNote>{error}</ErrorNote>
@@ -162,7 +168,9 @@ export function MozOverview({ project }) {
             <ShieldCheck size={20} className="text-stone-400" />
           </div>
           <h3 className="font-semibold text-stone-800 font-display">No Moz data yet</h3>
-          <p className="text-sm text-stone-500 mt-1 max-w-xs">Click Refresh to pull from Moz.</p>
+          <p className="text-sm text-stone-500 mt-1 max-w-xs">
+            {mayRefresh ? "Click Refresh to pull from Moz." : "No authority metrics have been pulled for this project yet."}
+          </p>
         </div>
       ) : (
         <>
