@@ -33,11 +33,15 @@ app = FastAPI(
 )
 
 # ── Read-only role enforcement (one middleware, by HTTP method) ──────
-# A read-only "team member" (any role in READ_ONLY_ROLES) may GET anything
-# they can already see, but must never mutate. Rather than guard every write
-# route individually — where a future route could be forgotten — we block by
-# METHOD here: any POST/PUT/PATCH/DELETE from a read-only user gets 403,
-# EXCEPT a small, explicit exemption list.
+# A read-only role (any role in READ_ONLY_ROLES) may GET anything they can
+# already see, but must never mutate. Rather than guard every write route
+# individually — where a future route could be forgotten — we block by METHOD
+# here: any POST/PUT/PATCH/DELETE from a read-only user gets 403, EXCEPT a
+# small, explicit exemption list.
+#
+# READ_ONLY_ROLES is currently EMPTY: "Team" became a write-capable report
+# author, so this middleware is presently a no-op. It stays wired in so a
+# future read-only role is a one-line addition to that set (permissions.py).
 #
 # Two kinds of exemption:
 #   • session/account routes the member must still reach to sign in and

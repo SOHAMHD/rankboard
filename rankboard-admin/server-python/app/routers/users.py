@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..db import get_db
-from ..permissions import ROLES
+from ..permissions import ADMIN_ROLE, ROLES
 from ..security import require_permission
 from ..services.email_service import send_invite_email
 
@@ -167,7 +167,7 @@ def update_user(
     me: sqlite3.Row = Depends(require_permission("manageUsers")),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    user = db.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+    user = db.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
     if user is None:
         raise HTTPException(404, "User not found.")
 
@@ -176,6 +176,15 @@ def update_user(
             raise HTTPException(400, "Unknown role.")
         if user_id == me["id"]:
             raise HTTPException(400, "You can't change your own role.")  # no lockouts
+        # Lockout guard: never let the change leave ZERO admins (the
+        # everything-role). If this user is the last ADMIN_ROLE and is being
+        # moved off it, refuse — otherwise no one could ever manage users again.
+        if user["role"] == ADMIN_ROLE and body.role != ADMIN_ROLE:
+            (admin_count,) = db.execute(
+                "SELECT COUNT(*) FROM users WHERE role = ?", (ADMIN_ROLE,)
+            ).fetchone()
+            if admin_count <= 1:
+                raise HTTPException(400, f"Can't demote the last {ADMIN_ROLE} — promote someone else first.")
         db.execute("UPDATE users SET role = ? WHERE id = ?", (body.role, user_id))
 
     if body.project_ids is not None:

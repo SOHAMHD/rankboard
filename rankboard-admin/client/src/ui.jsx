@@ -10,12 +10,30 @@ import { BarChart3, Eye, LogOut, Users, X } from "lucide-react";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
 
+// The ONE place mapping the report workflow's role concepts to the strings
+// actually stored in users.role (mirrors server-python/app/permissions.py).
+// Use ROLE.* and the flags below instead of sprinkling raw strings around.
+export const ROLE = {
+  ADMIN: "Super Admin",   // everything
+  MANAGER: "Admin",       // all projects; authors + (later) sends reports
+  TEAM_MEMBER: "Team",    // all projects; authors reports; can't send
+  USER: "Client",         // scoped to assigned projects
+};
+
+// Convenience role flags derived from user.role. Report UI is NOT gated yet —
+// these just make the role available the same way `can(user, action)` does.
+export const isAdmin = (user) => user?.role === ROLE.ADMIN;
+export const isManager = (user) => user?.role === ROLE.MANAGER;
+export const isTeamMember = (user) => user?.role === ROLE.TEAM_MEMBER;
+// Anyone who may author a report: manager, team member, or admin.
+export const isAuthor = (user) => isAdmin(user) || isManager(user) || isTeamMember(user);
+
 // Display labels for roles. The STORED value stays the raw role string
-// (these are presentation only); "Team" is our read-only team-member role.
+// (these are presentation only).
 export const ROLE_LABELS = {
   "Super Admin": "Super Admin",
   "Admin": "Admin (Manager)",
-  "Team": "Team Member (read-only)",
+  "Team": "Team Member",
   "Client": "Client",
 };
 
@@ -23,18 +41,18 @@ export const roleLabel = (role) => ROLE_LABELS[role] || role;
 
 export const ROLE_DESCRIPTIONS = {
   "Super Admin": "Full control. Onboards people and assigns roles.",
-  "Admin": "Also called Manager. Permissions to be decided.",
-  "Team": "Read-only. Sees every project's data and reports, but can't make any changes.",
+  "Admin": "Also called Manager. Full project control; authors reports and sends them to clients.",
+  "Team": "Sees every project. Authors reports, but can't send them to clients.",
   "Client": "Permissions to be decided — most likely read-only.",
 };
 
-// A user is read-only when the server granted them no write permission at
-// all (today: the Team member role). Derived from the permissions row the
-// server sends, so it stays in sync with the matrix without hardcoding role
-// names — used to show the "Read-only access" indicator.
+// A user is read-only when they can't author reports AND the server granted
+// them no write permission at all (today: the Client role). Authors are never
+// read-only. Derived from the permissions row + role so the "Read-only"
+// indicator stays accurate now that Team is a write-capable author.
 const WRITE_ACTIONS = ["manageUsers", "addProject", "toggleProject", "deleteProject", "addKeyword", "deleteKeyword"];
 export const isReadOnly = (user) =>
-  !!user && !WRITE_ACTIONS.some((a) => user.permissions?.[a]);
+  !!user && !isAuthor(user) && !WRITE_ACTIONS.some((a) => user.permissions?.[a]);
 
 export const ROLE_STYLES = {
   "Super Admin": "bg-violet-100 text-violet-700",

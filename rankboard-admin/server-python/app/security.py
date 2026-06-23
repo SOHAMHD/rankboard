@@ -20,8 +20,16 @@ from .db import get_db
 from .permissions import can
 
 
-def create_token(user_id: int) -> str:
-    payload = {"sub": str(user_id), "exp": datetime.now(timezone.utc) + timedelta(hours=8)}
+def create_token(user_id: int, role: str) -> str:
+    # `role` is carried as an INFORMATIONAL claim only — every guard below
+    # re-loads the role fresh from the DB (require_auth), so a stale token can
+    # never widen access. It's here so a decoded token is self-describing and
+    # for any client that wants to read it without a /me round-trip.
+    payload = {
+        "sub": str(user_id),
+        "role": role,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=8),
+    }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
 
@@ -69,6 +77,31 @@ def require_permission(action: str):
         if not can(user["role"], action):
             raise HTTPException(403, "You don't have permission to do that.")
         return user
+    return checker
+
+
+def require_roles(*allowed: str):
+    """Gate a route to a set of ROLES (the report workflow's authorization
+    helper). 403s if the caller's CURRENT role — re-loaded fresh from the DB by
+    require_active_user, never trusted from the token — isn't in `allowed`.
+
+    Later slices use it directly, e.g.
+        Depends(require_roles(*AUTHOR_ROLES))   # author a report
+        Depends(require_roles(*SENDER_ROLES))   # send a report to a client
+    (see permissions.AUTHOR_ROLES / SENDER_ROLES). No such endpoints exist yet;
+    this only establishes the reusable helper.
+
+    The 403 is raised as an HTTPException, so it flows through the app's
+    exception handler and — because CORSMiddleware sits OUTERMOST (see
+    app.main) — still carries the Access-Control-Allow-Origin header a browser
+    needs to read the error."""
+    allowed_set = frozenset(allowed)
+
+    def checker(user: sqlite3.Row = Depends(require_active_user)) -> sqlite3.Row:
+        if user["role"] not in allowed_set:
+            raise HTTPException(403, "You don't have permission to do that.")
+        return user
+
     return checker
 
 

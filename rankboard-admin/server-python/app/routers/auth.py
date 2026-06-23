@@ -49,7 +49,7 @@ def login(body: LoginIn, db: sqlite3.Connection = Depends(get_db)):
     if user is None or not bcrypt.checkpw(body.password.encode(), user["password_hash"].encode()):
         raise HTTPException(401, "No account matches that email and password.")
 
-    return {"token": create_token(user["id"]), "user": public_user(user)}
+    return {"token": create_token(user["id"], user["role"]), "user": public_user(user)}
 
 
 @router.get("/me")
