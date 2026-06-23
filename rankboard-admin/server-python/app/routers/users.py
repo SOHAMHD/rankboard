@@ -9,7 +9,7 @@ import bcrypt
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..db import get_db
+from ..db import INTEGRITY_ERRORS, get_db
 from ..permissions import ADMIN_ROLE, ROLES
 from ..security import require_permission
 from ..services.email_service import send_invite_email
@@ -110,9 +110,10 @@ def onboard_user(body: OnboardIn, db: sqlite3.Connection = Depends(get_db)):
             " VALUES (?, ?, ?, ?, 1, 'invited')",
             (name, email, body.role, pw_hash),
         )
-    except sqlite3.IntegrityError:
+    except INTEGRITY_ERRORS:
         # The UNIQUE constraint on email — the DB is the final guard
-        # against duplicates, even under race conditions.
+        # against duplicates, even under race conditions. (INTEGRITY_ERRORS
+        # covers both SQLite and Postgres so the guard works on either backend.)
         raise HTTPException(409, "Someone with this email already exists.")
 
     # Link the validated projects to the new Client. INSERT OR IGNORE leans on

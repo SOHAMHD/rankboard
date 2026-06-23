@@ -5,3 +5,4 @@ PyJWT
 openpyxl
 python-multipart
 google-analytics-data
+psycopg[binary]  # Postgres driver (psycopg 3); used when DATABASE_URL points at Supabase

@@ -9,8 +9,6 @@ The two exception handlers below exist for one reason: the React
 client expects errors shaped {"error": "..."} — that's the contract
 the Node server established, so this server honors it exactly.
 """
-import sqlite3
-
 import jwt
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -18,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import CORS_ORIGINS, DEBUG, JWT_SECRET
-from .db import DB_PATH, init_db
+from .db import get_connection, init_db
 from .permissions import READ_ONLY_ROLES
 from .routers import auth, moz, projects, snapshots, users
 
@@ -87,7 +85,9 @@ def _role_for_request(request: Request) -> str | None:
         user_id = int(payload["sub"])
     except (jwt.PyJWTError, KeyError, ValueError):
         return None
-    conn = sqlite3.connect(DB_PATH)
+    # Use the same backend as the rest of the app (Postgres or SQLite), not a
+    # hardcoded SQLite file, so the role is read from the live database.
+    conn = get_connection()
     try:
         row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
     finally:
