@@ -98,3 +98,70 @@ body {
 .rise-in {
   animation: rise-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+/* ── Report editor + preview prose ────────────────────────────────────
+   Tailwind v4 ships no typography plugin, so the contenteditable surface
+   (.report-prose, also reused by the read-only preview) gets a small set of
+   block rules here: paragraph rhythm, headings, and lists. Kept intentionally
+   light to match the app's calm, premium look. */
+.report-prose {
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: var(--color-stone-800);
+}
+.report-prose p {
+  margin: 0 0 0.6rem;
+}
+.report-prose p:last-child {
+  margin-bottom: 0;
+}
+.report-prose h1 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.011em;
+  margin: 0.6rem 0 0.4rem;
+}
+.report-prose h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.011em;
+  margin: 0.6rem 0 0.35rem;
+}
+.report-prose h3 {
+  font-size: 1.02rem;
+  font-weight: 600;
+  margin: 0.5rem 0 0.3rem;
+}
+.report-prose ul,
+.report-prose ol {
+  margin: 0 0 0.6rem;
+  padding-left: 1.4rem;
+}
+.report-prose ul {
+  list-style: disc;
+}
+.report-prose ol {
+  list-style: decimal;
+}
+.report-prose li {
+  margin: 0.15rem 0;
+}
+.report-prose blockquote {
+  border-left: 2px solid var(--color-stone-300);
+  padding-left: 0.75rem;
+  color: var(--color-stone-600);
+  margin: 0 0 0.6rem;
+}
+.report-prose pre {
+  background: var(--color-stone-50);
+  border: 1px solid var(--color-stone-200);
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  overflow-x: auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+}
+/* Empty-editor placeholder via the data attribute TipTap sets on the doc. */
+.report-prose:focus {
+  outline: none;
+}

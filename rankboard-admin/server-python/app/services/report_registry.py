@@ -7,14 +7,17 @@ TYPE (the formatting category the content editor's format menu will later use).
 Adding a new field to a report is a one-line addition to REPORT_FIELDS — nothing
 else in the pipeline hard-codes a field list.
 
-THIS SLICE only sources what already lives in the DB:
+Sources wired today:
   • ranks    — per-keyword rank, frozen from snapshot_ranks for the chosen snapshot
   • moz      — domain_authority / linking_domains / inbound_links from moz_metrics
   • keywords — the keyword list + current-vs-previous comparison (keywords + snapshot)
+  • ga4      — fetched LIVE from the GA4 Data API at generate time, then FROZEN
+  • gsc      — fetched LIVE from Search Console at generate time, then FROZEN
 
-GA4 and GSC fields are REGISTERED-BUT-NOT-YET-SOURCED (source='deferred'): the
-structure is ready for a later slice to wire their fetch-and-freeze, but this
-slice does NOT fetch them and validation does NOT fail when they're absent.
+GA4/GSC were previously source='deferred' (registered but not fetched). As of the
+GA4/GSC slice they are REAL sources (source='ga4'/'gsc'), fetched at generate time
+(see report_google.py) and frozen into report_version.data_json. Their absence now
+FAILS validation, exactly like ranks/Moz. There are no deferred fields left.
 """
 
 # ── Format types (the editor's future format menu draws from these) ──────────
@@ -30,7 +33,9 @@ FIELD_TYPES = frozenset({TYPE_COUNT, TYPE_DURATION, TYPE_PERCENT, TYPE_RANK, TYP
 SOURCE_SNAPSHOT_RANKS = "snapshot_ranks"  # frozen ranks for the chosen snapshot
 SOURCE_MOZ = "moz_metrics"                # the period's Moz row
 SOURCE_KEYWORDS = "keywords"              # keyword list / current-vs-previous
-SOURCE_DEFERRED = "deferred"              # registered but not yet sourced (GA4/GSC)
+SOURCE_GA4 = "ga4"                        # live GA4 Data API fetch, frozen at generate
+SOURCE_GSC = "gsc"                        # live Search Console fetch, frozen at generate
+SOURCE_DEFERRED = "deferred"              # registered but not yet sourced (none currently)
 
 
 # Each entry: name (stable id), source, type, deferred flag, human label.
@@ -61,29 +66,29 @@ REPORT_FIELDS = (
      "column": "previous_rank", "type": TYPE_RANK, "deferred": False,
      "label": "Previous rank"},
 
-    # ── GA4 — REGISTERED BUT DEFERRED (not fetched, not validated this slice) ─
-    {"name": "ga4.sessions", "source": SOURCE_DEFERRED,
-     "column": None, "type": TYPE_COUNT, "deferred": True,
+    # ── GA4 — LIVE-FETCHED at generate time, then frozen ─────────────────────
+    {"name": "ga4.sessions", "source": SOURCE_GA4,
+     "column": None, "type": TYPE_COUNT, "deferred": False,
      "label": "Sessions"},
-    {"name": "ga4.total_users", "source": SOURCE_DEFERRED,
-     "column": None, "type": TYPE_COUNT, "deferred": True,
+    {"name": "ga4.total_users", "source": SOURCE_GA4,
+     "column": None, "type": TYPE_COUNT, "deferred": False,
      "label": "Total users"},
-    {"name": "ga4.avg_session_duration", "source": SOURCE_DEFERRED,
-     "column": None, "type": TYPE_DURATION, "deferred": True,
+    {"name": "ga4.avg_session_duration", "source": SOURCE_GA4,
+     "column": None, "type": TYPE_DURATION, "deferred": False,
      "label": "Avg. session duration"},
 
-    # ── GSC — REGISTERED BUT DEFERRED (not fetched, not validated this slice) ─
-    {"name": "gsc.clicks", "source": SOURCE_DEFERRED,
-     "column": None, "type": TYPE_COUNT, "deferred": True,
+    # ── GSC — LIVE-FETCHED at generate time, then frozen ─────────────────────
+    {"name": "gsc.clicks", "source": SOURCE_GSC,
+     "column": None, "type": TYPE_COUNT, "deferred": False,
      "label": "Clicks"},
-    {"name": "gsc.impressions", "source": SOURCE_DEFERRED,
-     "column": None, "type": TYPE_COUNT, "deferred": True,
+    {"name": "gsc.impressions", "source": SOURCE_GSC,
+     "column": None, "type": TYPE_COUNT, "deferred": False,
      "label": "Impressions"},
-    {"name": "gsc.ctr", "source": SOURCE_DEFERRED,
-     "column": None, "type": TYPE_PERCENT, "deferred": True,
+    {"name": "gsc.ctr", "source": SOURCE_GSC,
+     "column": None, "type": TYPE_PERCENT, "deferred": False,
      "label": "CTR"},
-    {"name": "gsc.avg_position", "source": SOURCE_DEFERRED,
-     "column": None, "type": TYPE_RANK, "deferred": True,
+    {"name": "gsc.avg_position", "source": SOURCE_GSC,
+     "column": None, "type": TYPE_RANK, "deferred": False,
      "label": "Avg. position"},
 )
 

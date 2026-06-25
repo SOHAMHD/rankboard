@@ -73,8 +73,36 @@ def get_report(
     user: sqlite3.Row = Depends(require_roles(*AUTHOR_ROLES)),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """Fetch one version's frozen data_json (and empty content_json) so a frozen
-    report can be INSPECTED this slice — no rendering, just the stored blob.
-    404 if the version doesn't exist."""
+    """Fetch one version's frozen data_json + editable content_json so the editor
+    can rehydrate (prose + chips with their saved formats). 404 if missing."""
     version = report_service.get_version(db, version_id, include_data=True)
+    return {"version": version}
+
+
+@router.get("/{version_id}/blobs")
+def get_report_blobs(
+    version_id: int,
+    user: sqlite3.Row = Depends(require_roles(*AUTHOR_ROLES)),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """The SCALAR blobs available to insert, resolved from this version's FROZEN
+    data — { name, label, type, source, group, currentValue, deltaValue }. The
+    single source the palette AND the live preview consume. 404 if missing."""
+    return {"blobs": report_service.available_blobs(db, version_id)}
+
+
+class SaveContentIn(BaseModel):
+    content: dict  # the editor document (TipTap/ProseMirror JSON), NOT rendered HTML
+
+
+@router.patch("/{version_id}/content")
+def save_report_content(
+    version_id: int,
+    body: SaveContentIn,
+    user: sqlite3.Row = Depends(require_roles(*AUTHOR_ROLES)),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Save the editor's document into content_json. DRAFT-ONLY: 409 if the version
+    is in_review/sent (locked). 404 if missing. Returns the updated version."""
+    version = report_service.save_content(db, version_id, body.content, user["id"])
     return {"version": version}

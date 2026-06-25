@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  FileText,
   Globe,
   ListOrdered,
   LoaderCircle,
@@ -54,8 +55,9 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { api, getToken, BASE } from "../api";
-import { Modal, ErrorNote, can, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
+import { Modal, ErrorNote, can, isAuthor, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { MozOverview } from "./MozOverview";
+import { ReportsPanel } from "./ReportEditor";
 
 // Sidebar navigation, GA4-style: collapsible groups whose sub-items each select
 // a view in the main area. A group given no `children` becomes a plain clickable
@@ -97,6 +99,10 @@ const NAV_GROUPS = [
   // { id: "backlinks", label: "Backlinks", icon: Link2 },  ← next tool goes here
 ];
 
+// Author-only tool: the report content editor. Appended to the nav for authors
+// (team_member / manager / admin) only — the backend re-checks regardless.
+const REPORTS_GROUP = { id: "reports", label: "Reports", icon: FileText };
+
 // The nav group whose children include `navId` (used to default-expand it).
 function groupOf(navId) {
   return NAV_GROUPS.find((g) => (g.children || []).some((c) => c.id === navId));
@@ -114,6 +120,9 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
   });
   const toggleGroup = (id) =>
     setOpenGroups((open) => (open.includes(id) ? open.filter((x) => x !== id) : [...open, id]));
+
+  // Authors additionally see the Reports tool; everyone else sees the base nav.
+  const navGroups = isAuthor(user) ? [...NAV_GROUPS, REPORTS_GROUP] : NAV_GROUPS;
 
   const refresh = async () => {
     try {
@@ -174,7 +183,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
 
         <nav className="flex-1 p-3 overflow-y-auto">
           <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-2">SEO tools</p>
-          {NAV_GROUPS.map((group) => {
+          {navGroups.map((group) => {
             const children = group.children || null;
 
             // Childless group → plain clickable nav item (single-view tool).
@@ -264,7 +273,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
           </button>
         </div>
         <div className="px-4 pb-3 flex gap-2 overflow-x-auto">
-          {NAV_GROUPS.flatMap((group) =>
+          {navGroups.flatMap((group) =>
             (group.children || [{ id: group.id, label: group.label }]).map((child) => (
               <button
                 key={child.id}
@@ -290,6 +299,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
         )}
         {activeNav === "search-console" && <SearchConsoleTool project={project} />}
         {activeNav === "authority" && <MozOverview project={project} user={user} />}
+        {activeNav === "reports" && isAuthor(user) && <ReportsPanel user={user} project={project} />}
       </main>
     </div>
   );
