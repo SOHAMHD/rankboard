@@ -37,6 +37,7 @@ import {
   chipLabel,
   defaultFormatId,
 } from "../lib/blobFormats";
+import ReportDocument from "./ReportDocument";
 
 // Only scalar sources surface as chips this slice (tabular ranks/keywords are
 // excluded), so the palette groups are GA4 / GSC / Moz plus a "Changes" group
@@ -321,6 +322,11 @@ function ReportEditor({ versionId, onBack }) {
         </div>
       ) : error || !version || !blobs ? (
         <ErrorNote>{error || "Could not load this report version."}</ErrorNote>
+      ) : version.content?.type === "report_document" ? (
+        // Generated reports now carry a block document in content_json — render
+        // the full templated report READ-ONLY (this slice adds no editing). The
+        // legacy prose/chip editor below is kept for any pre-block-document draft.
+        <ReportDocument key={versionId} version={version} />
       ) : (
         // key={versionId} is load-bearing: it forces a fresh mount per version so
         // the once-only useEditor([]) / useState seeds (which bake in this

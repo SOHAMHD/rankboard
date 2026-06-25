@@ -7,11 +7,11 @@ call. GA4 + GSC are the exception: they are fetched LIVE from Google at generate
 time (see report_google.py) and then FROZEN into the blob, identical in treatment
 to ranks/Moz once gathered. Forking reuses the frozen blob and never re-fetches.
 
-  gather()           assemble the in-memory blob (+ month-over-month deltas)
-  validate()         STRICT yes/no with a human-readable reason — writes nothing
-  freeze()           the ONLY writer: serialise the blob into a report_version row
-  generate()         gather → validate → freeze, with a no-duplicate guard
-  fork_for_changes() copy a frozen version verbatim into a new editable draft
+  gather()           assemble the in-memory blob (+ deltas + the backlinks list)
+  validate()         LENIENT yes (always freezable) — missing sources are flagged
+  freeze()           the ONLY writer: blob → data_json, block document → content_json
+  generate()         gather → validate → build block document → freeze (no-dup guard)
+  fork_for_changes() copy a frozen version (data_json + content_json) verbatim
 
 All SQL goes through the db.py bridge (SQLite-dialect, `?` placeholders) so it
 runs on both SQLite and Supabase Postgres.
@@ -21,7 +21,9 @@ import sqlite3
 
 from fastapi import HTTPException
 
+from . import backlink_service
 from . import report_blobs
+from . import report_document
 from . import report_google
 from . import report_registry as registry
 
@@ -251,22 +253,19 @@ def gather(
 
     ga4_section = None
     gsc_section = None
-    # outcome: {"ok", "reason", "status"} — status drives generate's HTTP code
-    # (422 = fix it / access / maturation; 503 = transport, retryable).
+    # outcome: {"ok", "reason", "status"} — under LENIENT generation no outcome is
+    # fatal; the reason becomes a "not available for this period" flag on the
+    # rendered section (status is retained for diagnostics / a future retry hint).
     maturation_reason = (
-        f"period {period_key} is not a complete past month; GA4 data still maturing"
-        " — generate after the month closes."
+        f"period {period_key} is not a complete past month; GA4/GSC data is still"
+        " maturing — shown as not available for this period."
     )
-    # Only spend GA4/GSC API quota when the cheaper prerequisites already hold:
-    # a snapshot + Moz must be present (else validate() fails on those first) AND
-    # the month must be complete (else we'd freeze immature data). When skipped,
-    # the outcome's reason is never surfaced — validate() reports the real cause.
-    prerequisites_ok = snap is not None and moz is not None
-    if not prerequisites_ok:
-        skip = {"ok": False, "reason": "not fetched (snapshot/Moz prerequisite missing)", "status": 422}
-        ga4_outcome = dict(skip)
-        gsc_outcome = dict(skip)
-    elif not period_complete:
+    # GA4/GSC are fetched whenever the month is COMPLETE (mature), INDEPENDENT of
+    # whether a snapshot/Moz row exists — generation always produces a full report
+    # and any source we can't fill is flagged, never fatal. An incomplete/current
+    # month skips the fetch (data still settling) and flags those sections. A fetch
+    # error (access/transport) is classified by _fetch_section into a flag, too.
+    if not period_complete:
         ga4_outcome = {"ok": False, "reason": maturation_reason, "status": 422}
         gsc_outcome = {"ok": False, "reason": maturation_reason, "status": 422}
     else:
@@ -276,6 +275,17 @@ def gather(
         gsc_section, gsc_outcome = _fetch_section(
             gsc_fetch, project["gsc_site_url"], cur_range, prev_range, registry.SOURCE_GSC
         )
+
+    # ── backlinks (NEW for this slice): the period's new-backlinks LIST, pulled
+    # additively from the backlinks table (same YYYY-MM key). A plain DB read that
+    # always succeeds; an empty month is "no new backlinks", not an error.
+    backlinks_data = backlink_service.backlinks_for_month(db, project_id, period_key)
+    backlinks_section = {
+        "source": "backlinks",
+        "month": period_key,
+        "count": backlinks_data["count"],
+        "items": [{"url": u} for u in backlinks_data["urls"]],
+    }
 
     blob = {
         "schema_version": BLOB_SCHEMA_VERSION,
@@ -288,14 +298,22 @@ def gather(
             "location_code": project["location_code"],
         },
         "rank_snapshot_id": snap["id"] if snap is not None else None,
-        # Per-section presence. Nothing is deferred any more — GA4/GSC are real
-        # sources whose absence fails validation.
+        "period_complete": period_complete,
+        # Per-section presence + a human reason when ABSENT. Under lenient
+        # generation a `present: False` source is NOT fatal — the reason is shown
+        # as a "not available for this period" flag on the rendered block.
         "sources": {
-            "ranks":    {"present": snap is not None, "deferred": False},
-            "keywords": {"present": snap is not None, "deferred": False},
-            "moz":      {"present": moz is not None,  "deferred": False},
-            "ga4":      {"present": ga4_outcome["ok"], "deferred": False},
-            "gsc":      {"present": gsc_outcome["ok"], "deferred": False},
+            "ranks":     {"present": snap is not None,
+                          "reason": None if snap is not None else f"no rank snapshot saved for {period_key}"},
+            "keywords":  {"present": snap is not None,
+                          "reason": None if snap is not None else f"no rank snapshot saved for {period_key}"},
+            "moz":       {"present": moz is not None,
+                          "reason": None if moz is not None else f"no Moz metrics captured for {period_key}"},
+            "ga4":       {"present": ga4_outcome["ok"],
+                          "reason": None if ga4_outcome["ok"] else ga4_outcome["reason"]},
+            "gsc":       {"present": gsc_outcome["ok"],
+                          "reason": None if gsc_outcome["ok"] else gsc_outcome["reason"]},
+            "backlinks": {"present": True, "reason": None},
         },
         "sections": {
             "ranks": ranks_section,
@@ -303,6 +321,7 @@ def gather(
             "moz": moz_section,
             "ga4": ga4_section,   # live-fetched + frozen (None when the fetch failed)
             "gsc": gsc_section,   # live-fetched + frozen (None when the fetch failed)
+            "backlinks": backlinks_section,
         },
         "registry": registry.manifest(),
     }
@@ -337,61 +356,45 @@ def _fetch_section(fetch, target, cur_range, prev_range, source) -> tuple[dict |
 
 # ── validate ──────────────────────────────────────────────────────────────────
 def validate(gathered: dict) -> tuple[bool, str | None, int]:
-    """STRICT validation. Returns (True, None, 200) when the blob may be frozen, or
-    (False, reason, http_status) with a specific, human-readable reason when it may
-    not. A report freezes ONLY if ranks + Moz + GA4 + GSC all gathered successfully.
+    """LENIENT validation. Always returns (True, None, 200): a report is ALWAYS
+    freezable. Data-presence problems are NOT failures any more — a missing
+    snapshot / Moz row / GA4 / GSC, or an immature (incomplete) month, are recorded
+    as per-source presence flags + reasons in the blob (blob["sources"]) and
+    surface as "not available for this period" flags on the rendered block document,
+    never a 422/503.
 
-    Rules:
-      • A usable rank snapshot MUST exist for the period (else 422: run a rank check).
-      • A Moz row for the period MUST be present (else 422).
-      • The period MUST be a complete past month (else 422: GA4 still maturing) —
-        we never freeze unsettled GA4/GSC data.
-      • GA4 and GSC MUST have fetched successfully. An ACCESS failure (403 / wrong
-        property / missing creds) → 422 with which-API/which-property reason; a
-        TRANSPORT failure (timeout/5xx/network) → 503 with a retryable reason.
-      • An ABSENT section fails; a section present but legitimately EMPTY (zero
-        keywords, a real Moz 0, a new site with 0 GSC clicks) is valid — zero is
-        data, not failure.
-    """
-    period = gathered["period_key"]
-    if not gathered["snapshot_present"]:
-        return False, f"no rank snapshot for {period}; run a rank check first.", 422
-    if not gathered["moz_present"]:
-        return False, f"no Moz metrics for {period}; refresh Moz for this project first.", 422
-    if not gathered["period_complete"]:
-        return (
-            False,
-            f"period {period} is not a complete past month; GA4 data still maturing"
-            " — generate after the month closes.",
-            422,
-        )
-    ga4 = gathered["ga4_outcome"]
-    if not ga4["ok"]:
-        return False, ga4["reason"], ga4["status"]
-    gsc = gathered["gsc_outcome"]
-    if not gsc["ok"]:
-        return False, gsc["reason"], gsc["status"]
+    (This replaces the prior STRICT behavior that 422'd on any missing source and
+    503'd on a GA4/GSC transport blip.) The only genuinely blocking guards live
+    elsewhere and are NOT about data presence: project-not-found 404 (raised in
+    gather) and the duplicate-unsent-version 409 (raised in generate).
+
+    Kept as an explicit step so the gather → validate → freeze shape is unchanged;
+    it is the surgical seam where leniency lives."""
     return True, None, 200
 
 
 # ── freeze (the only writer) ──────────────────────────────────────────────────
-def freeze(db, gathered: dict, user_id: int, parent_version_id: int | None = None) -> int:
+def freeze(db, gathered: dict, user_id: int, content: dict | None = None,
+           parent_version_id: int | None = None) -> int:
     """Serialise the gathered blob into a NEW report_version row (status 'draft',
-    frozen_at set, rank_snapshot_id recorded, content_json empty) and return its
-    id. ONLY call after validate() passed — freeze never re-validates. `frozen_at`
-    uses datetime('now') (bridge-translated) so it matches house timestamp text
-    on both backends; created_at takes its column default."""
+    frozen_at set, rank_snapshot_id recorded) and return its id. data_json is the
+    FROZEN immutable data; content_json is the EDITABLE block document seeded from
+    it (`content`) — no longer empty. ONLY call after validate() — freeze never
+    re-validates. `frozen_at` uses datetime('now') (bridge-translated) so it
+    matches house timestamp text on both backends; created_at takes its default."""
     data_json = json.dumps(gathered["blob"])
+    content_json = json.dumps(content if content is not None else {})
     cur = db.execute(
         "INSERT INTO report_version"
         " (project_id, period_key, status, parent_version_id, data_json, content_json,"
         "  rank_snapshot_id, created_by, frozen_at)"
-        " VALUES (?, ?, 'draft', ?, ?, '{}', ?, ?, datetime('now'))",
+        " VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, datetime('now'))",
         (
             gathered["project_id"],
             gathered["period_key"],
             parent_version_id,
             data_json,
+            content_json,
             gathered["rank_snapshot_id"],
             user_id,
         ),
@@ -402,14 +405,15 @@ def freeze(db, gathered: dict, user_id: int, parent_version_id: int | None = Non
 # ── operations ────────────────────────────────────────────────────────────────
 def generate(db, project_id: int, period_key: str | None, user_id: int) -> dict:
     """Generate a fresh frozen version for a project+period: gather → validate →
-    freeze. Fails LOUDLY (writes nothing) when validation fails. Enforces the
-    no-duplicate rule in code: if a non-sent (draft/in_review) version already
-    exists for this project+period, returns a 409 conflict rather than silently
-    making a second — use fork_for_changes to iterate on it instead.
+    build block document → freeze. LENIENT: a report is always produced even when
+    a data source is missing (each absent source is flagged in the document, not
+    fatal). content_json is populated with the full block document seeded from the
+    frozen data_json. Enforces the no-duplicate rule in code: if a non-sent
+    (draft/in_review) version already exists for this project+period, returns 409
+    rather than silently making a second — use fork_for_changes to iterate instead.
 
-      404 unknown project · 409 unsent version already exists ·
-      422 not freezable (missing snapshot/Moz, immature period, GA4/GSC access) ·
-      503 GA4/GSC transport error (retryable)
+      404 unknown project · 409 unsent version already exists
+    (no more data-presence 422s / transport 503s — those are now flags).
     """
     # Resolve the period up front so the duplicate check runs BEFORE any live
     # Google fetch — a known conflict must not spend GA4/GSC API calls.
@@ -429,13 +433,15 @@ def generate(db, project_id: int, period_key: str | None, user_id: int) -> dict:
             f"an unsent report for {period} exists; use changes to fork it.",
         )
 
-    # No conflict → gather (this is where GA4/GSC are fetched live) then validate.
+    # No conflict → gather (this is where GA4/GSC are fetched live), validate
+    # (lenient — always passes), then build + freeze the block document.
     gathered = gather(db, project_id, period)
     ok, reason, status = validate(gathered)
     if not ok:
         raise HTTPException(status, reason)
 
-    version_id = freeze(db, gathered, user_id)
+    content = report_document.build_document(gathered)
+    version_id = freeze(db, gathered, user_id, content=content)
     return get_version(db, version_id, include_data=True)
 
 
