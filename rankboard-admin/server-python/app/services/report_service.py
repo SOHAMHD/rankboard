@@ -530,6 +530,22 @@ def available_blobs(db, version_id: int) -> list[dict]:
     return report_blobs.resolve_scalar_blobs(data)
 
 
+def template_blocks(db, version_id: int) -> list[dict]:
+    """The canonical TEMPLATE blocks for this version, rebuilt from its FROZEN
+    data_json (NOT from the possibly-edited content_json). The editable document
+    uses this to RE-ADD a template section the author removed — a removed GA4
+    table / metric grid / backlinks list can be brought back because the data is
+    still in data_json. Read-only; no live fetch; data_json untouched. 404 if the
+    version doesn't exist."""
+    row = db.execute(
+        "SELECT data_json FROM report_version WHERE id = ?", (version_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, "Report version not found.")
+    data = json.loads(row["data_json"]) if row["data_json"] else None
+    return report_document.build_document_from_data(data)["blocks"]
+
+
 def save_content(db, version_id: int, content: dict, user_id: int) -> dict:
     """Persist the editor's document into content_json. DRAFT-ONLY: a version in
     'in_review' or 'sent' is LOCKED — 409 if a write is attempted (enforces the

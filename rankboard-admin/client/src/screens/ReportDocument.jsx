@@ -1,18 +1,23 @@
 /* ════════════════════════════════════════════════════════════════════
-   REPORT DOCUMENT — read-only renderer for the generated block document.
+   REPORT DOCUMENT — renderers for the generated block document.
 
-   A generated report version now carries a BLOCK DOCUMENT in content_json
-   (built server-side from the frozen data_json — see report_document.py). This
-   component renders that document as the full, templated report: header,
-   narrative prose, metric grids, GA4/GSC/keyword data tables, the GSC daily-trend
-   chart, and the new-backlinks list. Sections whose source wasn't gathered for
-   the period render a clear "not available for this period" flag.
+   A generated report version carries a BLOCK DOCUMENT in content_json (built
+   server-side from the frozen data_json — see report_document.py). This module
+   renders that document: header, narrative prose (with inline blob-chips), metric
+   grids, GA4/GSC/keyword data tables, the GSC daily-trend chart, and the
+   new-backlinks list. Sections whose source wasn't gathered render a clear "not
+   available for this period" flag.
 
-   READ-ONLY for this slice: there are NO editing controls (add/delete/reorder,
-   text edits, cell edits) — those arrive in the next slice. Data VALUES are
-   immutable (seeded from the frozen blob); only narrative prose will become
-   editable later. Number/value formatting reuses the same FORMATS table the
-   scalar chip editor uses, so display stays consistent across the app.
+   The default export `ReportDocument` renders the whole document READ-ONLY (used
+   for locked/sent versions). The individual block components + helpers are also
+   EXPORTED so the editable document (ReportDocumentEditor.jsx) renders DATA blocks
+   identically — DATA VALUES are never editable, anywhere. Only narrative text is
+   editable, and that happens in the editor via the existing TipTap chip editor.
+
+   Number/value formatting reuses the SAME FORMATS table the scalar chip editor
+   uses, so display stays consistent across the app. Narrative blocks may carry a
+   `doc` (TipTap/ProseMirror JSON, with blob-chips) once edited; we render that
+   when present and fall back to the original `paragraphs`/`bullets` otherwise.
    ════════════════════════════════════════════════════════════════════ */
 import {
   ResponsiveContainer,
@@ -31,15 +36,16 @@ import {
   ExternalLink,
   Info,
   Link2,
+  AlertTriangle,
 } from "lucide-react";
-import { FORMATS } from "../lib/blobFormats";
+import { FORMATS, applyFormat } from "../lib/blobFormats";
 
 // Match the dashboard's chart palette (brand purple + sky).
 const COLOR_CLICKS = "#5b5bf7";
 const COLOR_IMPRESSIONS = "#0284c7";
 
 // ── value formatting (reuse the chip editor's per-type FORMATS) ───────────────
-function fmtValue(type, value) {
+export function fmtValue(type, value) {
   if (value === null || value === undefined) return "—";
   const t = FORMATS[type] || FORMATS.text;
   const f = (t.value && t.value[0]) || FORMATS.text.value[0];
@@ -50,7 +56,7 @@ function fmtValue(type, value) {
   }
 }
 
-function fmtDelta(type, value) {
+export function fmtDelta(type, value) {
   if (value === null || value === undefined) return null;
   const t = FORMATS[type] || FORMATS.text;
   const f = (t.delta && t.delta[0]) || FORMATS.text.delta[0];
@@ -69,7 +75,7 @@ function deltaImproved(type, delta) {
   return lowerIsBetter ? delta < 0 : delta > 0;
 }
 
-function DeltaBadge({ type, delta, className = "" }) {
+export function DeltaBadge({ type, delta, className = "" }) {
   const text = fmtDelta(type, delta);
   if (text === null) return null;
   const improved = deltaImproved(type, delta);
@@ -88,7 +94,7 @@ function DeltaBadge({ type, delta, className = "" }) {
 }
 
 // ── "not available for this period" flag ──────────────────────────────────────
-function UnavailableNote({ reason }) {
+export function UnavailableNote({ reason }) {
   return (
     <p className="text-sm text-stone-500 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 flex items-center gap-2">
       <Info size={14} className="shrink-0 text-stone-400" />
@@ -107,8 +113,74 @@ function Card({ children, className = "" }) {
   );
 }
 
+// ── narrative doc rendering (ProseMirror/TipTap JSON → read-only, chips resolved)
+// Mirrors the chip editor's preview: blob nodes resolve to their FROZEN formatted
+// value; a chip that can't resolve shows a clear broken marker. Same node types
+// the TipTap editor (StarterKit + blob node) produces.
+function renderChip(node, blobsByName, key) {
+  const { name, kind, format, label } = node.attrs || {};
+  const blob = blobsByName?.get(name);
+  const resolved = blob ? applyFormat(blob, kind, format) : null;
+  if (resolved === null) {
+    return (
+      <span key={key} className="inline-flex items-center gap-1 rounded bg-red-50 text-red-700 border border-red-200 px-1 text-sm">
+        <AlertTriangle size={11} /> {label || name || "unknown"}
+      </span>
+    );
+  }
+  return (
+    <span key={key} className="font-data font-semibold text-stone-900">
+      {resolved}
+    </span>
+  );
+}
+
+function renderDocText(node, key) {
+  let el = node.text;
+  for (const m of node.marks || []) {
+    if (m.type === "bold") el = <strong>{el}</strong>;
+    else if (m.type === "italic") el = <em>{el}</em>;
+    else if (m.type === "strike") el = <s>{el}</s>;
+    else if (m.type === "code") el = <code className="px-1 rounded bg-stone-100 font-data text-sm">{el}</code>;
+  }
+  return <span key={key}>{el}</span>;
+}
+
+function renderDocNode(node, blobsByName, key) {
+  switch (node.type) {
+    case "paragraph":
+      return <p key={key}>{renderDocNodes(node.content, blobsByName, key)}</p>;
+    case "heading": {
+      const L = node.attrs?.level || 2;
+      const Tag = `h${L}`;
+      return <Tag key={key}>{renderDocNodes(node.content, blobsByName, key)}</Tag>;
+    }
+    case "bulletList":
+      return <ul key={key}>{renderDocNodes(node.content, blobsByName, key)}</ul>;
+    case "orderedList":
+      return <ol key={key}>{renderDocNodes(node.content, blobsByName, key)}</ol>;
+    case "listItem":
+      return <li key={key}>{renderDocNodes(node.content, blobsByName, key)}</li>;
+    case "blockquote":
+      return <blockquote key={key}>{renderDocNodes(node.content, blobsByName, key)}</blockquote>;
+    case "hardBreak":
+      return <br key={key} />;
+    case "text":
+      return renderDocText(node, key);
+    case "blob":
+      return renderChip(node, blobsByName, key);
+    default:
+      return node.content ? <span key={key}>{renderDocNodes(node.content, blobsByName, key)}</span> : null;
+  }
+}
+
+function renderDocNodes(nodes, blobsByName, keyPrefix) {
+  if (!nodes) return null;
+  return nodes.map((n, i) => renderDocNode(n, blobsByName, `${keyPrefix}-${i}`));
+}
+
 // ── block renderers ───────────────────────────────────────────────────────────
-function HeaderBlock({ block }) {
+export function HeaderBlock({ block }) {
   return (
     <div className="bg-white border border-stone-200 rounded-xl p-5">
       <p className="text-[11px] font-semibold uppercase tracking-wider text-orange-600">{block.title}</p>
@@ -123,32 +195,38 @@ function HeaderBlock({ block }) {
   );
 }
 
-function NarrativeBlock({ block }) {
+export function NarrativeBlock({ block, blobsByName }) {
+  const hasDoc = block.doc && block.doc.type === "doc";
   const paragraphs = block.paragraphs || [];
   const bullets = block.bullets || [];
+  const empty = !hasDoc && paragraphs.length === 0 && bullets.length === 0;
   return (
     <Card>
-      <SectionTitle>{block.title}</SectionTitle>
+      {block.title ? <SectionTitle>{block.title}</SectionTitle> : null}
       <div className="report-prose text-stone-700">
-        {paragraphs.map((p, i) => (
-          <p key={`p-${i}`}>{p}</p>
-        ))}
-        {bullets.length > 0 && (
-          <ul>
-            {bullets.map((b, i) => (
-              <li key={`b-${i}`}>{b}</li>
+        {hasDoc ? (
+          renderDocNodes(block.doc.content, blobsByName, "n")
+        ) : (
+          <>
+            {paragraphs.map((p, i) => (
+              <p key={`p-${i}`}>{p}</p>
             ))}
-          </ul>
-        )}
-        {paragraphs.length === 0 && bullets.length === 0 && (
-          <p className="text-stone-400">—</p>
+            {bullets.length > 0 && (
+              <ul>
+                {bullets.map((b, i) => (
+                  <li key={`b-${i}`}>{b}</li>
+                ))}
+              </ul>
+            )}
+            {empty && <p className="text-stone-400">—</p>}
+          </>
         )}
       </div>
     </Card>
   );
 }
 
-function MetricGridBlock({ block }) {
+export function MetricGridBlock({ block }) {
   return (
     <Card>
       <SectionTitle>{block.title}</SectionTitle>
@@ -184,7 +262,7 @@ function cell(col, cells) {
   return <span className="font-data text-stone-800">{fmtValue(col.type, v)}</span>;
 }
 
-function DataTableBlock({ block }) {
+export function DataTableBlock({ block }) {
   const columns = block.columns || [];
   const rows = block.rows || [];
   return (
@@ -232,7 +310,7 @@ function DataTableBlock({ block }) {
   );
 }
 
-function ChartBlock({ block }) {
+export function ChartBlock({ block }) {
   const points = block.points || [];
   return (
     <Card>
@@ -257,7 +335,7 @@ function ChartBlock({ block }) {
   );
 }
 
-function BacklinksBlock({ block }) {
+export function BacklinksBlock({ block }) {
   const items = block.items || [];
   return (
     <Card>
@@ -296,12 +374,13 @@ function BacklinksBlock({ block }) {
   );
 }
 
-function Block({ block }) {
+// One block, read-only, dispatched by type. blobsByName resolves narrative chips.
+export function Block({ block, blobsByName }) {
   switch (block.type) {
     case "report_header":
       return <HeaderBlock block={block} />;
     case "narrative":
-      return <NarrativeBlock block={block} />;
+      return <NarrativeBlock block={block} blobsByName={blobsByName} />;
     case "metric_grid":
       return <MetricGridBlock block={block} />;
     case "data_table":
@@ -316,12 +395,14 @@ function Block({ block }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// ENTRY — renders a version's block document read-only. Falls back to a
-// friendly note if the version has no block document (e.g. a legacy draft).
+// ENTRY — renders a version's block document READ-ONLY (locked/sent versions,
+// or any non-editable view). Falls back to a friendly note if the version has
+// no block document (e.g. a legacy draft).
 // ════════════════════════════════════════════════════════════════════
-export default function ReportDocument({ version }) {
+export default function ReportDocument({ version, blobs }) {
   const doc = version?.content;
   const blocks = doc && doc.type === "report_document" ? doc.blocks || [] : null;
+  const blobsByName = new Map((blobs || []).map((b) => [b.name, b]));
 
   if (!blocks) {
     return (
@@ -341,7 +422,7 @@ export default function ReportDocument({ version }) {
       </div>
       <div className="space-y-4">
         {blocks.map((b) => (
-          <Block key={b.id} block={b} />
+          <Block key={b.id} block={b} blobsByName={blobsByName} />
         ))}
       </div>
     </div>

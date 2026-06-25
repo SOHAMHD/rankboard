@@ -453,6 +453,17 @@ def build_document(gathered: dict) -> dict:
     }
 
 
+def build_document_from_data(data: dict | None) -> dict:
+    """Build the block document from a FROZEN data_json dict alone (re-wrapping it
+    in the minimal `gathered` shape build_document expects). Pure, read-only — used
+    by the editor's "re-add a removed template section" feature to re-derive the
+    canonical template blocks straight from the immutable frozen data. data_json is
+    never modified."""
+    if not data:
+        return {"type": "report_document", "schema_version": DOC_SCHEMA_VERSION, "blocks": []}
+    return build_document({"blob": data})
+
+
 def _key_metrics_grid(ga4, ga4_present, ga4_reason, moz, moz_present, moz_reason, bl_count):
     """The headline prev-vs-current scalar cards (sessions / users / new /
     returning / DA / new backlinks). Available when EITHER GA4 or Moz is present;

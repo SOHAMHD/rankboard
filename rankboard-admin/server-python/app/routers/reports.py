@@ -91,6 +91,19 @@ def get_report_blobs(
     return {"blobs": report_service.available_blobs(db, version_id)}
 
 
+@router.get("/{version_id}/template-blocks")
+def get_template_blocks(
+    version_id: int,
+    user: sqlite3.Row = Depends(require_roles(*AUTHOR_ROLES)),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """The canonical TEMPLATE blocks rebuilt from this version's FROZEN data_json,
+    so the editable document can RE-ADD a section the author removed (the data is
+    still in data_json). Read-only; no live fetch; data_json untouched. 404 if
+    missing."""
+    return {"blocks": report_service.template_blocks(db, version_id)}
+
+
 class SaveContentIn(BaseModel):
     content: dict  # the editor document (TipTap/ProseMirror JSON), NOT rendered HTML
 

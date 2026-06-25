@@ -38,6 +38,7 @@ import {
   defaultFormatId,
 } from "../lib/blobFormats";
 import ReportDocument from "./ReportDocument";
+import ReportDocumentEditor from "./ReportDocumentEditor";
 
 // Only scalar sources surface as chips this slice (tabular ranks/keywords are
 // excluded), so the palette groups are GA4 / GSC / Moz plus a "Changes" group
@@ -47,7 +48,7 @@ const GROUP_ORDER = ["GA4", "GSC", "Moz", "Changes"];
 // The node array for an inserted blob chip + a trailing space. Shared by the
 // palette click handler and the "/" suggestion command so the chip attrs shape
 // (and the default-format-on-insert rule) can never drift between the two.
-function blobInsertNodes(item) {
+export function blobInsertNodes(item) {
   return [
     {
       type: "blob",
@@ -80,7 +81,7 @@ function lastCompletedMonth() {
 }
 
 // ── palette items: one "value" entry per blob + a "change" entry per delta ────
-function buildPaletteItems(blobs) {
+export function buildPaletteItems(blobs) {
   const items = [];
   for (const b of blobs) {
     items.push({
@@ -107,7 +108,7 @@ function buildPaletteItems(blobs) {
   return items;
 }
 
-function groupedItems(items) {
+export function groupedItems(items) {
   const by = {};
   for (const it of items) (by[it.group] ||= []).push(it);
   const order = [...GROUP_ORDER, ...Object.keys(by).filter((g) => !GROUP_ORDER.includes(g))];
@@ -323,10 +324,11 @@ function ReportEditor({ versionId, onBack }) {
       ) : error || !version || !blobs ? (
         <ErrorNote>{error || "Could not load this report version."}</ErrorNote>
       ) : version.content?.type === "report_document" ? (
-        // Generated reports now carry a block document in content_json — render
-        // the full templated report READ-ONLY (this slice adds no editing). The
-        // legacy prose/chip editor below is kept for any pre-block-document draft.
-        <ReportDocument key={versionId} version={version} />
+        // Generated reports carry a block document in content_json. The editable
+        // document handles BOTH a draft (structure controls + per-narrative chip
+        // editors) and a locked/sent version (read-only). The legacy prose/chip
+        // editor below is kept only for any pre-block-document draft.
+        <ReportDocumentEditor key={versionId} version={version} blobs={blobs} />
       ) : (
         // key={versionId} is load-bearing: it forces a fresh mount per version so
         // the once-only useEditor([]) / useState seeds (which bake in this
@@ -452,7 +454,7 @@ function ReportEditorInner({ version, blobs }) {
 }
 
 // ── toolbar (draft only) ──────────────────────────────────────────────
-function Toolbar({ editor }) {
+export function Toolbar({ editor }) {
   if (!editor) return null;
   const Btn = ({ on, onClick, children, label }) => (
     <button
@@ -486,7 +488,7 @@ function Toolbar({ editor }) {
 }
 
 // ── palette ────────────────────────────────────────────────────────────
-function BlobPalette({ items, onInsert }) {
+export function BlobPalette({ items, onInsert }) {
   const [q, setQ] = useState("");
   const filtered = q ? items.filter((i) => i.search.includes(q.toLowerCase())) : items;
   const groups = groupedItems(filtered);
@@ -634,7 +636,7 @@ function renderBlob(node, map, key) {
 }
 
 // ── "/" suggestion floating menu ───────────────────────────────────────
-function makeSuggestion({ paletteItems, setSugg }) {
+export function makeSuggestion({ paletteItems, setSugg }) {
   return {
     char: "/",
     allowSpaces: false,
@@ -695,7 +697,7 @@ function makeSuggestion({ paletteItems, setSugg }) {
   };
 }
 
-function SuggestionMenu({ sugg }) {
+export function SuggestionMenu({ sugg }) {
   if (!sugg || !sugg.items?.length) return null;
   const rect = typeof sugg.rect === "function" ? sugg.rect() : null;
   if (!rect) return null;
