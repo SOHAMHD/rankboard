@@ -29,7 +29,7 @@ import {
   Plus,
   Save,
 } from "lucide-react";
-import { api } from "../api";
+import { api, BASE, getToken } from "../api";
 import { ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor } from "../ui";
 import { createBlobNode } from "../lib/blobNode";
 import {
@@ -67,6 +67,16 @@ const STATUS_BADGE = {
 };
 
 const emptyDoc = () => ({ type: "doc", content: [{ type: "paragraph" }] });
+
+// The last COMPLETED month as "YYYY-MM" (e.g. in June 2026 → "2026-05"). The
+// generate picker defaults here so the common case is one click; reports for the
+// current/incomplete month fail the backend's maturation check anyway.
+function lastCompletedMonth() {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
 // ── palette items: one "value" entry per blob + a "change" entry per delta ────
 function buildPaletteItems(blobs) {
@@ -127,6 +137,9 @@ export function ReportsPanel({ user, project }) {
   const [versions, setVersions] = useState(null);
   const [error, setError] = useState(null);
   const [openId, setOpenId] = useState(null);
+  const [period, setPeriod] = useState(lastCompletedMonth());
+  const [generating, setGenerating] = useState(false);
+  const [genMsg, setGenMsg] = useState(null); // { tone: "ok" | "warn", text }
 
   const load = () => {
     setError(null);
@@ -137,6 +150,41 @@ export function ReportsPanel({ user, project }) {
   useEffect(() => {
     load();
   }, [project.id]);
+
+  // Generate a report for the chosen month. Uses a raw fetch (not the api()
+  // helper) so we can branch on the HTTP STATUS — the backend returns a distinct
+  // code per outcome (409 duplicate / 422 not-ready / 503 transport) that api()
+  // would otherwise flatten into a single message.
+  const generate = async () => {
+    if (!period || generating) return;
+    setGenerating(true);
+    setGenMsg(null);
+    try {
+      const res = await fetch(`${BASE}/api/reports/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({ projectId: project.id, periodKey: period }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setGenMsg({ tone: "ok", text: `Report generated for ${period}.` });
+        load(); // refresh the list so the new draft appears (no auto-navigate)
+      } else if (res.status === 409) {
+        setGenMsg({ tone: "warn", text: `An unsent report for ${period} already exists — see the list below.` });
+      } else if (res.status === 503) {
+        setGenMsg({ tone: "warn", text: "Google timed out, please try again." });
+      } else if (res.status === 422) {
+        // The backend reason is specific (no snapshot / maturation / GA4-or-GSC 403).
+        setGenMsg({ tone: "warn", text: data.error || `Can't generate a report for ${period} yet.` });
+      } else {
+        setGenMsg({ tone: "warn", text: data.error || "Couldn't generate — try again." });
+      }
+    } catch {
+      setGenMsg({ tone: "warn", text: "Couldn't generate — try again." });
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   if (!isAuthor(user)) {
     return <p className="text-sm text-stone-500">Only report authors can open the report editor.</p>;
@@ -158,6 +206,45 @@ export function ReportsPanel({ user, project }) {
     <div className="w-full max-w-3xl">
       <h2 className="text-lg font-bold text-stone-900 font-display">Reports</h2>
       <p className="text-sm text-stone-500 mt-0.5">Open a draft to write its content. Locked versions open read-only.</p>
+
+      {/* Generate control (author-only: the whole panel is isAuthor-gated). */}
+      <div className="mt-4 flex flex-wrap items-end gap-2 bg-white border border-stone-200 rounded-xl p-4">
+        <div>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Report month</label>
+          <input
+            type="month"
+            value={period}
+            max={lastCompletedMonth()}
+            onChange={(e) => setPeriod(e.target.value)}
+            aria-label="Report month"
+            className={`${INPUT_CLS} w-auto`}
+          />
+        </div>
+        <button onClick={generate} disabled={generating || !period} className={`${BTN_PRIMARY} px-4 py-2`}>
+          {generating ? (
+            <>
+              <LoaderCircle size={15} className="animate-spin" /> Generating…
+            </>
+          ) : (
+            <>
+              <Plus size={15} /> Generate report
+            </>
+          )}
+        </button>
+      </div>
+
+      {genMsg && (
+        <p
+          className={`text-sm rounded-lg px-3 py-2 mt-3 border ${
+            genMsg.tone === "ok"
+              ? "bg-emerald-50 border-emerald-100 text-emerald-800"
+              : "bg-amber-50 border-amber-100 text-amber-800"
+          }`}
+        >
+          {genMsg.text}
+        </p>
+      )}
+
       <ErrorNote>{error}</ErrorNote>
 
       {versions == null ? (
