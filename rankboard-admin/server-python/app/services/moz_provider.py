@@ -7,9 +7,9 @@ config.MOZ_API_TOKEN, loaded from .env the same way DataForSEO / Resend are.
 
 Moz's quota is tiny, so this is NEVER called on page load — only on an explicit
 refresh. fetch_moz_metrics() is the single entry point so a future scheduled
-refresh can reuse identical logic: it normalizes the domain, makes two POSTs
-(site.metrics.fetch + site.ranking_keywords.count), and maps the result into a
-flat dict, defensively — any missing field becomes None rather than raising. On
+refresh can reuse identical logic: it normalizes the domain, makes one POST
+(data.site.metrics.fetch), and maps the result into a flat dict, defensively —
+any missing field becomes None rather than raising. On
 an HTTP error, an auth failure (401/403), a transport error, or a top-level
 JSON-RPC error it raises MozApiError with a readable message, so the endpoint
 can return a friendly 502 instead of a 500 crash.
@@ -20,6 +20,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
+import uuid
 
 from ..config import MOZ_API_TOKEN
 
@@ -58,7 +59,10 @@ def _rpc(method: str, data: dict) -> dict:
     if not MOZ_API_TOKEN:
         raise MozApiError("Moz is not configured on the server (set MOZ_API_TOKEN).")
 
-    payload = {"jsonrpc": "2.0", "id": "1", "method": method, "params": {"data": data}}
+    # Moz requires the JSON-RPC request id to be at least 24 chars
+    # (a too-short id is rejected with -32654 "Minimum Request ID length is 24").
+    # uuid4().hex is 32 hex chars, which satisfies that and is unique per call.
+    payload = {"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": method, "params": {"data": data}}
     req = urllib.request.Request(
         MOZ_API_URL,
         data=json.dumps(payload).encode(),
@@ -66,18 +70,11 @@ def _rpc(method: str, data: dict) -> dict:
         method="POST",
     )
 
-    # TEMP DEBUG — confirm the token is loaded and looks right WITHOUT ever
-    # logging the secret itself (only its length + first 6 / last 4 chars).
-    logger.warning(
-        "Moz %s: token len=%d prefix=%r suffix=%r",
-        method, len(MOZ_API_TOKEN), MOZ_API_TOKEN[:6], MOZ_API_TOKEN[-4:],
-    )
-
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as res:
             raw_body = res.read()
-            # TEMP DEBUG — urllib only returns here for 2xx, but log defensively
-            # if the status is anything other than 200.
+            # urllib only returns here for 2xx, but log defensively if the
+            # status is anything other than 200.
             if res.status != 200:
                 logger.warning(
                     "Moz %s non-200 response: status=%s body=%s",
@@ -90,8 +87,8 @@ def _rpc(method: str, data: dict) -> dict:
             detail = exc.read().decode(errors="replace")
         except Exception:
             pass
-        # TEMP DEBUG — log the failing status + response body (truncated; the
-        # token is never included here).
+        # Log the failing status + response body (truncated; the Moz JSON-RPC
+        # error message lives here and is the key to diagnosing rejected calls).
         logger.warning("Moz %s error response: status=%s body=%s", method, exc.code, detail[:1000])
         if exc.code in (401, 403):
             raise MozApiError("Moz authentication failed — check MOZ_API_TOKEN.") from exc
@@ -120,14 +117,19 @@ def fetch_moz_metrics(domain: str) -> dict:
           "domain_authority": int | None,
           "linking_domains":  int | None,
           "inbound_links":    int | None,
-          "ranking_keywords": int | None,
           "spam_score":       float | None,
-          "raw": {"site_metrics": <full body>, "ranking_keywords": <full body>},
+          "raw": {"site_metrics": <full body>},
         }
 
-    Any field Moz omits maps to None rather than raising. Both full JSON
-    responses are captured under "raw" (stored as raw_json for debugging).
-    Raises MozApiError on HTTP/auth/transport failures or a JSON-RPC error."""
+    Any field Moz omits maps to None rather than raising. The full JSON
+    response is captured under "raw" (stored as raw_json for debugging).
+    Raises MozApiError on HTTP/auth/transport failures or a JSON-RPC error.
+
+    NOTE: there is intentionally no ranking-keywords call. Moz exposes no
+    "count" method (every variant returns -32601 Action not found), and the
+    only working endpoint, data.site.ranking.keywords.list, returns a single
+    paged slice with no total — so a real keyword count isn't obtainable on
+    this plan without burning quota paginating. The tile was dropped instead."""
     normalized = normalize_domain(domain)
     if not normalized:
         raise MozApiError("This project has no domain to look up on Moz.")
@@ -135,7 +137,10 @@ def fetch_moz_metrics(domain: str) -> dict:
     raw: dict = {}
 
     # ── Call 1: site metrics (DA, linking domains, inbound links, spam) ──
-    body1 = _rpc("site.metrics.fetch", {"site_query": {"query": normalized, "scope": "root_domain"}})
+    # Method is `data.site.metrics.fetch` (the `data.` prefix is REQUIRED — Moz
+    # returns "Action not found: SiteMetricsFetch" without it). Scope must be one
+    # of domain/subdomain/subfolder/url; "root_domain" is rejected (-32652).
+    body1 = _rpc("data.site.metrics.fetch", {"site_query": {"query": normalized, "scope": "domain"}})
     raw["site_metrics"] = body1
     sm = (body1.get("result") or {}).get("site_metrics") or {}
 
@@ -145,21 +150,11 @@ def fetch_moz_metrics(domain: str) -> dict:
     inbound_links = sm.get("external_pages_to_root_domain") or sm.get("external_pages_to_subdomain")
     spam_score = sm.get("spam_score")
 
-    # ── Call 2: ranking keyword count ──
-    body2 = _rpc(
-        "site.ranking_keywords.count",
-        {"target_query": {"query": normalized, "scope": "root_domain", "locale": "en-US"}},
-    )
-    raw["ranking_keywords"] = body2
-    r2 = body2.get("result") or {}
-    ranking_keywords = r2.get("ranking_keywords_count") or r2.get("count")
-
     return {
         "domain": normalized,
         "domain_authority": domain_authority,
         "linking_domains": linking_domains,
         "inbound_links": inbound_links,
-        "ranking_keywords": ranking_keywords,
         "spam_score": spam_score,
         "raw": raw,
     }

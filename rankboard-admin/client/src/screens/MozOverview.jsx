@@ -10,7 +10,7 @@
    "Data by Moz" attribution link, so it lives in the footer.
    ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from "react";
-import { RefreshCw, LoaderCircle, ShieldCheck, Globe, Link as LinkIcon, KeyRound } from "lucide-react";
+import { RefreshCw, LoaderCircle, ShieldCheck, Globe, Link as LinkIcon } from "lucide-react";
 import { api } from "../api";
 import { ErrorNote, BTN_PRIMARY, can } from "../ui";
 
@@ -174,7 +174,7 @@ export function MozOverview({ project, user }) {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
             {/* Domain Authority — the circular ring tile. */}
             <div className="bg-white rounded-xl border border-stone-200 px-4 py-3 flex items-center gap-4">
               <AuthorityRing value={data.domainAuthority} />
@@ -188,7 +188,6 @@ export function MozOverview({ project, user }) {
 
             <NumberTile icon={Globe} label="Linking Domains" value={data.linkingDomains} />
             <NumberTile icon={LinkIcon} label="Inbound Links" value={data.inboundLinks} />
-            <NumberTile icon={KeyRound} label="Ranking Keywords" value={data.rankingKeywords} />
           </div>
 
           {/* Footer: last-updated, optional spam score, and the required credit. */}

@@ -30,7 +30,6 @@ def row_to_moz(row: sqlite3.Row) -> dict:
         "domainAuthority": row["domain_authority"],
         "linkingDomains": row["linking_domains"],
         "inboundLinks": row["inbound_links"],
-        "rankingKeywords": row["ranking_keywords"],
         "spamScore": row["spam_score"],
         "fetchedAt": row["fetched_at"],
     }
@@ -71,18 +70,20 @@ def refresh_moz(project_id: int, db: sqlite3.Connection = Depends(get_db)):
         raise HTTPException(502, str(exc))
 
     fetched_at = datetime.now(timezone.utc).isoformat()
+    # ranking_keywords is intentionally left NULL: Moz exposes no keyword-count
+    # method, so the provider no longer fetches it (see moz_provider). The column
+    # is kept (nullable) so existing rows and the schema are undisturbed.
     cur = db.execute(
         """INSERT INTO moz_metrics
              (project_id, domain, domain_authority, linking_domains, inbound_links,
-              ranking_keywords, spam_score, raw_json, fetched_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+              spam_score, raw_json, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             project_id,
             metrics["domain"],
             metrics["domain_authority"],
             metrics["linking_domains"],
             metrics["inbound_links"],
-            metrics["ranking_keywords"],
             metrics["spam_score"],
             json.dumps(metrics["raw"]),
             fetched_at,
