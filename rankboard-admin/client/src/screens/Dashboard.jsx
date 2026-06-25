@@ -20,6 +20,7 @@ import {
   ChevronRight,
   FileText,
   Globe,
+  Link2,
   ListOrdered,
   LoaderCircle,
   LogOut,
@@ -58,6 +59,7 @@ import { api, getToken, BASE } from "../api";
 import { Modal, ErrorNote, can, isAuthor, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { MozOverview } from "./MozOverview";
 import { ReportsPanel } from "./ReportEditor";
+import { BacklinksView } from "./Backlinks";
 
 // Sidebar navigation, GA4-style: collapsible groups whose sub-items each select
 // a view in the main area. A group given no `children` becomes a plain clickable
@@ -83,6 +85,14 @@ const NAV_GROUPS = [
       { id: "rank-live", label: "Live Ledger" },
       { id: "rank-snapshots", label: "Snapshots" },
     ],
+  },
+  // Childless group → the per-project Backlinks page (single-view tool), sibling
+  // to the Rank Ledger. Visible to anyone who can see the project; import/delete
+  // inside are author-only.
+  {
+    id: "backlinks",
+    label: "Backlinks",
+    icon: Link2,
   },
   // Childless group → plain clickable single-view tool (its own page below).
   {
@@ -294,6 +304,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
       <main className="px-6 py-6">
         {activeNav === "rank-live" && <RankLedger user={user} project={project} onChanged={refresh} />}
         {activeNav === "rank-snapshots" && <SnapshotsView user={user} project={project} />}
+        {activeNav === "backlinks" && <BacklinksView user={user} project={project} />}
         {activeNav.startsWith("traffic-") && (
           <TrafficTool project={project} view={activeNav.slice("traffic-".length)} />
         )}

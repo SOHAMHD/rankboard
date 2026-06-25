@@ -79,9 +79,18 @@ class RankProvider
         $payload = $response->json();
         $out = array_fill_keys($terms, null);
 
+        // DataForSEO echoes data.keyword back lowercased & trimmed, so map
+        // from that normalized form to our original term to look up $out —
+        // matching on the raw string would drop any capitalized keyword.
+        $byNormalized = [];
+        foreach ($terms as $term) {
+            $byNormalized[strtolower(trim($term))] = $term;
+        }
+
         foreach (($payload['tasks'] ?? []) as $task) {
-            $term = $task['data']['keyword'] ?? null;
-            if (($task['status_code'] ?? 0) !== 20000 || ! is_string($term) || ! array_key_exists($term, $out)) {
+            $returned = $task['data']['keyword'] ?? null;
+            $term = is_string($returned) ? ($byNormalized[strtolower(trim($returned))] ?? null) : null;
+            if (($task['status_code'] ?? 0) !== 20000 || $term === null) {
                 continue; // 20000 = this task succeeded
             }
             foreach (($task['result'] ?? []) as $result) {
