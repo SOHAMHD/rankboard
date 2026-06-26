@@ -244,30 +244,36 @@ def gather(
         }
 
     # ── GA4 + GSC (fetched LIVE from Google, then frozen) ─────────────────────
-    # Maturation guard FIRST: never fetch (or freeze) an incomplete/future month —
-    # GA4 data is still settling. A complete past month proceeds to fetch.
+    # The SELECTED month drives WHICH month is fetched (report_window); `now` only
+    # clamps the end of a still-open current month. A complete past month is the
+    # full calendar month, INVARIANT to today.
     prev_period = report_google.previous_period(period_key)
-    cur_range = report_google.month_bounds(period_key)
+    cur_range = report_google.report_window(period_key, now)
     prev_range = report_google.month_bounds(prev_period)
     period_complete = report_google.period_is_complete(period_key, now)
+    period_started = report_google.period_has_started(period_key, now)
+    # The current, in-progress month: it has BEGUN but not yet matured. Generation
+    # proceeds (lenient) and the report is FLAGGED as covering an incomplete month —
+    # it is NOT blocked. A completed past month has this False (unchanged behavior).
+    period_in_progress = period_started and not period_complete
 
     ga4_section = None
     gsc_section = None
     # outcome: {"ok", "reason", "status"} — under LENIENT generation no outcome is
     # fatal; the reason becomes a "not available for this period" flag on the
     # rendered section (status is retained for diagnostics / a future retry hint).
-    maturation_reason = (
-        f"period {period_key} is not a complete past month; GA4/GSC data is still"
-        " maturing — shown as not available for this period."
+    future_reason = (
+        f"period {period_key} hasn't started yet — there is no data to report."
     )
-    # GA4/GSC are fetched whenever the month is COMPLETE (mature), INDEPENDENT of
-    # whether a snapshot/Moz row exists — generation always produces a full report
-    # and any source we can't fill is flagged, never fatal. An incomplete/current
-    # month skips the fetch (data still settling) and flags those sections. A fetch
-    # error (access/transport) is classified by _fetch_section into a flag, too.
-    if not period_complete:
-        ga4_outcome = {"ok": False, "reason": maturation_reason, "status": 422}
-        gsc_outcome = {"ok": False, "reason": maturation_reason, "status": 422}
+    # GA4/GSC are fetched for any month that has STARTED (current or past),
+    # INDEPENDENT of whether a snapshot/Moz row exists — generation always produces
+    # a full report and any source we can't fill is flagged, never fatal. The
+    # current month fetches its range up to today and is flagged in-progress (data
+    # still maturing), never blocked. Only a FUTURE month (no data yet) skips the
+    # fetch. A fetch error (access/transport) is classified by _fetch_section, too.
+    if not period_started:
+        ga4_outcome = {"ok": False, "reason": future_reason, "status": 422}
+        gsc_outcome = {"ok": False, "reason": future_reason, "status": 422}
     else:
         ga4_section, ga4_outcome = _fetch_section(
             ga4_fetch, project["ga_property_id"], cur_range, prev_range, registry.SOURCE_GA4
@@ -299,6 +305,9 @@ def gather(
         },
         "rank_snapshot_id": snap["id"] if snap is not None else None,
         "period_complete": period_complete,
+        # True for the current, in-progress month: data is partial and still
+        # maturing. The block document surfaces this as a header notice.
+        "period_in_progress": period_in_progress,
         # Per-section presence + a human reason when ABSENT. Under lenient
         # generation a `present: False` source is NOT fatal — the reason is shown
         # as a "not available for this period" flag on the rendered block.
@@ -333,6 +342,7 @@ def gather(
         "snapshot_present": snap is not None,
         "moz_present": moz is not None,
         "period_complete": period_complete,
+        "period_in_progress": period_in_progress,
         "ga4_outcome": ga4_outcome,
         "gsc_outcome": gsc_outcome,
         "blob": blob,

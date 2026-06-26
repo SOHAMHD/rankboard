@@ -71,12 +71,22 @@ const STATUS_BADGE = {
 const emptyDoc = () => ({ type: "doc", content: [{ type: "paragraph" }] });
 
 // The last COMPLETED month as "YYYY-MM" (e.g. in June 2026 → "2026-05"). The
-// generate picker defaults here so the common case is one click; reports for the
-// current/incomplete month fail the backend's maturation check anyway.
+// generate picker DEFAULTS here so the common case (a finished month) is one
+// click — but the current month is selectable too (see currentMonth / the picker
+// `max`); generating it produces an in-progress report flagged as still maturing.
 function lastCompletedMonth() {
   const d = new Date();
   d.setDate(1);
   d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// The CURRENT month as "YYYY-MM" — the LATEST month a report may be generated for
+// (a future month has no data, so the picker caps here). Past months and the
+// current month are selectable; the current month is generatable but flagged
+// in-progress (its data is still maturing).
+function currentMonth() {
+  const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
@@ -169,7 +179,15 @@ export function ReportsPanel({ user, project }) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        setGenMsg({ tone: "ok", text: `Report generated for ${period}.` });
+        // The current month generates fine but is in-progress (data still
+        // maturing) — say so; a completed past month gets the plain message.
+        const maturing = period === currentMonth();
+        setGenMsg({
+          tone: "ok",
+          text: maturing
+            ? `Report generated for ${period} (in progress — data still maturing).`
+            : `Report generated for ${period}.`,
+        });
         load(); // refresh the list so the new draft appears (no auto-navigate)
       } else if (res.status === 409) {
         setGenMsg({ tone: "warn", text: `An unsent report for ${period} already exists — see the list below.` });
@@ -216,7 +234,7 @@ export function ReportsPanel({ user, project }) {
           <input
             type="month"
             value={period}
-            max={lastCompletedMonth()}
+            max={currentMonth()}
             onChange={(e) => setPeriod(e.target.value)}
             aria-label="Report month"
             className={`${INPUT_CLS} w-auto`}
@@ -255,7 +273,7 @@ export function ReportsPanel({ user, project }) {
         </div>
       ) : versions.length === 0 ? (
         <p className="mt-6 text-sm text-stone-500 bg-white border border-stone-200 rounded-xl p-6">
-          No report versions yet. Generate one for a completed month first, then it'll appear here to edit.
+          No report versions yet. Pick a month above and generate one — it'll appear here to edit.
         </p>
       ) : (
         <div className="mt-4 bg-white border border-stone-200 rounded-xl divide-y divide-stone-100">

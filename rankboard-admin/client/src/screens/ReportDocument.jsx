@@ -191,6 +191,12 @@ export function HeaderBlock({ block }) {
         {block.periodLabel}
         {block.prevPeriodLabel ? <span className="text-stone-400"> (vs. {block.prevPeriodLabel})</span> : null}
       </p>
+      {block.maturing ? (
+        <p className="mt-3 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center gap-2">
+          <AlertTriangle size={14} className="shrink-0 text-amber-500" />
+          {block.maturingNotice || "This month is still in progress — data is still maturing."}
+        </p>
+      ) : null}
     </div>
   );
 }

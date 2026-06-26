@@ -118,8 +118,8 @@ def previous_period(period_key: str) -> str:
 
 def period_is_complete(period_key: str, now: datetime | None = None) -> bool:
     """True only for a COMPLETE PAST month whose data has had MATURATION_DAYS to
-    settle. The current (incomplete) month and any future month return False, so
-    generation never freezes unsettled GA4 data."""
+    settle. The current (incomplete) month and any future month return False — used
+    to FLAG (no longer to block) a still-maturing report."""
     now = now or datetime.now(timezone.utc)
     try:
         y, m = _parse_period(period_key)
@@ -128,6 +128,36 @@ def period_is_complete(period_key: str, now: datetime | None = None) -> bool:
     last = calendar.monthrange(y, m)[1]
     month_end = date(y, m, last)
     return now.date() >= month_end + timedelta(days=MATURATION_DAYS)
+
+
+def period_has_started(period_key: str, now: datetime | None = None) -> bool:
+    """True once the SELECTED month has BEGUN (its first day is today or earlier),
+    i.e. the month is current or past. A FUTURE month (not yet started) is False —
+    it has no data to fetch. Pairs with period_is_complete: started-but-not-complete
+    is exactly the current, in-progress month."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        y, m = _parse_period(period_key)
+    except (ValueError, AttributeError):
+        return False
+    return now.date() >= date(y, m, 1)
+
+
+def report_window(period_key: str, now: datetime | None = None) -> tuple[str, str]:
+    """The GA4/GSC date window for the SELECTED month. period_key ALONE picks WHICH
+    month; `now` only clamps the END of a still-open current month:
+      • a COMPLETE past month  → the full calendar month (INVARIANT to today)
+      • the CURRENT (in-progress) month → first-of-month .. today (you cannot fetch
+        days that haven't happened yet)
+    Returns inclusive YYYY-MM-DD start/end the GA4 + GSC APIs both accept. ISO date
+    strings compare lexicographically, so the today-vs-month-end test is exact.
+    (Precondition: the period has started — callers gate future months out.)"""
+    now = now or datetime.now(timezone.utc)
+    start, end = month_bounds(period_key)
+    today = now.date().isoformat()
+    if today < end:        # the month's last day is still in the future → in progress
+        end = today        # cap the window at today; the rest of the month has no data
+    return start, end
 
 
 # ── number parsing / derivations ──────────────────────────────────────────────

@@ -388,6 +388,13 @@ def build_document(gathered: dict) -> dict:
 
     period_label = _label_for(period)
     prev_label = _label_for(prev_period) if prev_period else "previous period"
+    # The current, in-progress month is FLAGGED (not blocked): its figures cover the
+    # month so far and keep changing until it ends and Google finalises the data.
+    period_in_progress = bool(blob.get("period_in_progress"))
+    maturing_notice = (
+        f"{period_label} is still in progress — figures cover the month so far and "
+        "will keep changing until the month ends and Google finalises the data."
+    ) if period_in_progress else None
 
     def present(name):
         return bool((sources.get(name) or {}).get("present"))
@@ -416,6 +423,8 @@ def build_document(gathered: dict) -> dict:
             "domain": project.get("domain"),
             "periodLabel": period_label,
             "prevPeriodLabel": prev_label,
+            "maturing": period_in_progress,
+            "maturingNotice": maturing_notice,
         },
         _progress_summary(period_label, prev_label, ga4, ga4_present, moz, moz_present, bl_count),
         # Key metrics (Progress Summary numbers) — built from already-seeded helpers.
@@ -448,6 +457,7 @@ def build_document(gathered: dict) -> dict:
         "period_label": period_label,
         "prev_period_key": prev_period,
         "prev_period_label": prev_label,
+        "period_in_progress": period_in_progress,
         "project": {"id": project.get("id"), "name": project.get("name"), "domain": project.get("domain")},
         "blocks": blocks,
     }
