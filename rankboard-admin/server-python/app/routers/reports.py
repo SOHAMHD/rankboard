@@ -11,13 +11,14 @@ per-project access check is needed.
 """
 import sqlite3
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 
 from ..db import get_db
 from ..permissions import AUTHOR_ROLES, DELETER_ROLES
 from ..security import require_roles
 from ..services import report_service
+from ..services import report_pdf
 
 router = APIRouter()
 
@@ -91,6 +92,29 @@ def get_report(
     can rehydrate (prose + chips with their saved formats). 404 if missing."""
     version = report_service.get_version(db, version_id, include_data=True)
     return {"version": version}
+
+
+@router.get("/{version_id}/pdf")
+def download_report_pdf(
+    version_id: int,
+    user: sqlite3.Row = Depends(require_roles(*AUTHOR_ROLES)),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Render this version to a downloadable PDF (headless Chromium) and stream it
+    back. Author-gated like the rest; reads the EXISTING frozen content_json +
+    data_json, generates ON DEMAND, stores nothing. 404 if the version is missing.
+
+    PROOF SLICE: only the cover + one section are rendered (see report_pdf). This is
+    a SYNC handler on purpose — FastAPI runs it in a worker thread, so the
+    Playwright sync API has no running asyncio loop to clash with."""
+    version = report_service.get_version(db, version_id, include_data=True)
+    pdf_bytes = report_pdf.render_pdf(version)
+    filename = report_pdf.pdf_filename(version)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/{version_id}/blobs")

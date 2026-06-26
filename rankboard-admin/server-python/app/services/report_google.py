@@ -49,14 +49,17 @@ GA4_SECTIONS = (
     {"key": "by_landing_page", "dimensions": ["landingPagePlusQueryString"],
      "metrics": ["sessions", "activeUsers", "newUsers", "userEngagementDuration"],
      "limit": 25},
+    # Sessions intentionally NOT requested for these four: the device/browser/OS/
+    # language tables show user reach (active + new users) only — sessions was
+    # removed from these tables (it remains on landing-page / top-pages / channel).
     {"key": "by_browser", "dimensions": ["browser"],
-     "metrics": ["activeUsers", "newUsers", "sessions"], "limit": 25},
+     "metrics": ["activeUsers", "newUsers"], "limit": 25},
     {"key": "by_device", "dimensions": ["deviceCategory"],
-     "metrics": ["activeUsers", "newUsers", "sessions"], "limit": None},
+     "metrics": ["activeUsers", "newUsers"], "limit": None},
     {"key": "by_operating_system", "dimensions": ["operatingSystem"],
-     "metrics": ["activeUsers", "newUsers", "sessions"], "limit": 25},
+     "metrics": ["activeUsers", "newUsers"], "limit": 25},
     {"key": "by_language", "dimensions": ["language"],
-     "metrics": ["activeUsers", "newUsers", "sessions"], "limit": 25},
+     "metrics": ["activeUsers", "newUsers"], "limit": 25},
     {"key": "top_pages", "dimensions": ["pagePath"],
      "metrics": ["screenPageViews", "sessions", "activeUsers", "userEngagementDuration"],
      "limit": 25},

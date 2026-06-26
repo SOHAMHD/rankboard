@@ -76,14 +76,15 @@ _GA4_TABLES = (
      ["sessions", "activeUsers", "newUsers", "avgEngagementSeconds"]),
     ("top_pages", "Top Pages", ["Page"],
      ["screenPageViews", "sessions", "activeUsers", "avgEngagementSeconds"]),
+    # Sessions column removed from these four — they show user reach only.
     ("by_device", "Users by Device", ["Device"],
-     ["activeUsers", "newUsers", "sessions"]),
+     ["activeUsers", "newUsers"]),
     ("by_browser", "Users by Browser", ["Browser"],
-     ["activeUsers", "newUsers", "sessions"]),
+     ["activeUsers", "newUsers"]),
     ("by_operating_system", "Users by Operating System", ["OS"],
-     ["activeUsers", "newUsers", "sessions"]),
+     ["activeUsers", "newUsers"]),
     ("by_language", "Users by Language", ["Language"],
-     ["activeUsers", "newUsers", "sessions"]),
+     ["activeUsers", "newUsers"]),
 )
 
 # Overview metrics (the GA4 "Audience Overview" grid + Progress Summary numbers).

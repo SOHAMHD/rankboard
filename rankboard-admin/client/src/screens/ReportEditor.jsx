@@ -20,6 +20,7 @@ import {
   AlertTriangle,
   Bold,
   ChevronLeft,
+  Download,
   Italic,
   List,
   ListOrdered,
@@ -488,6 +489,34 @@ function ReportEditorInner({ version, blobs }) {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
   const [saveError, setSaveError] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+
+  // Download the rendered PDF. The endpoint is auth-gated, so a plain link can't
+  // carry the token — fetch with the Bearer header, then trigger a blob download.
+  const downloadPdf = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    setSaveError(null);
+    try {
+      const res = await fetch(`${BASE}/api/reports/${version.id}/pdf`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error("PDF generation failed.");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${version.periodKey}-seo-report.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setSaveError("Couldn't generate the PDF — try again.");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   // "/" trigger config — closes over the palette + the floating-menu state.
   const suggestion = useMemo(() => makeSuggestion({ paletteItems, setSugg }), [paletteItems]);
@@ -545,6 +574,9 @@ function ReportEditorInner({ version, blobs }) {
           {savedAt && !saveError && (
             <span className="text-xs text-emerald-600">Saved {savedAt.toLocaleTimeString()}</span>
           )}
+          <button onClick={downloadPdf} disabled={downloading} className={`${BTN_GHOST} px-3 py-1.5`}>
+            {downloading ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />} Download PDF
+          </button>
           {isDraft ? (
             <button onClick={save} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
               {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft

@@ -8,3 +8,4 @@ google-analytics-data            # GA4 Data API (traffic + report GA4 sections)
 google-api-python-client         # Search Console API (GSC totals + trend)
 google-auth                      # service-account credentials for GA4 + GSC
 psycopg[binary]  # Postgres driver (psycopg 3); used when DATABASE_URL points at Supabase
+playwright       # headless-Chrome HTML->PDF for report PDF export; run `playwright install chromium` after install (LOCAL slice)
