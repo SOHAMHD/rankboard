@@ -455,6 +455,27 @@ def generate(db, project_id: int, period_key: str | None, user_id: int) -> dict:
     return get_version(db, version_id, include_data=True)
 
 
+def delete_version(db, version_id: int) -> dict:
+    """HARD-delete a report version (irreversible row removal). Allowed for ANY
+    status — draft, in_review, AND sent — per the product decision; the role gate
+    (DELETER_ROLES: Super Admin / Admin) is enforced on the endpoint. 404 if the
+    version doesn't exist.
+
+    Lineage is safe: report_version.parent_version_id REFERENCES report_version(id)
+    ON DELETE SET NULL on BOTH backends, so deleting a FORK PARENT neither errors
+    nor orphans its children — each child's parent_version_id is set NULL by the FK
+    while its frozen data_json/content_json stay intact. SQLite honors this because
+    get_db opens the connection with PRAGMA foreign_keys = ON; Postgres enforces FKs
+    unconditionally. One row is removed via DELETE — no schema/DDL change."""
+    row = db.execute(
+        "SELECT id, status FROM report_version WHERE id = ?", (version_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, "Report version not found.")
+    db.execute("DELETE FROM report_version WHERE id = ?", (version_id,))
+    return {"deleted": True, "id": version_id, "status": row["status"]}
+
+
 def fork_for_changes(db, version_id: int, user_id: int) -> dict:
     """"Changes" == same frozen data, new editable file. Create a NEW
     report_version that COPIES the source's data_json AND content_json verbatim

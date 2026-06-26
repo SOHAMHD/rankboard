@@ -27,6 +27,10 @@ export const isManager = (user) => user?.role === ROLE.MANAGER;
 export const isTeamMember = (user) => user?.role === ROLE.TEAM_MEMBER;
 // Anyone who may author a report: manager, team member, or admin.
 export const isAuthor = (user) => isAdmin(user) || isManager(user) || isTeamMember(user);
+// May HARD-delete a report version (any status): Super Admin + Admin/Manager only.
+// Mirrors server-python permissions.DELETER_ROLES; this only hides the control —
+// the backend enforces the same set on the endpoint regardless.
+export const isReportDeleter = (user) => isAdmin(user) || isManager(user);
 
 // Display labels for roles. The STORED value stays the raw role string
 // (these are presentation only).

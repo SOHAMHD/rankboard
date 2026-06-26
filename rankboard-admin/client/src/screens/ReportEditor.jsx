@@ -28,9 +28,10 @@ import {
   LoaderCircle,
   Plus,
   Save,
+  Trash2,
 } from "lucide-react";
 import { api, BASE, getToken } from "../api";
-import { ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor } from "../ui";
+import { ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor, isReportDeleter } from "../ui";
 import { createBlobNode } from "../lib/blobNode";
 import {
   applyFormat,
@@ -152,6 +153,12 @@ export function ReportsPanel({ user, project }) {
   const [period, setPeriod] = useState(lastCompletedMonth());
   const [generating, setGenerating] = useState(false);
   const [genMsg, setGenMsg] = useState(null); // { tone: "ok" | "warn", text }
+  // Delete (Super Admin / Admin only — server-enforced too). pendingDelete holds
+  // the row awaiting confirmation; sentAck gates the stronger SENT-tier confirm.
+  const canDelete = isReportDeleter(user);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [sentAck, setSentAck] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = () => {
     setError(null);
@@ -203,6 +210,34 @@ export function ReportsPanel({ user, project }) {
       setGenMsg({ tone: "warn", text: "Couldn't generate — try again." });
     } finally {
       setGenerating(false);
+    }
+  };
+
+  // Open the confirm modal for a row (reset the SENT acknowledgement each time).
+  const askDelete = (v) => {
+    setSentAck(false);
+    setPendingDelete(v);
+  };
+  const closeDelete = () => {
+    setPendingDelete(null);
+    setSentAck(false);
+  };
+
+  // Confirmed delete: hard-DELETE the version, then refresh the list. 403 (role)
+  // / 404 (already gone) / any error surface as a warn message — never a crash.
+  const confirmDelete = async () => {
+    if (!pendingDelete || deleting) return;
+    setDeleting(true);
+    try {
+      await api(`/reports/${pendingDelete.id}`, { method: "DELETE" });
+      setGenMsg({ tone: "ok", text: `Report #${pendingDelete.id} (${pendingDelete.periodKey}) deleted.` });
+      closeDelete();
+      load();
+    } catch (e) {
+      setGenMsg({ tone: "warn", text: e.message || "Couldn't delete the report." });
+      closeDelete();
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -293,9 +328,92 @@ export function ReportsPanel({ user, project }) {
                 <button onClick={() => setOpenId(v.id)} className={`${BTN_GHOST} px-3 py-1.5`}>
                   {v.status === "draft" ? "Edit" : "Open"}
                 </button>
+                {canDelete && (
+                  <button
+                    onClick={() => askDelete(v)}
+                    className="inline-flex items-center justify-center rounded-lg p-1.5 text-stone-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                    aria-label={`Delete report ${v.periodKey}`}
+                    title="Delete report"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                )}
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Delete confirmation — two tiers. A draft/in_review uses the simple
+          message; a SENT report uses the stronger named-consequence text AND a
+          mandatory acknowledgement, so it can never be deleted on a single click. */}
+      {pendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5">
+            <div className="flex items-start gap-3">
+              <span className="shrink-0 rounded-full bg-red-100 text-red-600 p-2">
+                <AlertTriangle size={18} />
+              </span>
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-stone-900 font-display">
+                  Delete this report?
+                </h3>
+                {pendingDelete.status === "sent" ? (
+                  <p className="text-sm text-stone-600 mt-1">
+                    Report <span className="font-data">#{pendingDelete.id}</span> ({pendingDelete.periodKey}) was{" "}
+                    <strong>sent to the client</strong>. Deleting it permanently removes it and{" "}
+                    <strong>may break the client's link</strong>. This cannot be undone.
+                  </p>
+                ) : (
+                  <p className="text-sm text-stone-600 mt-1">
+                    Delete report <span className="font-data">#{pendingDelete.id}</span> ({pendingDelete.periodKey})?
+                    This can't be undone.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {pendingDelete.status === "sent" && (
+              <label className="flex items-start gap-2 mt-3 text-sm text-stone-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={sentAck}
+                  onChange={(e) => setSentAck(e.target.checked)}
+                  className="mt-0.5"
+                />
+                I understand this was sent and may break the client's link.
+              </label>
+            )}
+
+            <div className="flex justify-end gap-2 mt-5">
+              <button onClick={closeDelete} disabled={deleting} className={`${BTN_GHOST} px-3 py-1.5`}>
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={deleting || (pendingDelete.status === "sent" && !sentAck)}
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {deleting ? (
+                  <>
+                    <LoaderCircle size={15} className="animate-spin" /> Deleting…
+                  </>
+                ) : pendingDelete.status === "sent" ? (
+                  <>
+                    <Trash2 size={15} /> Permanently delete
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={15} /> Delete
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

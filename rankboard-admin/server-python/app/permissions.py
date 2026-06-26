@@ -37,6 +37,7 @@ ROLES = list(PERMISSIONS.keys())
 ADMIN_ROLE = "Super Admin"                                   # the "everything" role (spec's `admin`)
 AUTHOR_ROLES = frozenset({"Super Admin", "Admin", "Team"})   # may author reports (Team can't send)
 SENDER_ROLES = frozenset({"Super Admin", "Admin"})           # may send a report to a client
+DELETER_ROLES = frozenset({"Super Admin", "Admin"})          # may HARD-delete a report version, any status (super admin + manager); Team/Client cannot
 
 # Roles that may READ everything but must never WRITE. The read-only
 # middleware (app.main) returns 403 for any POST/PUT/PATCH/DELETE made by a

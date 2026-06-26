@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ..db import get_db
-from ..permissions import AUTHOR_ROLES
+from ..permissions import AUTHOR_ROLES, DELETER_ROLES
 from ..security import require_roles
 from ..services import report_service
 
@@ -54,6 +54,20 @@ def fork_report(
     parentVersionId set to the source. 404 if the source doesn't exist."""
     version = report_service.fork_for_changes(db, version_id, user["id"])
     return {"version": version}
+
+
+@router.delete("/{version_id}")
+def delete_report(
+    version_id: int,
+    user: sqlite3.Row = Depends(require_roles(*DELETER_ROLES)),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """HARD-delete a report version (irreversible row removal). Gated SERVER-SIDE
+    to DELETER_ROLES (Super Admin / Admin) — Team/Client get 403 here regardless
+    of what the UI shows. Allowed for ANY status incl. 'sent' (the destructive
+    case the UI double-confirms). 404 if the version doesn't exist. Deleting a fork
+    parent is safe: children's parent_version_id is set NULL by the FK."""
+    return report_service.delete_version(db, version_id)
 
 
 @router.get("")
