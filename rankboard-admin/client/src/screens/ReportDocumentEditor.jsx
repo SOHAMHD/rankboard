@@ -44,6 +44,7 @@ import {
 import { api } from "../api";
 import { ErrorNote, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { createBlobNode } from "../lib/blobNode";
+import DownloadPdfButton from "../lib/DownloadPdfButton";
 import {
   makeSuggestion,
   SuggestionMenu,
@@ -368,6 +369,13 @@ function EditableDoc({ version, blobs }) {
           {savedAt && !saveError && (
             <span className="text-xs text-emerald-600">Saved {savedAt.toLocaleTimeString()}</span>
           )}
+          <DownloadPdfButton
+            versionId={version.id}
+            periodKey={version.periodKey}
+            projectName={version.content?.blocks?.find((b) => b.type === "report_header")?.projectName}
+            label
+            onError={setSaveError}
+          />
           <button onClick={save} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
             {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft
           </button>
