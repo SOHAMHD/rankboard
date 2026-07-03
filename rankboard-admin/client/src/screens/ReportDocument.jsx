@@ -257,6 +257,40 @@ export function MetricGridBlock({ block }) {
   );
 }
 
+// ── row selection (repeating-row tables) ──────────────────────────────────────
+// A row/item is SHOWN unless it was explicitly deselected in the editor. Absent
+// flag = included, so freshly generated reports render every row (identical to
+// old behavior). Shared by the read-only renderers, the editor, and mirrored by
+// report_pdf._included on the server.
+export const rowIncluded = (r) => !r || r.included !== false;
+
+// Per-table quick control shown ONLY in the editor (selectable mode). Top-N picks
+// the first N rows in the table's CURRENT (frozen) order — see report_document.py
+// for each table's incoming sort.
+function RowSelectBar({ total, selected, onBulk }) {
+  const Btn = ({ mode, children }) => (
+    <button
+      type="button"
+      onClick={() => onBulk(mode)}
+      className="px-2 py-0.5 rounded-md border border-stone-200 text-stone-600 hover:bg-orange-50 hover:text-orange-700 hover:border-orange-200 transition-colors"
+    >
+      {children}
+    </button>
+  );
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 mb-2 text-xs">
+      <span className="text-stone-400 mr-0.5">Rows:</span>
+      <Btn mode={5}>Top 5</Btn>
+      <Btn mode={10}>Top 10</Btn>
+      <Btn mode="all">All</Btn>
+      <Btn mode="none">None</Btn>
+      <span className="ml-auto text-stone-500 font-data">
+        {selected} of {total} selected
+      </span>
+    </div>
+  );
+}
+
 function cell(col, cells) {
   const v = cells ? cells[col.key] : undefined;
   if (col.kind === "dim") {
@@ -268,49 +302,82 @@ function cell(col, cells) {
   return <span className="font-data text-stone-800">{fmtValue(col.type, v)}</span>;
 }
 
-export function DataTableBlock({ block }) {
+// `selectable` (editor only): show ALL rows with a per-row checkbox + the Top-N
+// control bar, and report toggles via onToggleRow(rowIndexIntoAllRows, checked)
+// / onBulk("all"|"none"|N). Read-only (default, incl. locked/sent + PDF parity):
+// no checkboxes, only the selected rows are shown.
+export function DataTableBlock({ block, selectable = false, onToggleRow, onBulk }) {
   const columns = block.columns || [];
-  const rows = block.rows || [];
+  const allRows = block.rows || [];
+  const rows = selectable ? allRows : allRows.filter(rowIncluded);
+  const selectedCount = allRows.filter(rowIncluded).length;
   return (
     <Card>
       <SectionTitle>{block.title}</SectionTitle>
       {block.available === false ? (
         <UnavailableNote reason={block.unavailableReason} />
-      ) : rows.length === 0 ? (
+      ) : allRows.length === 0 ? (
         <p className="text-sm text-stone-400 py-2">No data for this period.</p>
+      ) : !selectable && rows.length === 0 ? (
+        <p className="text-sm text-stone-400 py-2">No rows selected.</p>
       ) : (
-        <div className="overflow-x-auto -mx-1">
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="border-b border-stone-200">
-                {columns.map((c) => (
-                  <th
-                    key={c.key}
-                    className={`py-2 px-2 text-xs font-semibold uppercase tracking-wider text-stone-400 ${
-                      c.kind === "dim" ? "text-left" : "text-right"
-                    }`}
-                  >
-                    {c.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} className="border-b border-stone-100 last:border-0">
+        <>
+          {selectable && (
+            <RowSelectBar total={allRows.length} selected={selectedCount} onBulk={onBulk} />
+          )}
+          <div className="overflow-x-auto -mx-1">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-stone-200">
+                  {selectable && <th className="w-8 py-2 px-2" aria-label="Include row" />}
                   {columns.map((c) => (
-                    <td
+                    <th
                       key={c.key}
-                      className={`py-1.5 px-2 ${c.kind === "dim" ? "text-left max-w-[18rem] truncate" : "text-right"}`}
+                      className={`py-2 px-2 text-xs font-semibold uppercase tracking-wider text-stone-400 ${
+                        c.kind === "dim" ? "text-left" : "text-right"
+                      }`}
                     >
-                      {cell(c, r.cells)}
-                    </td>
+                      {c.label}
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => {
+                  const included = rowIncluded(r);
+                  return (
+                    <tr
+                      key={i}
+                      className={`border-b border-stone-100 last:border-0 ${
+                        selectable && !included ? "opacity-40" : ""
+                      }`}
+                    >
+                      {selectable && (
+                        <td className="py-1.5 px-2 align-middle">
+                          <input
+                            type="checkbox"
+                            checked={included}
+                            onChange={(e) => onToggleRow(i, e.target.checked)}
+                            className="accent-orange-600 cursor-pointer"
+                            aria-label="Include this row in the report"
+                          />
+                        </td>
+                      )}
+                      {columns.map((c) => (
+                        <td
+                          key={c.key}
+                          className={`py-1.5 px-2 ${c.kind === "dim" ? "text-left max-w-[18rem] truncate" : "text-right"}`}
+                        >
+                          {cell(c, r.cells)}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </Card>
   );
@@ -341,21 +408,58 @@ export function ChartBlock({ block }) {
   );
 }
 
-export function BacklinksBlock({ block }) {
-  const items = block.items || [];
+// Backlinks keep the FROZEN total volume in the count line (clients should see
+// the full backlink volume even when the list is trimmed) and add a "showing X
+// of Y" hint when a selection is active. `selectable` adds per-item checkboxes +
+// the Top-N bar; read-only shows only the selected items, renumbered 1..k.
+export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk }) {
+  const allItems = block.items || [];
+  const items = selectable ? allItems : allItems.filter(rowIncluded);
+  const selectedCount = allItems.filter(rowIncluded).length;
+  const total = block.count; // frozen total volume for the period
+  if (allItems.length === 0) {
+    return (
+      <Card>
+        <SectionTitle>{block.title}</SectionTitle>
+        <p className="text-sm text-stone-400 py-1">No new backlinks recorded for this period.</p>
+      </Card>
+    );
+  }
   return (
     <Card>
       <SectionTitle>{block.title}</SectionTitle>
+      <p className="text-xs text-stone-500 mb-2">
+        <span className="font-data font-semibold text-stone-700">{total}</span> new backlink
+        {total === 1 ? "" : "s"} this period
+        {selectedCount !== total ? (
+          <span> · showing {selectedCount} of {total}</span>
+        ) : null}
+      </p>
+      {selectable && (
+        <RowSelectBar total={allItems.length} selected={selectedCount} onBulk={onBulk} />
+      )}
       {items.length === 0 ? (
-        <p className="text-sm text-stone-400 py-1">No new backlinks recorded for this period.</p>
+        <p className="text-sm text-stone-400 py-1">No backlinks selected.</p>
       ) : (
-        <>
-          <p className="text-xs text-stone-500 mb-2">
-            <span className="font-data font-semibold text-stone-700">{block.count}</span> new backlink{block.count === 1 ? "" : "s"} this period
-          </p>
-          <ol className="space-y-1.5">
-            {items.map((it, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm">
+        <ol className="space-y-1.5">
+          {items.map((it, i) => {
+            const included = rowIncluded(it);
+            return (
+              <li
+                key={i}
+                className={`flex items-start gap-2 text-sm ${
+                  selectable && !included ? "opacity-40" : ""
+                }`}
+              >
+                {selectable && (
+                  <input
+                    type="checkbox"
+                    checked={included}
+                    onChange={(e) => onToggleRow(i, e.target.checked)}
+                    className="accent-orange-600 cursor-pointer mt-1 shrink-0"
+                    aria-label="Include this backlink in the report"
+                  />
+                )}
                 <span className="text-xs text-stone-400 font-data mt-0.5 w-5 shrink-0 text-right">{i + 1}.</span>
                 <Link2 size={13} className="shrink-0 text-stone-300 mt-1" />
                 {it.url ? (
@@ -372,9 +476,9 @@ export function BacklinksBlock({ block }) {
                   <span className="text-stone-400">—</span>
                 )}
               </li>
-            ))}
-          </ol>
-        </>
+            );
+          })}
+        </ol>
       )}
     </Card>
   );

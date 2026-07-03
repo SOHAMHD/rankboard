@@ -6,21 +6,16 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
+import { COUNTRIES } from "../locations";
 import { TopBar, Modal, ErrorNote, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
 
-/* Per-project Google country for rank checks → DataForSEO location_code.
-   "Server default" (null) means fall back to RANK_LOCATION_CODE on the server. */
-const COUNTRIES = [
-  { code: 2356, label: "India" },
-  { code: 2036, label: "Australia" },
-  { code: 2840, label: "United States" },
-  { code: 2826, label: "United Kingdom" },
-  { code: 2124, label: "Canada" },
-];
+/* Per-project Google target for rank checks → DataForSEO location_code.
+   COUNTRIES is the bundled seed (server-python/app/locations.json) — the
+   single source of truth the API also validates against. A project stores
+   ONE integer: null = "Server default" (falls back to RANK_LOCATION_CODE),
+   a country code = whole country, or a city code = that metro. */
 
-const countryLabel = (code) => COUNTRIES.find((c) => c.code === code)?.label ?? null;
-
-// Best-effort guess from a domain's TLD; null when there's no confident
+// Best-effort country guess from a domain's TLD; null when there's no confident
 // match (e.g. .com), so the caller leaves the current selection alone.
 function codeFromDomain(domain) {
   const d = (domain || "").trim().toLowerCase();
@@ -31,23 +26,76 @@ function codeFromDomain(domain) {
   return null;
 }
 
-function CountrySelect({ value, onChange }) {
-  // Keep an unrecognised but set code visible rather than silently dropping it.
-  const known = value == null || COUNTRIES.some((c) => c.code === value);
+// Human label for a stored location_code: "Australia", "Australia · Perth",
+// or null when unset. "Code N" for an unrecognised (legacy) code.
+function describeLocation(code) {
+  if (code == null) return null;
+  const country = COUNTRIES.find((c) => c.locationCode === code);
+  if (country) return country.name;
+  for (const c of COUNTRIES) {
+    const city = c.cities.find((ci) => ci.locationCode === code);
+    if (city) return `${c.name} · ${city.name}`;
+  }
+  return `Code ${code}`;
+}
+
+// Split a stored location_code back into the two-dropdown UI state.
+function resolveLocation(code) {
+  if (code == null) return { countryCode: null, cityCode: null };
+  if (COUNTRIES.some((c) => c.locationCode === code)) return { countryCode: code, cityCode: null };
+  for (const c of COUNTRIES) {
+    if (c.cities.some((ci) => ci.locationCode === code)) return { countryCode: c.locationCode, cityCode: code };
+  }
+  return { countryCode: code, cityCode: null }; // unknown/legacy — keep visible
+}
+
+// Country dropdown + an optional Metro-city dropdown that populates from the
+// chosen country. Three valid states: server default (country blank) / whole
+// country (city blank) / country + city.
+function LocationSelect({ countryCode, cityCode, onCountry, onCity }) {
+  const country = COUNTRIES.find((c) => c.locationCode === countryCode);
+  const cities = country?.cities ?? [];
+  const knownCountry = countryCode == null || !!country;
   return (
-    <select
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
-      className={INPUT_CLS}
-    >
-      <option value="">Server default</option>
-      {COUNTRIES.map((c) => (
-        <option key={c.code} value={c.code}>
-          {c.label}
-        </option>
-      ))}
-      {!known && <option value={value}>{`Code ${value}`}</option>}
-    </select>
+    <>
+      <select
+        value={countryCode ?? ""}
+        onChange={(e) => onCountry(e.target.value === "" ? null : Number(e.target.value))}
+        className={INPUT_CLS}
+      >
+        <option value="">Server default</option>
+        {COUNTRIES.map((c) => (
+          <option key={c.locationCode} value={c.locationCode}>
+            {c.name}
+          </option>
+        ))}
+        {!knownCountry && <option value={countryCode}>{`Code ${countryCode}`}</option>}
+      </select>
+      <p className="text-xs text-stone-400 mt-2">
+        Which Google country to check rankings in. "Server default" uses the server-wide setting.
+      </p>
+
+      {countryCode != null && cities.length > 0 && (
+        <>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
+            Metro city <span className="normal-case font-normal">(optional)</span>
+          </label>
+          <select
+            value={cityCode ?? ""}
+            onChange={(e) => onCity(e.target.value === "" ? null : Number(e.target.value))}
+            className={INPUT_CLS}
+          >
+            <option value="">Whole country</option>
+            {cities.map((ci) => (
+              <option key={ci.locationCode} value={ci.locationCode}>
+                {ci.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-stone-400 mt-2">Narrow rank checks to a specific metro, or leave "Whole country".</p>
+        </>
+      )}
+    </>
   );
 }
 
@@ -192,7 +240,7 @@ function ProjectCard({ project, user, confirming, onOpen, onEdit, onToggle, onDe
   const showToggle = can(user, "toggleProject");
   const showEdit = can(user, "toggleProject"); // same "manage settings" right the API uses
   const showDelete = can(user, "deleteProject");
-  const country = countryLabel(project.locationCode);
+  const country = describeLocation(project.locationCode);
 
   return (
     <div
@@ -304,6 +352,8 @@ function AddProjectModal({ onClose, onAdded }) {
     }
   };
 
+  const { countryCode, cityCode } = resolveLocation(locationCode);
+
   return (
     <Modal title="Add project" onClose={onClose}>
       <p className="text-sm text-stone-500 mb-4">One website or client you're doing SEO for.</p>
@@ -328,14 +378,15 @@ function AddProjectModal({ onClose, onAdded }) {
       <p className="text-xs text-stone-400 mt-2">Needed for automatic rank checks — the site the checker looks for in Google results.</p>
 
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">Country</label>
-      <CountrySelect
-        value={locationCode}
-        onChange={(v) => {
+      <LocationSelect
+        countryCode={countryCode}
+        cityCode={cityCode}
+        onCountry={(v) => {
           setLocationCode(v);
           setCountryTouched(true);
         }}
+        onCity={(v) => setLocationCode(v ?? countryCode)}
       />
-      <p className="text-xs text-stone-400 mt-2">Which Google country to check rankings in. "Server default" uses the server-wide setting.</p>
 
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         GA4 Property ID <span className="normal-case font-normal">(optional)</span>
@@ -406,6 +457,8 @@ function EditProjectModal({ project, onClose, onSaved }) {
     }
   };
 
+  const { countryCode, cityCode } = resolveLocation(locationCode);
+
   return (
     <Modal title="Edit project" onClose={onClose}>
       <p className="text-sm text-stone-500 mb-4">
@@ -426,14 +479,15 @@ function EditProjectModal({ project, onClose, onSaved }) {
       <p className="text-xs text-stone-400 mt-2">The site the checker looks for in Google results.</p>
 
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">Country</label>
-      <CountrySelect
-        value={locationCode}
-        onChange={(v) => {
+      <LocationSelect
+        countryCode={countryCode}
+        cityCode={cityCode}
+        onCountry={(v) => {
           setLocationCode(v);
           setCountryTouched(true);
         }}
+        onCity={(v) => setLocationCode(v ?? countryCode)}
       />
-      <p className="text-xs text-stone-400 mt-2">Which Google country to check rankings in. "Server default" uses the server-wide setting.</p>
 
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         GA4 Property ID <span className="normal-case font-normal">(optional)</span>

@@ -151,6 +151,14 @@ def _chunk(seq, n):
     return [seq[i:i + n] for i in range(0, len(seq), n)] or [[]]
 
 
+def _included(item) -> bool:
+    """A repeating-row table row/item is INCLUDED unless the author explicitly
+    deselected it (``included: false`` in content_json). Absent flag = included,
+    so freshly generated / never-edited reports render every row exactly as
+    before."""
+    return (item or {}).get("included", True) is not False
+
+
 # ── block pickers ─────────────────────────────────────────────────────────────
 def _blocks(content: dict) -> list:
     if not content or content.get("type") != "report_document":
@@ -243,15 +251,19 @@ def _data_table_pages(block: dict, sub: str, rows_per_page: int) -> list:
     if block.get("available") is False:
         return [_section_head(title, sub) + _unavailable(block.get("unavailableReason"))]
 
-    rows = block.get("rows") or []
+    all_rows = block.get("rows") or []
+    rows = [r for r in all_rows if _included(r)]  # trim BEFORE pagination
     head_cells = "".join(
         f'<th class="{ "num" if c.get("kind") in ("metric","delta") else "" }">{_esc(c.get("label"))}</th>'
         for c in columns)
     thead = f"<thead><tr>{head_cells}</tr></thead>"
 
     if not rows:
+        # Distinguish "author deselected every row" from "no data this period".
+        msg = ("No rows selected for this period." if all_rows
+               else "No rows for this period.")
         empty = (f'<table class="dt">{thead}<tbody><tr>'
-                 f'<td colspan="{len(columns)}" class="empty">No rows for this period.</td>'
+                 f'<td colspan="{len(columns)}" class="empty">{msg}</td>'
                  f'</tr></tbody></table>')
         return [_section_head(title, sub) + empty]
 
@@ -277,14 +289,17 @@ def _keyword_pages(block: dict) -> list:
     columns = block.get("columns") or []
     if block.get("available") is False:
         return [_section_head(title, sub) + _unavailable(block.get("unavailableReason"))]
-    rows = block.get("rows") or []
+    all_rows = block.get("rows") or []
+    rows = [r for r in all_rows if _included(r)]  # trim BEFORE pagination
     head_cells = "".join(
         f'<th class="{ "num" if c.get("kind") in ("metric","delta") else "" }">{_esc(c.get("label"))}</th>'
         for c in columns)
     thead = f"<thead><tr>{head_cells}</tr></thead>"
     if not rows:
+        msg = ("No keywords selected for this period." if all_rows
+               else "No tracked keywords for this period.")
         empty = (f'<table class="dt kw">{thead}<tbody><tr>'
-                 f'<td colspan="{len(columns)}" class="empty">No tracked keywords for this period.</td>'
+                 f'<td colspan="{len(columns)}" class="empty">{msg}</td>'
                  f'</tr></tbody></table>')
         return [_section_head(title, sub) + empty]
 
@@ -316,14 +331,24 @@ def _keyword_pages(block: dict) -> list:
 # ── backlinks numbered list, chunked ──────────────────────────────────────────
 def _backlinks_pages(block: dict) -> list:
     title = block.get("title") or "New Backlinks"
-    items = block.get("items") or []
-    count = block.get("count", len(items))
+    all_items = block.get("items") or []
+    items = [it for it in all_items if _included(it)]  # trim BEFORE pagination
+    # Backlinks KEEP the frozen total volume (the period metric) — trimming the
+    # list only changes what's shown, so the sub reads "43 new backlinks · showing 5".
+    count = block.get("count", len(all_items))
+    shown = len(items)
     month = block.get("month")
-    sub = f"{count} new backlink{'' if count == 1 else 's'}" + (f" · {month}" if month else "")
+    sub = f"{count} new backlink{'' if count == 1 else 's'}"
+    if shown != count:
+        sub += f" · showing {shown} of {count}"
+    if month:
+        sub += f" · {month}"
     if not items:
+        msg = ("No backlinks selected for this period." if all_items
+               else "No new backlinks were recorded for this period.")
         return [_section_head(title, sub)
                 + '<div class="unavailable"><span class="ua-icon">—</span>'
-                  '<span>No new backlinks were recorded for this period.</span></div>']
+                  f'<span>{_esc(msg)}</span></div>']
     pages = []
     chunks = _chunk(items, _BACKLINKS_PER_PAGE)
     total = len(chunks)

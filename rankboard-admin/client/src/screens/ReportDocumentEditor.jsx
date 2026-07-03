@@ -186,12 +186,12 @@ function NarrativeEditor({ block, BlobNode, suggestion, onDocChange, onFocusEdit
 }
 
 // ── structure controls that wrap EVERY block ──────────────────────────────────
-function BlockFrame({ index, total, isData, onUp, onDown, onDelete, onAddTextBelow, children }) {
+function BlockFrame({ index, total, label, onUp, onDown, onDelete, onAddTextBelow, children }) {
   return (
     <div className="group relative rounded-xl border border-stone-200 bg-stone-50/40 p-2">
       <div className="flex items-center justify-between mb-1.5 px-1">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-stone-300">
-          {isData ? "Data · move / delete only" : "Editable text"}
+          {label}
         </span>
         <div className="flex items-center gap-0.5">
           <IconBtn label="Move up" disabled={index === 0} onClick={onUp}>
@@ -276,6 +276,37 @@ function EditableDoc({ version, blobs }) {
     activeEditorRef.current = editor;
   }, []);
 
+  // ── repeating-row selection (data_table rows / backlinks_list items) ──────────
+  // Toggling a checkbox or a Top-N control writes an `included` flag onto the
+  // rows/items INSIDE the block — saved verbatim by the existing PATCH /content.
+  // rowIndex is the index into the block's FULL rows/items array (the editor
+  // renders every row), so a filtered read-only view never desyncs.
+  const rowsKey = (block) => (block.type === "backlinks_list" ? "items" : "rows");
+  const setRowIncluded = useCallback((blockId, rowIndex, included) => {
+    setBlocks((bs) =>
+      bs.map((b) => {
+        if (b.id !== blockId) return b;
+        const key = rowsKey(b);
+        const arr = (b[key] || []).map((r, i) => (i === rowIndex ? { ...r, included } : r));
+        return { ...b, [key]: arr };
+      })
+    );
+  }, []);
+  const setRowsBulk = useCallback((blockId, mode) => {
+    // mode: "all" | "none" | N (top-N picks the first N rows in current order).
+    setBlocks((bs) =>
+      bs.map((b) => {
+        if (b.id !== blockId) return b;
+        const key = rowsKey(b);
+        const arr = (b[key] || []).map((r, i) => {
+          const included = mode === "all" ? true : mode === "none" ? false : i < mode;
+          return { ...r, included };
+        });
+        return { ...b, [key]: arr };
+      })
+    );
+  }, []);
+
   const move = (index, dir) => {
     setBlocks((bs) => {
       const j = index + dir;
@@ -354,12 +385,19 @@ function EditableDoc({ version, blobs }) {
         <div className="min-w-0 space-y-3">
           {blocks.map((block, i) => {
             const isData = DATA_BLOCK_TYPES.has(block.type);
+            const canSelectRows =
+              block.type === "data_table" || block.type === "backlinks_list";
+            const frameLabel = canSelectRows
+              ? "Data · choose rows / move / delete"
+              : isData
+              ? "Data · move / delete only"
+              : "Editable text";
             return (
               <BlockFrame
                 key={block.id}
                 index={i}
                 total={blocks.length}
-                isData={isData}
+                label={frameLabel}
                 onUp={() => move(i, -1)}
                 onDown={() => move(i, 1)}
                 onDelete={() => remove(i)}
@@ -372,6 +410,20 @@ function EditableDoc({ version, blobs }) {
                     suggestion={suggestion}
                     onDocChange={onDocChange}
                     onFocusEditor={onFocusEditor}
+                  />
+                ) : block.type === "data_table" ? (
+                  <DataTableBlock
+                    block={block}
+                    selectable
+                    onToggleRow={(rowIndex, inc) => setRowIncluded(block.id, rowIndex, inc)}
+                    onBulk={(mode) => setRowsBulk(block.id, mode)}
+                  />
+                ) : block.type === "backlinks_list" ? (
+                  <BacklinksBlock
+                    block={block}
+                    selectable
+                    onToggleRow={(rowIndex, inc) => setRowIncluded(block.id, rowIndex, inc)}
+                    onBulk={(mode) => setRowsBulk(block.id, mode)}
                   />
                 ) : (
                   <ReadOnlyDataBlock block={block} />

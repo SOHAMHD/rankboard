@@ -18,7 +18,9 @@ Console) touches only this file.
 import base64
 import concurrent.futures
 import json
+import logging
 import random
+import sys
 import urllib.request
 
 from ..config import (
@@ -30,6 +32,18 @@ from ..config import (
     RANK_LOCATION_CODE,
 )
 
+# ── Observability ────────────────────────────────────────────────────
+# uvicorn does NOT configure the root logger, so INFO from a custom logger
+# is invisible by default. Give this module its own stdout handler (Render
+# captures stdout) so the rank-check trace below always shows up.
+log = logging.getLogger("rankboard.rank_provider")
+if not log.handlers:
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    log.addHandler(_handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
 
 def check_ranks(domain: str | None, keywords: list[dict], location_code: int | None = None) -> tuple[dict, str]:
     """keywords: [{"term": str, "currentRank": int|None}, ...]
@@ -39,7 +53,12 @@ def check_ranks(domain: str | None, keywords: list[dict], location_code: int | N
     checked depth."""
     if DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD:
         code = location_code if location_code is not None else RANK_LOCATION_CODE
+        log.info(
+            "check-ranks source=dataforseo keywords=%d domain=%r location_code=%s base=%s",
+            len(keywords), domain, code, DATAFORSEO_BASE,
+        )
         return _dataforseo(domain, [k["term"] for k in keywords], code), "dataforseo"
+    log.info("check-ranks source=simulated keywords=%d domain=%r", len(keywords), domain)
     return _simulated(keywords), "simulated"
 
 
@@ -74,23 +93,50 @@ def _dataforseo(domain: str, terms: list[str], location_code: int) -> dict:
             "device": "desktop",
             "depth": RANK_CHECK_DEPTH,
         }
+        url = f"{DATAFORSEO_BASE}/v3/serp/google/organic/live/advanced"
         req = urllib.request.Request(
-            f"{DATAFORSEO_BASE}/v3/serp/google/organic/live/advanced",
+            url,
             data=json.dumps([task]).encode(),
             headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=60) as res:
+            http_status = res.status
             payload = json.loads(res.read())
+        # Full endpoint + top-level response health. cost/tasks_error reveal
+        # billing and auth/balance problems even when HTTP is 200.
+        log.info(
+            "rank-check term=%r POST %s (base=%s) http=%s cost=%s tasks_error=%s status_code=%s",
+            term, url, DATAFORSEO_BASE, http_status,
+            payload.get("cost"), payload.get("tasks_error"), payload.get("status_code"),
+        )
         tasks = payload.get("tasks") or []
         if not tasks or tasks[0].get("status_code") != 20000:
+            log.info(
+                "rank-check term=%r task failed task_status_code=%s task_status_message=%s -> not found",
+                term,
+                tasks[0].get("status_code") if tasks else None,
+                tasks[0].get("status_message") if tasks else None,
+            )
             return None  # task failed; treat as "not found"
-        for result in tasks[0].get("result") or []:
-            for item in result.get("items") or []:
-                # rank_group = position among ORGANIC results only;
-                # rank_absolute would also count ads/SERP features.
-                if item.get("type") == "organic" and _domain_matches(item.get("domain"), domain):
-                    return item.get("rank_group")
+        # Collect every returned item once so we can both log the SERP and then
+        # scan it. Order is preserved, so first-match behavior is unchanged.
+        items = [item for result in (tasks[0].get("result") or []) for item in (result.get("items") or [])]
+        organic_domains = [it.get("domain") for it in items if it.get("type") == "organic"]
+        # _domain_matches normalizes only the SERP side (accepts www.<target>
+        # and *.<target>); it does NOT strip scheme/www/path from `domain` (the
+        # project string). So `target_domain` below is exactly what's compared.
+        log.info(
+            "rank-check term=%r items=%d organic=%d first_domains=%s target_domain=%r "
+            "(matching: lowercases SERP domain, accepts www.<target> and *.<target>; "
+            "does NOT strip scheme/www/path from target)",
+            term, len(items), len(organic_domains), organic_domains[:10], domain,
+        )
+        for item in items:
+            # rank_group = position among ORGANIC results only;
+            # rank_absolute would also count ads/SERP features.
+            if item.get("type") == "organic" and _domain_matches(item.get("domain"), domain):
+                return item.get("rank_group")
         return None
 
     out: dict = {t: None for t in terms}

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from ..access import accessible_project_ids
 from ..config import DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD, RANK_LOCATION_CODE
 from ..db import get_db
+from ..locations import VALID_LOCATION_CODES
 from ..security import require_active_user, require_permission, require_project_access
 from ..services.analytics_provider import (
     ALLOWED_DIMENSIONS,
@@ -467,6 +468,17 @@ def normalize_gsc_site_url(raw: str | None) -> str | None:
     return raw.strip()
 
 
+def _validate_location_code(code: int | None) -> None:
+    """Reject any location_code not present in the seed (app/locations.json).
+    None = server default, always allowed. This is the trust boundary: the
+    client bundles the same seed, but the server never relies on that."""
+    if code is not None and code not in VALID_LOCATION_CODES:
+        raise HTTPException(
+            400,
+            f"Unknown location code {code}. Choose a country or metro city from the list.",
+        )
+
+
 class ProjectIn(BaseModel):
     name: str
     domain: str | None = None
@@ -480,6 +492,7 @@ def create_project(body: ProjectIn, db: sqlite3.Connection = Depends(get_db)):
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "Project name is required.")
+    _validate_location_code(body.locationCode)
     cur = db.execute(
         "INSERT INTO projects (name, domain, location_code, ga_property_id, gsc_site_url, active) VALUES (?, ?, ?, ?, ?, 1)",
         (
@@ -515,6 +528,7 @@ def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connectio
         fields.append("domain = ?")
         values.append(normalize_domain(body.domain))
     if body.locationCode is not None:
+        _validate_location_code(body.locationCode)
         fields.append("location_code = ?")
         values.append(body.locationCode)
     if body.gaPropertyId is not None:

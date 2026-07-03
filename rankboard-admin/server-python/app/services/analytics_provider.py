@@ -113,8 +113,8 @@ def _analytics_client():
     raw = GOOGLE_SERVICE_ACCOUNT_JSON
     if raw.lstrip().startswith("{"):
         import json
-        return BetaAnalyticsDataClient.from_service_account_info(json.loads(raw))
-    return BetaAnalyticsDataClient.from_service_account_json(raw)
+        return BetaAnalyticsDataClient.from_service_account_info(json.loads(raw), transport="rest")
+    return BetaAnalyticsDataClient.from_service_account_json(raw, transport="rest")
 
 
 def build_dimension_filter(filters: list[dict] | None, match: str = "AND"):
