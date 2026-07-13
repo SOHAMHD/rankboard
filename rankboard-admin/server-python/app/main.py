@@ -11,6 +11,7 @@ the Node server established, so this server honors it exactly.
 """
 import jwt
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -18,7 +19,7 @@ from fastapi.responses import JSONResponse
 from .config import CORS_ORIGINS, DEBUG, JWT_SECRET
 from .db import get_connection, init_db
 from .permissions import READ_ONLY_ROLES
-from .routers import auth, backlinks, moz, projects, reports, snapshots, users
+from .routers import auth, backlinks, moz, posts, projects, reports, snapshots, users
 
 init_db()
 
@@ -97,8 +98,18 @@ def _role_for_request(request: Request) -> str | None:
 
 @app.middleware("http")
 async def block_read_only_writes(request: Request, call_next):
-    if request.method in WRITE_METHODS and not _read_only_exempt(request.url.path):
-        if _role_for_request(request) in READ_ONLY_ROLES:
+    # Skip the whole check (and its DB round-trip) unless a read-only role is
+    # actually configured. While READ_ONLY_ROLES is empty this middleware is a
+    # no-op, so there's no reason to hit the database on every write request.
+    if (
+        READ_ONLY_ROLES
+        and request.method in WRITE_METHODS
+        and not _read_only_exempt(request.url.path)
+    ):
+        # _role_for_request does blocking (sync) DB I/O — run it in a worker
+        # thread so it never stalls the async event loop.
+        role = await run_in_threadpool(_role_for_request, request)
+        if role in READ_ONLY_ROLES:
             return JSONResponse(
                 status_code=403,
                 content={"error": "Your access is read-only — you can view everything but can't make changes."},
@@ -142,5 +153,6 @@ app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(moz.router, prefix="/api/projects", tags=["moz"])
 app.include_router(backlinks.router, prefix="/api/projects", tags=["backlinks"])
+app.include_router(posts.router, prefix="/api/projects", tags=["posts"])
 app.include_router(snapshots.router, prefix="/api/snapshots", tags=["snapshots"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])

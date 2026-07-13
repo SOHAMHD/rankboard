@@ -111,18 +111,18 @@ const DATA_BLOCK_TYPES = new Set([
   "backlinks_list",
 ]);
 
-function ReadOnlyDataBlock({ block }) {
+function ReadOnlyDataBlock({ block, hideTitle }) {
   switch (block.type) {
     case "report_header":
       return <HeaderBlock block={block} />;
     case "metric_grid":
-      return <MetricGridBlock block={block} />;
+      return <MetricGridBlock block={block} hideTitle={hideTitle} />;
     case "data_table":
-      return <DataTableBlock block={block} />;
+      return <DataTableBlock block={block} hideTitle={hideTitle} />;
     case "chart":
-      return <ChartBlock block={block} />;
+      return <ChartBlock block={block} hideTitle={hideTitle} />;
     case "backlinks_list":
-      return <BacklinksBlock block={block} />;
+      return <BacklinksBlock block={block} hideTitle={hideTitle} />;
     default:
       return null;
   }
@@ -173,14 +173,126 @@ function NarrativeEditor({ block, BlobNode, suggestion, onDocChange, onFocusEdit
 
   return (
     <div>
-      {block.title ? (
-        <h3 className="text-base font-bold text-stone-900 font-display mb-2">{block.title}</h3>
-      ) : (
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Free text</p>
-      )}
       <Toolbar editor={editor} />
       <div className="bg-white border border-stone-200 rounded-lg overflow-hidden">
         <EditorContent editor={editor} />
+      </div>
+    </div>
+  );
+}
+
+// ── editable Targets & Goals grid (team-entered values + notes) ───────────────
+// Unlike DATA blocks, these values ARE editable: they're manual targets, not
+// gathered data. Each keystroke updates the block in `blocks` state, so the
+// existing PATCH /content save persists them verbatim.
+function TargetsGridEditor({ block, onSetValue }) {
+  const columns = block.columns || [];
+  const fields = block.fields || [];
+  const values = block.values || {};
+  return (
+    <div>
+      {columns.map((col) => (
+        <div key={col.key} className="mb-4">
+          <h4 className="text-sm font-semibold text-blue-700 mb-2">{col.label}</h4>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {fields.map((f) => (
+              <label key={f.key} className="block">
+                <span className="text-xs text-stone-500">{f.label}</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={(values[col.key] || {})[f.key] ?? ""}
+                  onChange={(e) => onSetValue(block.id, col.key, f.key, e.target.value)}
+                  placeholder="\u2014"
+                  className="mt-0.5 w-full rounded-md border border-stone-200 px-2 py-1 text-sm font-data focus:border-blue-400 focus:outline-none"
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Trim surrounding transparent / near-white padding from an uploaded logo so it
+// sits flush against the page margin (both cover logos end up equidistant).
+function trimLogo(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        const { data } = ctx.getImageData(0, 0, c.width, c.height);
+        let top = c.height, left = c.width, right = 0, bottom = 0, found = false;
+        for (let y = 0; y < c.height; y++) {
+          for (let x = 0; x < c.width; x++) {
+            const i = (y * c.width + x) * 4;
+            const a = data[i + 3], r = data[i], g = data[i + 1], b = data[i + 2];
+            const content = a > 12 && !(r > 245 && g > 245 && b > 245);
+            if (content) {
+              found = true;
+              if (x < left) left = x;
+              if (x > right) right = x;
+              if (y < top) top = y;
+              if (y > bottom) bottom = y;
+            }
+          }
+        }
+        if (!found) return resolve(dataUrl);
+        const pad = 2;
+        left = Math.max(0, left - pad); top = Math.max(0, top - pad);
+        right = Math.min(c.width - 1, right + pad); bottom = Math.min(c.height - 1, bottom + pad);
+        const w = right - left + 1, h = bottom - top + 1;
+        const o = document.createElement("canvas");
+        o.width = w; o.height = h;
+        o.getContext("2d").drawImage(c, left, top, w, h, 0, 0, w, h);
+        resolve(o.toDataURL("image/png"));
+      } catch (e) {
+        resolve(dataUrl); // tainted canvas or any failure -> keep original
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+// ── cover header: preview + client-logo upload (stored as a data URL on the
+// report_header block, so it travels in content_json and renders on the PDF cover) ─
+function HeaderEditor({ block, onSetLogo }) {
+  const onFile = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f || !f.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      trimLogo(reader.result).then((trimmed) => onSetLogo(block.id, trimmed));
+    };
+    reader.readAsDataURL(f);
+    e.target.value = "";
+  };
+  return (
+    <div>
+      <HeaderBlock block={block} />
+      <div className="mt-2 flex items-center gap-3">
+        <span className="text-xs font-semibold text-stone-500">Client logo (cover, left):</span>
+        {block.clientLogo ? (
+          <img src={block.clientLogo} alt="Client logo"
+               className="h-10 rounded border border-stone-200 bg-white p-1 object-contain" />
+        ) : (
+          <span className="text-xs text-stone-400">none</span>
+        )}
+        <label className="text-xs px-2 py-1 rounded-md border border-stone-200 text-stone-600 hover:bg-orange-50 hover:text-orange-700 cursor-pointer">
+          {block.clientLogo ? "Replace" : "Upload logo"}
+          <input type="file" accept="image/*" onChange={onFile} className="hidden" />
+        </label>
+        {block.clientLogo ? (
+          <button type="button" onClick={() => onSetLogo(block.id, null)}
+                  className="text-xs text-stone-400 hover:text-red-600">Remove</button>
+        ) : null}
       </div>
     </div>
   );
@@ -308,6 +420,31 @@ function EditableDoc({ version, blobs }) {
     );
   }, []);
 
+  // Cover client logo: stored as a data URL on the report_header block.
+  const setClientLogo = useCallback((blockId, dataUri) => {
+    setBlocks((bs) => bs.map((b) => (b.id === blockId ? { ...b, clientLogo: dataUri } : b)));
+  }, []);
+
+  // Rename any section: the default title stays until the author edits it.
+  const setBlockTitle = useCallback((blockId, value) => {
+    setBlocks((bs) => bs.map((b) => (b.id === blockId ? { ...b, title: value } : b)));
+  }, []);
+
+  // Targets grid: manual value + notes edits (the one editable non-narrative block).
+  const setTargetValue = useCallback((blockId, colKey, fieldKey, value) => {
+    setBlocks((bs) =>
+      bs.map((b) => {
+        if (b.id !== blockId) return b;
+        const values = { ...(b.values || {}) };
+        values[colKey] = { ...(values[colKey] || {}), [fieldKey]: value };
+        return { ...b, values };
+      })
+    );
+  }, []);
+  const setTargetNotes = useCallback((blockId, value) => {
+    setBlocks((bs) => bs.map((b) => (b.id === blockId ? { ...b, notes: value } : b)));
+  }, []);
+
   const move = (index, dir) => {
     setBlocks((bs) => {
       const j = index + dir;
@@ -411,7 +548,18 @@ function EditableDoc({ version, blobs }) {
                 onDelete={() => remove(i)}
                 onAddTextBelow={() => addTextAt(i)}
               >
-                {block.type === "narrative" ? (
+                {block.type !== "report_header" && (
+                  <input
+                    type="text"
+                    value={block.title || ""}
+                    onChange={(e) => setBlockTitle(block.id, e.target.value)}
+                    placeholder="Section title"
+                    className="w-full mb-2 bg-transparent text-base font-bold text-stone-900 font-display border-0 border-b border-transparent hover:border-stone-200 focus:border-orange-300 focus:outline-none px-0"
+                  />
+                )}
+                {block.type === "report_header" ? (
+                  <HeaderEditor block={block} onSetLogo={setClientLogo} />
+                ) : block.type === "narrative" ? (
                   <NarrativeEditor
                     block={block}
                     BlobNode={BlobNode}
@@ -423,6 +571,7 @@ function EditableDoc({ version, blobs }) {
                   <DataTableBlock
                     block={block}
                     selectable
+                    hideTitle
                     onToggleRow={(rowIndex, inc) => setRowIncluded(block.id, rowIndex, inc)}
                     onBulk={(mode) => setRowsBulk(block.id, mode)}
                   />
@@ -430,11 +579,17 @@ function EditableDoc({ version, blobs }) {
                   <BacklinksBlock
                     block={block}
                     selectable
+                    hideTitle
                     onToggleRow={(rowIndex, inc) => setRowIncluded(block.id, rowIndex, inc)}
                     onBulk={(mode) => setRowsBulk(block.id, mode)}
                   />
+                ) : block.type === "targets_grid" ? (
+                  <TargetsGridEditor
+                    block={block}
+                    onSetValue={setTargetValue}
+                  />
                 ) : (
-                  <ReadOnlyDataBlock block={block} />
+                  <ReadOnlyDataBlock block={block} hideTitle />
                 )}
               </BlockFrame>
             );

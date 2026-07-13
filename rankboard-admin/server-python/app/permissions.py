@@ -21,10 +21,10 @@ this matrix. READ_ONLY_ROLES is now empty (see below).
 
 PERMISSIONS = {
     #                manageUsers  addProject  toggleProject  deleteProject  addKeyword  deleteKeyword
-    "Super Admin": {"manageUsers": True,  "addProject": True,  "toggleProject": True,  "deleteProject": True,  "addKeyword": True,  "deleteKeyword": True},
-    "Admin":       {"manageUsers": False, "addProject": True,  "toggleProject": True,  "deleteProject": True,  "addKeyword": True,  "deleteKeyword": True},   # a.k.a. Manager
-    "Team":        {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": False, "deleteKeyword": False},  # team member: authors reports (write-capable via require_roles), but no project/keyword writes
-    "Client":      {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": False, "deleteKeyword": False},  # ← provisional: read-only
+    "Super Admin": {"manageUsers": True,  "addProject": True,  "toggleProject": True,  "deleteProject": True,  "addKeyword": True,  "deleteKeyword": True,  "assignProjects": True},
+    "Admin":       {"manageUsers": False, "addProject": True,  "toggleProject": True,  "deleteProject": True,  "addKeyword": True,  "deleteKeyword": True,  "assignProjects": True},   # a.k.a. Manager
+    "Team":        {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": False, "deleteKeyword": False, "assignProjects": False},  # team member: authors reports (write-capable via require_roles), but no project/keyword writes
+    "Client":      {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": False, "deleteKeyword": False, "assignProjects": False},  # ← provisional: read-only
 }
 
 ROLES = list(PERMISSIONS.keys())
@@ -35,9 +35,21 @@ ROLES = list(PERMISSIONS.keys())
 # and require_roles(*SENDER_ROLES) (sending). Adding a role to either set is
 # the single-line change to grant that capability — no endpoint edits.
 ADMIN_ROLE = "Super Admin"                                   # the "everything" role (spec's `admin`)
+# Roles limited to only the projects assigned to them (via user_projects);
+# everyone else (Super Admin, Admin) sees every project.
+SCOPED_ROLES = frozenset({"Team", "Client"})
 AUTHOR_ROLES = frozenset({"Super Admin", "Admin", "Team"})   # may author reports (Team can't send)
 SENDER_ROLES = frozenset({"Super Admin", "Admin"})           # may send a report to a client
 DELETER_ROLES = frozenset({"Super Admin", "Admin"})          # may HARD-delete a report version, any status (super admin + manager); Team/Client cannot
+
+# Roles that must clear an EMAILED one-time code as a THIRD step, after the
+# password and authenticator. Everyone else stops at two steps (password + app).
+#
+# TEMPORARILY DISABLED for local development (no outbound email locally). While
+# this is empty, Admin & Super Admin stop at two steps like everyone else. To
+# re-enable the third (email) factor, restore the line below:
+#     EMAIL_2FA_ROLES = frozenset({"Super Admin", "Admin"})
+EMAIL_2FA_ROLES = frozenset()
 
 # Roles that may READ everything but must never WRITE. The read-only
 # middleware (app.main) returns 403 for any POST/PUT/PATCH/DELETE made by a

@@ -22,6 +22,7 @@ import {
   ROLES,
   ROLE_DESCRIPTIONS,
   roleLabel,
+  can,
   INPUT_CLS,
   BTN_PRIMARY,
   BTN_GHOST,
@@ -34,7 +35,10 @@ export function AdminPanelView({ user, onBack, onLogout }) {
   const [showWizard, setShowWizard] = useState(false);
   const [emailModal, setEmailModal] = useState(null);
   const [confirmId, setConfirmId] = useState(null);
-  const [manageUser, setManageUser] = useState(null); // Client whose projects are being edited
+  const [manageUser, setManageUser] = useState(null); // Team member / Client whose projects are edited
+  // Super Admin gets the full panel; Admin (assignProjects only) gets an
+  // assign-projects-only view — no onboard/delete/role controls.
+  const canManage = can(user, "manageUsers");
 
   const refresh = async () => {
     try {
@@ -101,9 +105,11 @@ export function AdminPanelView({ user, onBack, onLogout }) {
               {users.length} total · {invitedCount} invited, waiting on first sign-in
             </p>
           </div>
-          <button onClick={() => setShowWizard(true)} className={`${BTN_PRIMARY} px-4 py-2`}>
-            <UserPlus size={16} /> Onboard someone
-          </button>
+          {canManage && (
+            <button onClick={() => setShowWizard(true)} className={`${BTN_PRIMARY} px-4 py-2`}>
+              <UserPlus size={16} /> Onboard someone
+            </button>
+          )}
         </div>
 
         <ErrorNote>{error}</ErrorNote>
@@ -148,19 +154,23 @@ export function AdminPanelView({ user, onBack, onLogout }) {
                         </span>
                       </td>
                       <td className="px-5 py-3">
-                        <select
-                          value={u.role}
-                          disabled={isSelf}
-                          title={isSelf ? "You can't change your own role" : "Change role"}
-                          onChange={(e) => changeRole(u.id, e.target.value)}
-                          className="text-xs font-medium rounded-md border border-stone-200 bg-white px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {ROLES.map((r) => (
-                            <option key={r} value={r}>
-                              {roleLabel(r)}
-                            </option>
-                          ))}
-                        </select>
+                        {canManage ? (
+                          <select
+                            value={u.role}
+                            disabled={isSelf}
+                            title={isSelf ? "You can't change your own role" : "Change role"}
+                            onChange={(e) => changeRole(u.id, e.target.value)}
+                            className="text-xs font-medium rounded-md border border-stone-200 bg-white px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {ROLES.map((r) => (
+                              <option key={r} value={r}>
+                                {roleLabel(r)}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="text-sm font-medium text-stone-700">{roleLabel(u.role)}</span>
+                        )}
                       </td>
                       <td className="px-5 py-3">
                         <span
@@ -174,7 +184,7 @@ export function AdminPanelView({ user, onBack, onLogout }) {
                       <td className="px-5 py-3 text-stone-400 text-xs whitespace-nowrap">{u.createdAt?.slice(0, 10)}</td>
                       <td className="px-3 py-3">
                         <span className="flex items-center justify-end gap-1">
-                          {u.role === "Client" && (
+                          {(u.role === "Team" || u.role === "Client") && (
                             <button
                               onClick={() => setManageUser(u)}
                               title="Manage assigned projects"
@@ -185,7 +195,7 @@ export function AdminPanelView({ user, onBack, onLogout }) {
                               {u.projectIds?.length || 0}
                             </button>
                           )}
-                          {u.status === "invited" && (
+                          {canManage && u.status === "invited" && (
                             <button
                               onClick={() => resendInvite(u.id)}
                               title="Resend invite (generates a new temporary password)"
@@ -195,7 +205,7 @@ export function AdminPanelView({ user, onBack, onLogout }) {
                               <Mail size={15} />
                             </button>
                           )}
-                          {!isSelf &&
+                          {canManage && !isSelf &&
                             (confirmId === u.id ? (
                               <button
                                 onClick={() => removeUser(u.id)}
@@ -229,7 +239,7 @@ export function AdminPanelView({ user, onBack, onLogout }) {
         </p>
       </main>
 
-      {showWizard && <OnboardWizard onClose={() => setShowWizard(false)} onCreated={refresh} />}
+      {canManage && showWizard && <OnboardWizard onClose={() => setShowWizard(false)} onCreated={refresh} />}
 
       {manageUser && (
         <ManageProjectsModal user={manageUser} onClose={() => setManageUser(null)} onSaved={refresh} />
@@ -401,9 +411,9 @@ function OnboardWizard({ onClose, onCreated }) {
     })();
   }, []);
 
-  const isClient = role === "Client";
+  const isScoped = role === "Client" || role === "Team";
   // The project step only exists in the Client flow.
-  const flow = isClient ? ["details", "role", "projects", "review"] : ["details", "role", "review"];
+  const flow = isScoped ? ["details", "role", "projects", "review"] : ["details", "role", "review"];
   const stepIndex = flow.indexOf(step);
 
   const toggleProject = (id) =>
@@ -431,8 +441,8 @@ function OnboardWizard({ onClose, onCreated }) {
           name: name.trim(),
           email: email.trim(),
           role,
-          // Only Clients carry assignments; staff roles send none.
-          project_ids: isClient ? [...selected] : [],
+          // Scoped roles (Team + Client) carry assignments; global roles send none.
+          project_ids: isScoped ? [...selected] : [],
         },
       });
       setSentEmail(d.email);
@@ -538,8 +548,8 @@ function OnboardWizard({ onClose, onCreated }) {
             <button onClick={() => setStep("details")} className={`${BTN_GHOST} px-4 py-2.5`}>
               <ChevronLeft size={15} /> Back
             </button>
-            <button onClick={() => setStep(isClient ? "projects" : "review")} className={`${BTN_PRIMARY} flex-1 py-2.5`}>
-              {isClient ? "Next: pick projects" : "Next: review"}
+            <button onClick={() => setStep(isScoped ? "projects" : "review")} className={`${BTN_PRIMARY} flex-1 py-2.5`}>
+              {isScoped ? "Next: pick projects" : "Next: review"}
             </button>
           </div>
         </div>
@@ -547,7 +557,7 @@ function OnboardWizard({ onClose, onCreated }) {
 
       {step === "projects" && (
         <div>
-          <h3 className="text-sm font-semibold text-stone-900">Which projects can this client see?</h3>
+          <h3 className="text-sm font-semibold text-stone-900">Which projects can this person see?</h3>
           <p className="text-xs text-stone-500 mt-0.5 mb-3">
             They'll only see the projects you select here — you can change this later.
           </p>
@@ -581,7 +591,7 @@ function OnboardWizard({ onClose, onCreated }) {
                 {roleLabel(role)}
               </span>
             </div>
-            {isClient && (
+            {isScoped && (
               <div className="px-4 py-2.5 flex justify-between gap-4">
                 <span className="text-stone-400">Projects</span>
                 <span className="font-medium text-stone-800 text-right">
@@ -596,7 +606,7 @@ function OnboardWizard({ onClose, onCreated }) {
           </p>
           <ErrorNote>{error}</ErrorNote>
           <div className="flex gap-2 mt-4">
-            <button onClick={() => setStep(isClient ? "projects" : "role")} className={`${BTN_GHOST} px-4 py-2.5`}>
+            <button onClick={() => setStep(isScoped ? "projects" : "role")} className={`${BTN_GHOST} px-4 py-2.5`}>
               <ChevronLeft size={15} /> Back
             </button>
             <button onClick={send} disabled={busy} className={`${BTN_PRIMARY} flex-1 py-2.5`}>

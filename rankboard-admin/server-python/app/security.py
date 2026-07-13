@@ -20,17 +20,39 @@ from .db import get_db
 from .permissions import can
 
 
-def create_token(user_id: int, role: str) -> str:
+def create_token(user_id: int, role: str, tfa: str = "verified",
+                 minutes: int | None = None) -> str:
     # `role` is carried as an INFORMATIONAL claim only — every guard below
     # re-loads the role fresh from the DB (require_auth), so a stale token can
-    # never widen access. It's here so a decoded token is self-describing and
-    # for any client that wants to read it without a /me round-trip.
-    payload = {
-        "sub": str(user_id),
-        "role": role,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=8),
-    }
+    # never widen access. `tfa` records how far two-step verification has got:
+    #   "verified" — password + authenticator done; full access.
+    #   "pending"  — password ok, authenticator NOT yet done; may only reach
+    #                /me, /set-password and /auth/2fa/* (require_active_user
+    #                rejects it). Tokens minted before 2FA existed carry no tfa
+    #                claim and are treated as verified (backward compatible).
+    exp = datetime.now(timezone.utc) + (
+        timedelta(minutes=minutes) if minutes else timedelta(hours=8)
+    )
+    payload = {"sub": str(user_id), "role": role, "tfa": tfa, "exp": exp}
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def create_pending_token(user_id: int, role: str) -> str:
+    """Short-lived token issued after the PASSWORD step but before the
+    authenticator code. Good for 15 minutes — long enough to scan a QR and
+    type a code, short enough to limit exposure."""
+    return create_token(user_id, role, tfa="pending", minutes=15)
+
+
+def token_claims(authorization: str | None = Header(default=None)) -> dict:
+    """Decode the bearer token to its raw claims (used to read the `tfa` step).
+    Mirrors require_auth's decode; raises the same 401s."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Sign in required.")
+    try:
+        return jwt.decode(authorization[7:], JWT_SECRET, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise HTTPException(401, "Session expired. Please sign in again.")
 
 
 def require_auth(
@@ -51,7 +73,7 @@ def require_auth(
         raise HTTPException(401, "Session expired. Please sign in again.")
 
     user = db.execute(
-        "SELECT id, name, email, role, must_change_password, status FROM users WHERE id = ?",
+        "SELECT id, name, email, role, must_change_password, status, totp_enabled FROM users WHERE id = ?",
         (int(payload["sub"]),),
     ).fetchone()
     if user is None:
@@ -59,11 +81,20 @@ def require_auth(
     return user
 
 
-def require_active_user(user: sqlite3.Row = Depends(require_auth)) -> sqlite3.Row:
-    """Strict gate for every data/action endpoint: the caller must be ACTIVE
-    and must not owe a password reset. A must-change / invited user is blocked
-    here (403) but can still log in, load /me, and POST /set-password (which use
-    the base require_auth) to get themselves into good standing."""
+def require_active_user(
+    user: sqlite3.Row = Depends(require_auth),
+    claims: dict = Depends(token_claims),
+) -> sqlite3.Row:
+    """Strict gate for every data/action endpoint: the caller must be ACTIVE,
+    must not owe a password reset, and must have COMPLETED two-step
+    verification. A pending / must-change / invited user is blocked here (403)
+    but can still log in, load /me, POST /set-password and hit /auth/2fa/*
+    (which use the base require_auth) to get themselves into good standing."""
+    if claims.get("tfa") not in (None, "verified"):
+        # "pending" (authenticator not done) or "email_pending" (email code not
+        # done) — either way, verification isn't complete. None = a legacy token
+        # minted before 2FA, treated as verified for backward compatibility.
+        raise HTTPException(403, "Complete two-step verification to continue.")
     if user["status"] != "active":
         raise HTTPException(403, "Your account isn't active yet — set your password to continue.")
     if user["must_change_password"]:

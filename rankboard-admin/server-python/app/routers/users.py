@@ -10,11 +10,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..db import INTEGRITY_ERRORS, get_db
-from ..permissions import ADMIN_ROLE, ROLES
-from ..security import require_permission
+from ..permissions import ADMIN_ROLE, ROLES, SCOPED_ROLES, can
+from ..security import require_active_user, require_permission
 from ..services.email_service import send_invite_email
 
-router = APIRouter(dependencies=[Depends(require_permission("manageUsers"))])
+def require_user_admin(user: sqlite3.Row = Depends(require_active_user)) -> sqlite3.Row:
+    """Access to the People API: full user managers (manageUsers) OR project
+    assigners (assignProjects). Manage-only actions below (onboard, delete, role
+    change) are further restricted to manageUsers."""
+    if can(user["role"], "manageUsers") or can(user["role"], "assignProjects"):
+        return user
+    raise HTTPException(403, "You don't have permission to do that.")
+
+
+router = APIRouter(dependencies=[Depends(require_user_admin)])
 
 # Temp passwords skip lookalike characters (0/O, 1/l/I) — people type
 # these from an email. secrets.choice is cryptographically random,
@@ -82,7 +91,7 @@ class OnboardIn(BaseModel):
     project_ids: list[int] = []
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[Depends(require_permission("manageUsers"))])
 def onboard_user(body: OnboardIn, db: sqlite3.Connection = Depends(get_db)):
     name = body.name.strip()
     email = body.email.strip().lower()
@@ -96,7 +105,7 @@ def onboard_user(body: OnboardIn, db: sqlite3.Connection = Depends(get_db)):
 
     # Validate any project assignments BEFORE creating the user, so a bad id
     # can't leave behind an orphan account. Only Clients get assignments.
-    assign_ids = list(dict.fromkeys(body.project_ids)) if body.role == "Client" else []
+    assign_ids = list(dict.fromkeys(body.project_ids)) if body.role in SCOPED_ROLES else []
     bad = missing_project_ids(db, assign_ids)
     if bad:
         raise HTTPException(400, f"These projects don't exist: {', '.join(map(str, bad))}.")
@@ -134,7 +143,7 @@ def onboard_user(body: OnboardIn, db: sqlite3.Connection = Depends(get_db)):
     return {"user": row_to_user(user, assign_ids), "email": email_record}
 
 
-@router.post("/{user_id}/resend-invite")
+@router.post("/{user_id}/resend-invite", dependencies=[Depends(require_permission("manageUsers"))])
 def resend_invite(user_id: int, db: sqlite3.Connection = Depends(get_db)):
     user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     if user is None:
@@ -165,7 +174,7 @@ class UpdateUserIn(BaseModel):
 def update_user(
     user_id: int,
     body: UpdateUserIn,
-    me: sqlite3.Row = Depends(require_permission("manageUsers")),
+    me: sqlite3.Row = Depends(require_user_admin),
     db: sqlite3.Connection = Depends(get_db),
 ):
     user = db.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -173,6 +182,8 @@ def update_user(
         raise HTTPException(404, "User not found.")
 
     if body.role is not None:
+        if not can(me["role"], "manageUsers"):
+            raise HTTPException(403, "Only a Super Admin can change roles.")
         if body.role not in ROLES:
             raise HTTPException(400, "Unknown role.")
         if user_id == me["id"]:

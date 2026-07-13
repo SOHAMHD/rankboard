@@ -87,6 +87,13 @@ DERIVED_METRICS = {
         "label": "Engaged Sessions / Active User",
         "helpers": ["engagedSessions", "activeUsers"],  # numerator, denominator
     },
+    # GA4's "average engagement time per active user" (seconds): total user
+    # engagement duration / active users. Matches the Overview summary card's
+    # avg-engagement figure; formats as e.g. "1m 23s" on the client.
+    "averageEngagementTime": {
+        "label": "Avg Engagement Time",
+        "helpers": ["userEngagementDuration", "activeUsers"],  # numerator, denominator
+    },
 }
 
 # What the report builder accepts when validating a selection: every real GA4
@@ -248,59 +255,59 @@ def get_analytics(
     # request below so the cards, trend and breakdowns all reflect it.
     dimension_filter = build_dimension_filter(filters, match)
 
-    out: dict = {"configured": True}
+    # Build every independent report up front, then run them CONCURRENTLY.
+    # GA4's run_report is a blocking network call, so a thread pool turns the
+    # ~9 serial round-trips (summary + trend + 7 breakdowns) into one parallel
+    # batch — the dominant cost of loading the Traffic panel. The client is
+    # safe to share across threads; the first failure surfaces as {"error"}.
+    import concurrent.futures
 
-    # ── Headline summary: the three metrics, no dimension ──
-    try:
-        request = RunReportRequest(
-            property=resource,
-            metrics=metrics,
-            date_ranges=date_ranges,
+    summary_req = RunReportRequest(
+        property=resource, metrics=metrics, date_ranges=date_ranges,
+        dimension_filter=dimension_filter,
+    )
+    bydate_req = RunReportRequest(
+        property=resource, dimensions=[Dimension(name="date")],
+        metrics=[Metric(name="activeUsers"), Metric(name="newUsers")],
+        date_ranges=date_ranges,
+        order_bys=[OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name="date"))],
+        dimension_filter=dimension_filter,
+    )
+
+    def _breakdown_req(dimension, limit):
+        kwargs = dict(
+            property=resource, dimensions=[Dimension(name=dimension)], metrics=metrics,
+            date_ranges=date_ranges, metric_aggregations=[MetricAggregation.TOTAL],
+            # Order by active users descending so the cap keeps the busiest rows.
+            order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="activeUsers"), desc=True)],
             dimension_filter=dimension_filter,
         )
-        response = client.run_report(request)
-    except Exception as exc:
-        return {"error": f"Google Analytics request failed: {exc}"}
-    out["summary"] = _summary(response)
+        if limit is not None:
+            kwargs["limit"] = limit
+        return RunReportRequest(**kwargs)
 
-    # ── Time-series for the trend chart: by date, ascending ──
-    try:
-        request = RunReportRequest(
-            property=resource,
-            dimensions=[Dimension(name="date")],
-            metrics=[Metric(name="activeUsers"), Metric(name="newUsers")],
-            date_ranges=date_ranges,
-            order_bys=[OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name="date"))],
-            dimension_filter=dimension_filter,
-        )
-        response = client.run_report(request)
-    except Exception as exc:
-        return {"error": f"Google Analytics request failed: {exc}"}
-    out["byDate"] = {"rows": _date_rows(response)}
-
-    # ── Dimension breakdowns ──
+    # (out_key, request, parse(response) -> value stored at out[key])
+    jobs = [
+        ("summary", summary_req, lambda r: _summary(r)),
+        ("byDate", bydate_req, lambda r: {"rows": _date_rows(r)}),
+    ]
     for bucket, dimension, limit in _BREAKDOWNS:
-        try:
-            kwargs = dict(
-                property=resource,
-                dimensions=[Dimension(name=dimension)],
-                metrics=metrics,
-                date_ranges=date_ranges,
-                metric_aggregations=[MetricAggregation.TOTAL],
-                # Order by active users descending so the cap keeps the busiest rows.
-                order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="activeUsers"), desc=True)],
-                dimension_filter=dimension_filter,
-            )
-            if limit is not None:
-                kwargs["limit"] = limit
-            request = RunReportRequest(**kwargs)
-            response = client.run_report(request)
-        except Exception as exc:
-            return {"error": f"Google Analytics request failed: {exc}"}
-        out[bucket] = {
-            "rows": _rows(response),
-            "totals": _totals(response),
-        }
+        jobs.append(
+            (bucket, _breakdown_req(dimension, limit),
+             lambda r: {"rows": _rows(r), "totals": _totals(r)})
+        )
+
+    def _run(job):
+        key, req, parse = job
+        return key, parse(client.run_report(req))
+
+    out: dict = {"configured": True}
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
+            for key, value in pool.map(_run, jobs):
+                out[key] = value
+    except Exception as exc:
+        return {"error": f"Google Analytics request failed: {exc}"}
     return out
 
 

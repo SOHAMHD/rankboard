@@ -40,10 +40,16 @@ GA4_SECTIONS = (
     {"key": "users_overview", "dimensions": [],
      "metrics": ["activeUsers", "newUsers", "totalUsers", "userEngagementDuration", "engagedSessions", "sessions"],
      "limit": None, "returning": True},
+    # Daily users time-series that backs the GA4 "Users Overview" line chart in the
+    # report. Dimensioned by date; sorted into date order downstream (report_document).
+    {"key": "users_trend", "dimensions": ["date"],
+     "metrics": ["activeUsers", "newUsers"],
+     "limit": None, "order_by_dim": True},
     {"key": "by_channel", "dimensions": ["sessionDefaultChannelGroup"],
      "metrics": ["totalUsers", "newUsers", "activeUsers", "engagedSessions", "userEngagementDuration"],
      "limit": None},
-    {"key": "by_country_city", "dimensions": ["country", "city"],
+    # Region added between country and city so the report can show state/region.
+    {"key": "by_country_city", "dimensions": ["country", "region", "city"],
      "metrics": ["activeUsers", "newUsers", "engagedSessions", "engagementRate", "userEngagementDuration"],
      "limit": 50},
     {"key": "by_landing_page", "dimensions": ["landingPagePlusQueryString"],
@@ -241,8 +247,11 @@ def _ga4_run_section(client, resource, section, date_range, property_id) -> dict
             metric_aggregations=[MetricAggregation.TOTAL],
         )
         # Order/limit only make sense WITH a dimension; the dimensionless overview
-        # is a single aggregate row.
-        if dims and chunk:
+        # is a single aggregate row. A time-series section orders by its (date)
+        # dimension ascending; everything else orders by its first metric desc.
+        if dims and section.get("order_by_dim"):
+            kwargs["order_bys"] = [OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name=dims[0]), desc=False)]
+        elif dims and chunk:
             kwargs["order_bys"] = [OrderBy(metric=OrderBy.MetricOrderBy(metric_name=chunk[0]), desc=True)]
         if dims and section["limit"]:
             kwargs["limit"] = section["limit"]
@@ -398,10 +407,10 @@ def fetch_gsc(site_url, cur_range: tuple[str, str], prev_range: tuple[str, str])
     }
 
 
-# ── shared ────────────────────────────────────────────────────────────────────
+# -- shared --------------------------------------------------------------------
 def _delta(current, previous):
-    """current - previous, or None when either is missing. (For GSC `position`
-    a NEGATIVE delta is an IMPROVEMENT, same rank convention as ranks/Moz.)"""
+    """current - previous, or None when either is missing. (For GSC `position` a
+    NEGATIVE delta is an IMPROVEMENT, same rank convention as ranks/Moz.)"""
     if current is None or previous is None:
         return None
     value = current - previous

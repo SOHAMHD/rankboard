@@ -108,7 +108,10 @@ def download_report_pdf(
     a SYNC handler on purpose — FastAPI runs it in a worker thread, so the
     Playwright sync API has no running asyncio loop to clash with."""
     version = report_service.get_version(db, version_id, include_data=True)
-    pdf_bytes = report_pdf.render_pdf(version)
+    # Pass the resolved scalar blobs so inserted-data chips in edited narrative
+    # text render their frozen values in the PDF (not just the on-screen view).
+    blobs = report_service.available_blobs(db, version_id)
+    pdf_bytes = report_pdf.render_pdf(version, blobs)
     filename = report_pdf.pdf_filename(version)
     return Response(
         content=pdf_bytes,

@@ -293,6 +293,17 @@ def gather(
         "items": [{"url": u} for u in backlinks_data["urls"]],
     }
 
+    # ── posts (blog + LinkedIn content links): a plain per-project DB read that
+    # always succeeds (an empty list is "none added", not an error).
+    post_rows = db.execute(
+        "SELECT kind, url, title FROM posts WHERE project_id = ? ORDER BY created_at DESC, id DESC",
+        (project_id,),
+    ).fetchall()
+    posts_section = {
+        "blogs": [{"url": r["url"], "title": r["title"]} for r in post_rows if r["kind"] == "blog"],
+        "linkedin": [{"url": r["url"], "title": r["title"]} for r in post_rows if r["kind"] == "linkedin"],
+    }
+
     blob = {
         "schema_version": BLOB_SCHEMA_VERSION,
         "period_key": period_key,
@@ -323,6 +334,7 @@ def gather(
             "gsc":       {"present": gsc_outcome["ok"],
                           "reason": None if gsc_outcome["ok"] else gsc_outcome["reason"]},
             "backlinks": {"present": True, "reason": None},
+            "posts": {"present": True, "reason": None},
         },
         "sections": {
             "ranks": ranks_section,
@@ -331,6 +343,7 @@ def gather(
             "ga4": ga4_section,   # live-fetched + frozen (None when the fetch failed)
             "gsc": gsc_section,   # live-fetched + frozen (None when the fetch failed)
             "backlinks": backlinks_section,
+            "posts": posts_section,
         },
         "registry": registry.manifest(),
     }

@@ -183,6 +183,9 @@ function renderDocNodes(nodes, blobsByName, keyPrefix) {
 export function HeaderBlock({ block }) {
   return (
     <div className="bg-white border border-stone-200 rounded-xl p-5">
+      {block.clientLogo ? (
+        <img src={block.clientLogo} alt="Client logo" className="h-10 mb-2 object-contain" />
+      ) : null}
       <p className="text-[11px] font-semibold uppercase tracking-wider text-orange-600">{block.title}</p>
       <h2 className="text-xl font-bold text-stone-900 font-display mt-0.5">{block.projectName || "Report"}</h2>
       <p className="text-sm text-stone-500 mt-0.5">
@@ -232,10 +235,10 @@ export function NarrativeBlock({ block, blobsByName }) {
   );
 }
 
-export function MetricGridBlock({ block }) {
+export function MetricGridBlock({ block, hideTitle }) {
   return (
     <Card>
-      <SectionTitle>{block.title}</SectionTitle>
+      {!hideTitle && block.title ? <SectionTitle>{block.title}</SectionTitle> : null}
       {block.available === false ? (
         <UnavailableNote reason={block.unavailableReason} />
       ) : (
@@ -306,14 +309,14 @@ function cell(col, cells) {
 // control bar, and report toggles via onToggleRow(rowIndexIntoAllRows, checked)
 // / onBulk("all"|"none"|N). Read-only (default, incl. locked/sent + PDF parity):
 // no checkboxes, only the selected rows are shown.
-export function DataTableBlock({ block, selectable = false, onToggleRow, onBulk }) {
+export function DataTableBlock({ block, selectable = false, onToggleRow, onBulk, hideTitle }) {
   const columns = block.columns || [];
   const allRows = block.rows || [];
   const rows = selectable ? allRows : allRows.filter(rowIncluded);
   const selectedCount = allRows.filter(rowIncluded).length;
   return (
     <Card>
-      <SectionTitle>{block.title}</SectionTitle>
+      {!hideTitle && block.title ? <SectionTitle>{block.title}</SectionTitle> : null}
       {block.available === false ? (
         <UnavailableNote reason={block.unavailableReason} />
       ) : allRows.length === 0 ? (
@@ -383,11 +386,24 @@ export function DataTableBlock({ block, selectable = false, onToggleRow, onBulk 
   );
 }
 
-export function ChartBlock({ block }) {
+export function ChartBlock({ block, hideTitle }) {
   const points = block.points || [];
+  // Series are data-driven: GSC sends clicks/impressions, GA4 sends
+  // activeUsers/newUsers, etc. Fall back to the GSC pair for legacy blocks.
+  const series =
+    block.series && block.series.length
+      ? block.series
+      : [
+          { key: "clicks", label: "Clicks", type: "count" },
+          { key: "impressions", label: "Impressions", type: "count" },
+        ];
+  const palette = [COLOR_CLICKS, COLOR_IMPRESSIONS, "#15b41f", "#e0362c"];
+  // Two series with very different scales (clicks vs impressions) read best on a
+  // dual axis; same-scale pairs (active/new users) still look fine dual.
+  const dual = series.length === 2;
   return (
     <Card>
-      <SectionTitle>{block.title}</SectionTitle>
+      {!hideTitle && block.title ? <SectionTitle>{block.title}</SectionTitle> : null}
       {block.available === false || points.length === 0 ? (
         <UnavailableNote reason={block.unavailableReason} />
       ) : (
@@ -396,11 +412,24 @@ export function ChartBlock({ block }) {
             <CartesianGrid strokeDasharray="3 3" stroke="#eef0f5" vertical={false} />
             <XAxis dataKey="x" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={{ stroke: "#e7eaf0" }} minTickGap={24} />
             <YAxis yAxisId="left" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={false} allowDecimals={false} width={44} />
-            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={false} allowDecimals={false} width={48} />
+            {dual && (
+              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={false} allowDecimals={false} width={48} />
+            )}
             <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e7eaf0", boxShadow: "0 4px 16px rgba(18,24,38,0.08)" }} />
             <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" />
-            <Line yAxisId="left" type="monotone" dataKey="clicks" name="Clicks" stroke={COLOR_CLICKS} strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
-            <Line yAxisId="right" type="monotone" dataKey="impressions" name="Impressions" stroke={COLOR_IMPRESSIONS} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+            {series.map((s, i) => (
+              <Line
+                key={s.key}
+                yAxisId={dual && i === 1 ? "right" : "left"}
+                type="monotone"
+                dataKey={s.key}
+                name={s.label || s.key}
+                stroke={palette[i % palette.length]}
+                strokeWidth={2.3}
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+            ))}
           </LineChart>
         </ResponsiveContainer>
       )}
@@ -412,7 +441,7 @@ export function ChartBlock({ block }) {
 // the full backlink volume even when the list is trimmed) and add a "showing X
 // of Y" hint when a selection is active. `selectable` adds per-item checkboxes +
 // the Top-N bar; read-only shows only the selected items, renumbered 1..k.
-export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk }) {
+export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk, hideTitle }) {
   const allItems = block.items || [];
   const items = selectable ? allItems : allItems.filter(rowIncluded);
   const selectedCount = allItems.filter(rowIncluded).length;
@@ -420,14 +449,14 @@ export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk 
   if (allItems.length === 0) {
     return (
       <Card>
-        <SectionTitle>{block.title}</SectionTitle>
+        {!hideTitle && block.title ? <SectionTitle>{block.title}</SectionTitle> : null}
         <p className="text-sm text-stone-400 py-1">No new backlinks recorded for this period.</p>
       </Card>
     );
   }
   return (
     <Card>
-      <SectionTitle>{block.title}</SectionTitle>
+      {!hideTitle && block.title ? <SectionTitle>{block.title}</SectionTitle> : null}
       <p className="text-xs text-stone-500 mb-2">
         <span className="font-data font-semibold text-stone-700">{total}</span> new backlink
         {total === 1 ? "" : "s"} this period
@@ -484,6 +513,44 @@ export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk 
   );
 }
 
+// Editable Targets & Goals grid (read-only view). Two labelled groups
+// (Previous / Current targets) x six team-entered fields, plus optional notes.
+// Values are MANUAL (typed in the editor), so they're the one grid the editor
+// lets you edit; empty cells show a dash.
+export function TargetsGridBlock({ block, hideTitle }) {
+  const columns = block.columns || [];
+  const fields = block.fields || [];
+  const values = block.values || {};
+  return (
+    <Card>
+      {!hideTitle && block.title ? <SectionTitle>{block.title}</SectionTitle> : null}
+      {columns.map((col, ci) => (
+        <div
+          key={col.key}
+          className={ci < columns.length - 1 ? "mb-4 pb-4 border-b-2 border-blue-600" : ""}
+        >
+          <h4 className="text-sm font-semibold text-blue-700 mb-2">{col.label}</h4>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {fields.map((f) => {
+              const v = (values[col.key] || {})[f.key];
+              const shown = v === null || v === undefined || v === "" ? "\u2014" : String(v);
+              return (
+                <div key={f.key}>
+                  <p className="text-xs text-stone-500 underline">{f.label}</p>
+                  <p className="text-lg font-bold text-blue-700 font-data leading-tight mt-0.5">{shown}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      {block.notes ? (
+        <p className="report-prose text-stone-700 mt-3 whitespace-pre-wrap">{block.notes}</p>
+      ) : null}
+    </Card>
+  );
+}
+
 // One block, read-only, dispatched by type. blobsByName resolves narrative chips.
 export function Block({ block, blobsByName }) {
   switch (block.type) {
@@ -499,6 +566,8 @@ export function Block({ block, blobsByName }) {
       return <ChartBlock block={block} />;
     case "backlinks_list":
       return <BacklinksBlock block={block} />;
+    case "targets_grid":
+      return <TargetsGridBlock block={block} />;
     default:
       return null;
   }

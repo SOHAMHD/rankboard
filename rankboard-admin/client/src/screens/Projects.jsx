@@ -124,10 +124,17 @@ export function ProjectsView({ user, onOpenProject, onPeople, onLogout }) {
   }, []);
 
   const toggleProject = async (p) => {
+    // Optimistic: flip the switch in the UI immediately, then persist in the
+    // background. Only the `active` flag changes, so there's no need to re-fetch
+    // the whole list — we just patch this project's row in local state. On
+    // failure we revert and surface the error.
+    const next = !p.active;
+    setProjects((list) => list.map((x) => (x.id === p.id ? { ...x, active: next } : x)));
+    setError(null);
     try {
-      await api(`/projects/${p.id}`, { method: "PATCH", body: { active: !p.active } });
-      await refresh();
+      await api(`/projects/${p.id}`, { method: "PATCH", body: { active: next } });
     } catch (err) {
+      setProjects((list) => list.map((x) => (x.id === p.id ? { ...x, active: p.active } : x)));
       setError(err.message);
     }
   };

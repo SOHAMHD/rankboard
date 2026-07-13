@@ -6,7 +6,9 @@
    to navigate and review. The rule of thumb: split when a file has
    more than one reason to change.
    ════════════════════════════════════════════════════════════════════ */
-import { BarChart3, Eye, LogOut, Users, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { BarChart3, Eye, KeyRound, LoaderCircle, LogOut, Mail, Users, X } from "lucide-react";
+import { api } from "./api";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
 
@@ -46,7 +48,7 @@ export const roleLabel = (role) => ROLE_LABELS[role] || role;
 export const ROLE_DESCRIPTIONS = {
   "Super Admin": "Full control. Onboards people and assigns roles.",
   "Admin": "Also called Manager. Full project control; authors reports and sends them to clients.",
-  "Team": "Sees every project. Authors reports, but can't send them to clients.",
+  "Team": "Sees only assigned projects. Authors reports, but can't send them to clients.",
   "Client": "Permissions to be decided — most likely read-only.",
 };
 
@@ -81,7 +83,9 @@ export const BTN_GHOST =
 export const can = (user, action) => !!user?.permissions?.[action];
 
 export function TopBar({ user, onLogout, onPeople, onHome }) {
+  const [showPw, setShowPw] = useState(false);
   return (
+    <>
     <header className="bg-white border-b border-stone-200 sticky top-0 z-10">
       <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
         <button onClick={onHome} className="flex items-center gap-2" aria-label="Go to projects">
@@ -91,7 +95,7 @@ export function TopBar({ user, onLogout, onPeople, onHome }) {
           <span className="font-bold text-stone-900 font-display">RankBoard</span>
         </button>
         <div className="flex items-center gap-2 sm:gap-3">
-          {onPeople && can(user, "manageUsers") && (
+          {onPeople && (can(user, "manageUsers") || can(user, "assignProjects")) && (
             <button
               onClick={onPeople}
               className="inline-flex items-center gap-1.5 text-sm font-medium text-stone-600 hover:text-stone-900 px-2.5 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
@@ -110,6 +114,14 @@ export function TopBar({ user, onLogout, onPeople, onHome }) {
           )}
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ROLE_STYLES[user.role]}`}>{roleLabel(user.role)}</span>
           <button
+            onClick={() => setShowPw(true)}
+            aria-label="Change password"
+            title="Change password"
+            className="p-1.5 rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors"
+          >
+            <KeyRound size={16} />
+          </button>
+          <button
             onClick={onLogout}
             aria-label="Sign out"
             title="Sign out"
@@ -120,6 +132,8 @@ export function TopBar({ user, onLogout, onPeople, onHome }) {
         </div>
       </div>
     </header>
+    {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} />}
+    </>
   );
 }
 
@@ -192,5 +206,141 @@ export function Toggle({ on, onClick }) {
         }`}
       />
     </button>
+  );
+}
+
+
+/* ── Change password: verify it's really you via an emailed one-time code,
+   then set a new password. When the email step is frozen (local dev) the code
+   step is skipped and the user sets a new password directly. ── */
+export function ChangePasswordModal({ onClose }) {
+  const [otpRequired, setOtpRequired] = useState(null); // null = still loading the config
+  const [phase, setPhase] = useState("request"); // request | verify | done (OTP mode only)
+  const [emailSentTo, setEmailSentTo] = useState(null);
+  const [code, setCode] = useState("");
+  const [pw1, setPw1] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api("/auth/config")
+      .then((d) => setOtpRequired(!!d.passwordOtpRequired))
+      .catch(() => setOtpRequired(true)); // safe default: require the code
+  }, []);
+
+  const requestCode = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const d = await api("/auth/password/request-code", { method: "POST" });
+      setEmailSentTo(d.emailSentTo);
+      setPhase("verify");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (pw1.length < 8) return setError("Password needs at least 8 characters.");
+    if (pw1 !== pw2) return setError("The two passwords don't match.");
+    setBusy(true);
+    setError(null);
+    try {
+      const body = otpRequired ? { code: code.trim(), newPassword: pw1 } : { newPassword: pw1 };
+      await api("/auth/password/change", { method: "POST", body });
+      setPhase("done");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const passwordFields = (
+    <>
+      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">New password</label>
+      <input
+        type="password"
+        value={pw1}
+        onChange={(e) => setPw1(e.target.value)}
+        placeholder="At least 8 characters"
+        autoFocus
+        className={`${INPUT_CLS} mb-4`}
+      />
+      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Confirm new password</label>
+      <input
+        type="password"
+        value={pw2}
+        onChange={(e) => setPw2(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        placeholder="Same again"
+        className={INPUT_CLS}
+      />
+    </>
+  );
+
+  return (
+    <Modal title="Change password" onClose={onClose} wide>
+      {otpRequired === null ? (
+        <div className="py-8 flex justify-center">
+          <LoaderCircle size={20} className="text-orange-600 animate-spin" />
+        </div>
+      ) : phase === "done" ? (
+        <>
+          <p className="text-sm text-stone-600 -mt-0.5 mb-4">
+            Your password has been changed. Use the new one next time you sign in.
+          </p>
+          <button onClick={onClose} className={`${BTN_PRIMARY} w-full py-2.5`}>Done</button>
+        </>
+      ) : !otpRequired ? (
+        <>
+          <p className="text-sm text-stone-500 -mt-0.5 mb-4">Choose a new password.</p>
+          {passwordFields}
+          <ErrorNote>{error}</ErrorNote>
+          <button onClick={submit} disabled={busy || !pw1 || !pw2} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
+            {busy ? <LoaderCircle size={16} className="animate-spin" /> : "Update password"}
+          </button>
+        </>
+      ) : phase === "request" ? (
+        <>
+          <p className="text-sm text-stone-500 -mt-0.5 mb-4">
+            For your security we'll email you a one-time code to confirm it's you, then you can set a new password.
+          </p>
+          <ErrorNote>{error}</ErrorNote>
+          <button onClick={requestCode} disabled={busy} className={`${BTN_PRIMARY} w-full mt-2 py-2.5`}>
+            {busy ? <LoaderCircle size={16} className="animate-spin" /> : (<><Mail size={15} /> Email me a code</>)}
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-stone-500 -mt-0.5 mb-4">
+            Enter the 6-digit code we sent to {emailSentTo || "your email"}, then choose a new password.
+          </p>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Code</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            placeholder="123456"
+            autoFocus
+            className={`${INPUT_CLS} mb-4 text-center tracking-[0.4em]`}
+          />
+          {passwordFields}
+          <ErrorNote>{error}</ErrorNote>
+          <button onClick={submit} disabled={busy || !code || !pw1 || !pw2} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
+            {busy ? <LoaderCircle size={16} className="animate-spin" /> : "Update password"}
+          </button>
+          <button onClick={requestCode} disabled={busy} className="w-full text-xs text-stone-400 hover:text-stone-600 mt-3 transition-colors">
+            Resend code
+          </button>
+        </>
+      )}
+    </Modal>
   );
 }

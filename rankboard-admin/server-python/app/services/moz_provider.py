@@ -1,160 +1,140 @@
-"""MOZ PROVIDER — domain Authority & link metrics from the Moz API.
+"""MOZ PROVIDER - domain Authority & link metrics from the Moz API.
 
-The modern Moz API is JSON-RPC 2.0 over a SINGLE endpoint
-(https://api.moz.com/jsonrpc), authenticated with an `x-moz-token` header —
-NOT the legacy Access ID / Secret Key HMAC. The token comes from
-config.MOZ_API_TOKEN, loaded from .env the same way DataForSEO / Resend are.
+This account has BOTH kinds of Moz credentials, so the provider supports both
+and picks automatically:
 
-Moz's quota is tiny, so this is NEVER called on page load — only on an explicit
-refresh. fetch_moz_metrics() is the single entry point so a future scheduled
-refresh can reuse identical logic: it normalizes the domain, makes one POST
-(data.site.metrics.fetch), and maps the result into a flat dict, defensively —
-any missing field becomes None rather than raising. On
-an HTTP error, an auth failure (401/403), a transport error, or a top-level
-JSON-RPC error it raises MozApiError with a readable message, so the endpoint
-can return a friendly 502 instead of a 500 crash.
+  1. Links API v2 (Access ID + Secret Key) - HTTP Basic auth, the preferred path
+     when MOZ_ACCESS_ID + MOZ_SECRET_KEY are set:
+        POST https://lsapi.seomoz.com/v2/url_metrics
+        Authorization: Basic base64("<ACCESS_ID>:<SECRET_KEY>")
+        body: {"targets": ["<root domain>"]}
+
+  2. New JSON-RPC API (single token) - x-moz-token header, used when only
+     MOZ_API_TOKEN is set:
+        POST https://api.moz.com/jsonrpc  (method data.site.metrics.fetch)
+
+Credentials load from config (from .env). Quota is tiny, so this is NEVER called
+on page load - only on an explicit refresh. fetch_moz_metrics() is the single
+entry point and maps whichever response into the SAME flat dict defensively - any
+missing field becomes None. On HTTP/auth/transport failure it raises MozApiError
+with a readable message so the endpoint returns a friendly 502, never a 500.
 
 Uses urllib (no extra dependency), matching email_service / rank_provider.
 """
+import base64
 import json
 import logging
 import urllib.error
 import urllib.request
 import uuid
 
-from ..config import MOZ_API_TOKEN
+from ..config import MOZ_ACCESS_ID, MOZ_SECRET_KEY, MOZ_API_TOKEN
 
 logger = logging.getLogger(__name__)
 
-MOZ_API_URL = "https://api.moz.com/jsonrpc"
-_TIMEOUT = 20  # seconds — short enough to fail fast when Moz is unreachable
+LINKS_API_URL = "https://lsapi.seomoz.com/v2/url_metrics"
+JSONRPC_URL = "https://api.moz.com/jsonrpc"
+_TIMEOUT = 20  # seconds - fail fast when Moz is unreachable
 
 
 class MozApiError(Exception):
-    """Raised on any Moz API failure (HTTP error, auth failure, transport
-    error, or a top-level JSON-RPC error) with a human-readable message."""
+    """Raised on any Moz API failure with a human-readable message."""
 
 
-def normalize_domain(raw: str | None) -> str:
-    """ "https://www.InfyApp.com/about?x=1" -> "infyapp.com".
-
-    Strip the scheme, drop "www.", and strip any path/query → the bare root
-    domain Moz expects. Returns "" for empty/garbage input so the caller can
-    decide there's nothing to look up."""
+def normalize_domain(raw):
+    """ "https://www.InfyApp.com/about?x=1" -> "infyapp.com". Strip scheme, drop
+    "www.", strip path/query. Returns "" for empty/garbage input."""
     d = (raw or "").strip().lower()
-    d = d.split("://")[-1]   # drop scheme
-    d = d.split("/")[0]      # drop path
-    d = d.split("?")[0]      # drop query (defensive — the path split usually covers it)
+    d = d.split("://")[-1]
+    d = d.split("/")[0]
+    d = d.split("?")[0]
     if d.startswith("www."):
         d = d[4:]
     return d
 
 
-def _rpc(method: str, data: dict) -> dict:
-    """POST one JSON-RPC call to Moz and return the FULL parsed response body.
-
-    Translates every failure mode into MozApiError: a missing token, an HTTP
-    error (401/403 auth, other 4xx/5xx), a transport error, or a top-level
-    JSON-RPC `error` object in the body (which arrives with HTTP 200)."""
-    if not MOZ_API_TOKEN:
-        raise MozApiError("Moz is not configured on the server (set MOZ_API_TOKEN).")
-
-    # Moz requires the JSON-RPC request id to be at least 24 chars
-    # (a too-short id is rejected with -32654 "Minimum Request ID length is 24").
-    # uuid4().hex is 32 hex chars, which satisfies that and is unique per call.
-    payload = {"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": method, "params": {"data": data}}
-    req = urllib.request.Request(
-        MOZ_API_URL,
-        data=json.dumps(payload).encode(),
-        headers={"x-moz-token": MOZ_API_TOKEN, "Content-Type": "application/json"},
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as res:
-            raw_body = res.read()
-            # urllib only returns here for 2xx, but log defensively if the
-            # status is anything other than 200.
-            if res.status != 200:
-                logger.warning(
-                    "Moz %s non-200 response: status=%s body=%s",
-                    method, res.status, raw_body.decode(errors="replace")[:1000],
-                )
-            body = json.loads(raw_body)
-    except urllib.error.HTTPError as exc:
-        detail = ""
+def _request(url, headers):
+    """POST helper returning parsed JSON; classifies failures into MozApiError."""
+    def do(body):
+        req = urllib.request.Request(
+            url, data=json.dumps(body).encode(),
+            headers={**headers, "Content-Type": "application/json"}, method="POST")
         try:
-            detail = exc.read().decode(errors="replace")
-        except Exception:
-            pass
-        # Log the failing status + response body (truncated; the Moz JSON-RPC
-        # error message lives here and is the key to diagnosing rejected calls).
-        logger.warning("Moz %s error response: status=%s body=%s", method, exc.code, detail[:1000])
-        if exc.code in (401, 403):
-            raise MozApiError("Moz authentication failed — check MOZ_API_TOKEN.") from exc
-        raise MozApiError(f"Moz API returned HTTP {exc.code}. {detail[:200]}".strip()) from exc
-    except urllib.error.URLError as exc:
-        raise MozApiError(f"Could not reach the Moz API: {exc.reason}") from exc
-    except Exception as exc:  # malformed JSON, etc.
-        raise MozApiError(f"Moz API request failed: {exc}") from exc
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as res:
+                raw = res.read()
+                if res.status != 200:
+                    logger.warning("Moz non-200: status=%s body=%s",
+                                   res.status, raw.decode(errors="replace")[:1000])
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode(errors="replace")
+            except Exception:
+                pass
+            logger.warning("Moz error: status=%s body=%s", exc.code, detail[:1000])
+            if exc.code in (401, 403):
+                raise MozApiError("Moz authentication failed - check your Moz credentials.") from exc
+            raise MozApiError(f"Moz API returned HTTP {exc.code}. {detail[:200]}".strip()) from exc
+        except urllib.error.URLError as exc:
+            raise MozApiError(f"Could not reach the Moz API: {exc.reason}") from exc
+        except Exception as exc:
+            raise MozApiError(f"Moz API request failed: {exc}") from exc
+    return do
 
-    # A JSON-RPC error object means the call was rejected even with HTTP 200.
+
+def _map_metrics(normalized, m, raw):
+    """Map either API's metric object into the shared flat dict."""
+    linking_domains = (m.get("root_domains_to_root_domain")
+                       or m.get("root_domains_to_subdomain")
+                       or m.get("linking_root_domains"))
+    inbound_links = (m.get("external_pages_to_root_domain")
+                     or m.get("external_pages_to_subdomain")
+                     or m.get("pages_to_root_domain")
+                     or m.get("external_links"))
+    return {
+        "domain": normalized,
+        "domain_authority": m.get("domain_authority"),
+        "linking_domains": linking_domains,
+        "inbound_links": inbound_links,
+        "spam_score": m.get("spam_score"),
+        "raw": raw,
+    }
+
+
+def _fetch_links_api(normalized):
+    """Moz Links API v2 (Access ID + Secret Key, Basic auth)."""
+    token = base64.b64encode(f"{MOZ_ACCESS_ID}:{MOZ_SECRET_KEY}".encode()).decode()
+    body = _request(LINKS_API_URL, {"Authorization": f"Basic {token}"})({"targets": [normalized]})
+    results = (body or {}).get("results") or []
+    return _map_metrics(normalized, results[0] if results else {}, {"url_metrics": body})
+
+
+def _fetch_jsonrpc(normalized):
+    """New Moz JSON-RPC API (single x-moz-token). Request id must be >= 24 chars."""
+    payload_body = {"site_query": {"query": normalized, "scope": "domain"}}
+    call = _request(JSONRPC_URL, {"x-moz-token": MOZ_API_TOKEN})
+    body = call({"jsonrpc": "2.0", "id": uuid.uuid4().hex,
+                 "method": "data.site.metrics.fetch", "params": {"data": payload_body}})
     if isinstance(body, dict) and body.get("error"):
         err = body["error"]
         msg = err.get("message") if isinstance(err, dict) else str(err)
         raise MozApiError(f"Moz API error: {msg}")
+    sm = (body.get("result") or {}).get("site_metrics") or {}
+    return _map_metrics(normalized, sm, {"site_metrics": body})
 
-    return body if isinstance(body, dict) else {}
 
-
-def fetch_moz_metrics(domain: str) -> dict:
-    """Fetch Moz authority metrics for a domain. The ONE entry point, so a
-    future scheduled refresh reuses identical logic.
-
-    Returns a flat dict:
-        {
-          "domain": "<normalized root domain>",
-          "domain_authority": int | None,
-          "linking_domains":  int | None,
-          "inbound_links":    int | None,
-          "spam_score":       float | None,
-          "raw": {"site_metrics": <full body>},
-        }
-
-    Any field Moz omits maps to None rather than raising. The full JSON
-    response is captured under "raw" (stored as raw_json for debugging).
-    Raises MozApiError on HTTP/auth/transport failures or a JSON-RPC error.
-
-    NOTE: there is intentionally no ranking-keywords call. Moz exposes no
-    "count" method (every variant returns -32601 Action not found), and the
-    only working endpoint, data.site.ranking.keywords.list, returns a single
-    paged slice with no total — so a real keyword count isn't obtainable on
-    this plan without burning quota paginating. The tile was dropped instead."""
+def fetch_moz_metrics(domain):
+    """Fetch Moz authority metrics for a domain, choosing the auth scheme by which
+    credentials are configured. Returns the shared flat dict; raises MozApiError
+    on failure."""
     normalized = normalize_domain(domain)
     if not normalized:
         raise MozApiError("This project has no domain to look up on Moz.")
-
-    raw: dict = {}
-
-    # ── Call 1: site metrics (DA, linking domains, inbound links, spam) ──
-    # Method is `data.site.metrics.fetch` (the `data.` prefix is REQUIRED — Moz
-    # returns "Action not found: SiteMetricsFetch" without it). Scope must be one
-    # of domain/subdomain/subfolder/url; "root_domain" is rejected (-32652).
-    body1 = _rpc("data.site.metrics.fetch", {"site_query": {"query": normalized, "scope": "domain"}})
-    raw["site_metrics"] = body1
-    sm = (body1.get("result") or {}).get("site_metrics") or {}
-
-    domain_authority = sm.get("domain_authority")
-    # Prefer root-domain link counts; fall back to subdomain counts when absent.
-    linking_domains = sm.get("root_domains_to_root_domain") or sm.get("root_domains_to_subdomain")
-    inbound_links = sm.get("external_pages_to_root_domain") or sm.get("external_pages_to_subdomain")
-    spam_score = sm.get("spam_score")
-
-    return {
-        "domain": normalized,
-        "domain_authority": domain_authority,
-        "linking_domains": linking_domains,
-        "inbound_links": inbound_links,
-        "spam_score": spam_score,
-        "raw": raw,
-    }
+    if MOZ_ACCESS_ID and MOZ_SECRET_KEY:
+        return _fetch_links_api(normalized)
+    if MOZ_API_TOKEN:
+        return _fetch_jsonrpc(normalized)
+    raise MozApiError(
+        "Moz is not configured on the server (set MOZ_ACCESS_ID + MOZ_SECRET_KEY, "
+        "or MOZ_API_TOKEN).")

@@ -6,7 +6,7 @@
    <main>. The Rank Ledger fetches its data from the API, derives its
    stats at render time, and refetches after every mutation.
    ════════════════════════════════════════════════════════════════════ */
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   Camera,
@@ -37,6 +37,8 @@ import {
   UserCheck,
   Clock,
   X,
+  KeyRound,
+  Newspaper,
 } from "lucide-react";
 import {
   LineChart,
@@ -56,10 +58,11 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { api, getToken, BASE } from "../api";
-import { Modal, ErrorNote, can, isAuthor, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
+import { Modal, ErrorNote, ChangePasswordModal, can, isAuthor, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { MozOverview } from "./MozOverview";
 import { ReportsPanel } from "./ReportEditor";
 import { BacklinksView } from "./Backlinks";
+import { PostsView } from "./Posts";
 
 // Sidebar navigation, GA4-style: collapsible groups whose sub-items each select
 // a view in the main area. A group given no `children` becomes a plain clickable
@@ -84,6 +87,15 @@ const NAV_GROUPS = [
     children: [
       { id: "rank-live", label: "Live Ledger" },
       { id: "rank-snapshots", label: "Snapshots" },
+    ],
+  },
+  {
+    id: "posts",
+    label: "Posts",
+    icon: Newspaper,
+    children: [
+      { id: "posts-blogs", label: "Blogs" },
+      { id: "posts-linkedin", label: "LinkedIn Posts" },
     ],
   },
   // Childless group → the per-project Backlinks page (single-view tool), sibling
@@ -118,10 +130,19 @@ function groupOf(navId) {
   return NAV_GROUPS.find((g) => (g.children || []).some((c) => c.id === navId));
 }
 
+// Heavy tool panels wrapped in memo so parent re-renders (expanding a nav
+// group, a project refresh, etc.) do not re-render the visible panel unless
+// its own props actually change. Each alias is used exactly once, below.
+const RankLedgerMemo = memo(RankLedger);
+const SnapshotsViewMemo = memo(SnapshotsView);
+const TrafficToolMemo = memo(TrafficTool);
+const SearchConsoleToolMemo = memo(SearchConsoleTool);
+
 export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
   const [project, setProject] = useState(null);
   const [error, setError] = useState(null);
   const [activeNav, setActiveNav] = useState("traffic-overview");
+  const [showPw, setShowPw] = useState(false); // change-password modal
   // Which collapsible nav groups are open. Default: the group holding the
   // initial view, so Traffic starts expanded on Overview.
   const [openGroups, setOpenGroups] = useState(() => {
@@ -132,9 +153,12 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
     setOpenGroups((open) => (open.includes(id) ? open.filter((x) => x !== id) : [...open, id]));
 
   // Authors additionally see the Reports tool; everyone else sees the base nav.
-  const navGroups = isAuthor(user) ? [...NAV_GROUPS, REPORTS_GROUP] : NAV_GROUPS;
+  const navGroups = useMemo(
+    () => (isAuthor(user) ? [...NAV_GROUPS, REPORTS_GROUP] : NAV_GROUPS),
+    [user]
+  );
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       const d = await api(`/projects/${projectId}`);
       setProject(d.project);
@@ -142,7 +166,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
     } catch (err) {
       setError(err.message);
     }
-  };
+  }, [projectId]);
 
   useEffect(() => {
     refresh();
@@ -261,6 +285,14 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
             </div>
           </div>
           <button
+            onClick={() => setShowPw(true)}
+            aria-label="Change password"
+            title="Change password"
+            className="p-1.5 rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors shrink-0"
+          >
+            <KeyRound size={16} />
+          </button>
+          <button
             onClick={onLogout}
             aria-label="Sign out"
             title="Sign out"
@@ -301,14 +333,17 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
         </div>
       </div>
 
+      {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} />}
       <main className="px-6 py-6">
-        {activeNav === "rank-live" && <RankLedger user={user} project={project} onChanged={refresh} />}
-        {activeNav === "rank-snapshots" && <SnapshotsView user={user} project={project} />}
+        {activeNav === "rank-live" && <RankLedgerMemo user={user} project={project} onChanged={refresh} />}
+        {activeNav === "rank-snapshots" && <SnapshotsViewMemo user={user} project={project} />}
         {activeNav === "backlinks" && <BacklinksView user={user} project={project} />}
+        {activeNav === "posts-blogs" && <PostsView user={user} project={project} kind="blog" />}
+        {activeNav === "posts-linkedin" && <PostsView user={user} project={project} kind="linkedin" />}
         {activeNav.startsWith("traffic-") && (
-          <TrafficTool project={project} view={activeNav.slice("traffic-".length)} />
+          <TrafficToolMemo project={project} view={activeNav.slice("traffic-".length)} />
         )}
-        {activeNav === "search-console" && <SearchConsoleTool project={project} />}
+        {activeNav === "search-console" && <SearchConsoleToolMemo project={project} />}
         {activeNav === "authority" && <MozOverview project={project} user={user} />}
         {activeNav === "reports" && isAuthor(user) && <ReportsPanel user={user} project={project} />}
       </main>
@@ -330,21 +365,38 @@ function RankLedger({ user, project, onChanged }) {
   const [showImport, setShowImport] = useState(false);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("");
+  // Stat-box filter: null (all) | "improved" | "declined" | "unranked". Clicking
+  // a stat box narrows the table to that subset; clicking it again (or the
+  // "Tracked" box) clears it. Combines with the text filter (both narrow).
+  const [statFilter, setStatFilter] = useState(null);
+  const toggleStat = (key) => setStatFilter((cur) => (cur === key ? null : key));
   const kws = project.keywords;
 
-  // Filter the rows by keyword term as the user types (case-insensitive).
+  // Filter the rows by the active stat box (if any) AND the typed query.
   const query = filter.trim().toLowerCase();
-  const visibleKws = query ? kws.filter((k) => k.term.toLowerCase().includes(query)) : kws;
+  const visibleKws = useMemo(() => {
+    let list = kws;
+    if (statFilter === "improved")
+      list = list.filter((k) => k.previousRank != null && k.currentRank < k.previousRank);
+    else if (statFilter === "declined")
+      list = list.filter((k) => k.previousRank != null && k.currentRank > k.previousRank);
+    else if (statFilter === "unranked") list = list.filter((k) => k.currentRank == null);
+    if (query) list = list.filter((k) => k.term.toLowerCase().includes(query));
+    return list;
+  }, [kws, query, statFilter]);
 
   const mayAdd = can(user, "addKeyword");
   const mayDelete = can(user, "deleteKeyword");
   const readOnly = !mayAdd && !mayDelete;
 
-  // Derived stats — computed from the data on every render, never stored.
-  const improved = kws.filter((k) => k.previousRank != null && k.currentRank < k.previousRank).length;
-  const declined = kws.filter((k) => k.previousRank != null && k.currentRank > k.previousRank).length;
-  const ranked = kws.filter((k) => k.currentRank != null);
-  const avg = ranked.length ? (ranked.reduce((s, k) => s + k.currentRank, 0) / ranked.length).toFixed(1) : "—";
+  // Derived stats — memoized so typing in the filter does not re-scan the full
+  // keyword list on every keystroke (recomputes only when the keywords change).
+  const { improved, declined, unranked } = useMemo(() => {
+    const improved = kws.filter((k) => k.previousRank != null && k.currentRank < k.previousRank).length;
+    const declined = kws.filter((k) => k.previousRank != null && k.currentRank > k.previousRank).length;
+    const unranked = kws.filter((k) => k.currentRank == null).length;
+    return { improved, declined, unranked };
+  }, [kws]);
 
   const runCheck = async () => {
     setChecking(true);
@@ -424,10 +476,36 @@ function RankLedger({ user, project, onChanged }) {
       )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6 mt-2">
-        <Stat label="Tracked" value={kws.length} />
-        <Stat label="Improved" value={improved} tone="up" />
-        <Stat label="Declined" value={declined} tone="down" />
-        <Stat label="Avg. position" value={avg} />
+        <Stat
+          label="Tracked"
+          value={kws.length}
+          onClick={() => setStatFilter(null)}
+          active={statFilter === null}
+          title="Show all keywords"
+        />
+        <Stat
+          label="Improved"
+          value={improved}
+          tone="up"
+          onClick={() => toggleStat("improved")}
+          active={statFilter === "improved"}
+          title="Show only keywords that moved up"
+        />
+        <Stat
+          label="Declined"
+          value={declined}
+          tone="down"
+          onClick={() => toggleStat("declined")}
+          active={statFilter === "declined"}
+          title="Show only keywords that moved down"
+        />
+        <Stat
+          label="Not ranked"
+          value={unranked}
+          onClick={() => toggleStat("unranked")}
+          active={statFilter === "unranked"}
+          title="Show only keywords that aren't ranking yet"
+        />
       </div>
 
       {(mayAdd || kws.length > 0) && (
@@ -496,7 +574,11 @@ function RankLedger({ user, project, onChanged }) {
               {visibleKws.length === 0 && (
                 <tr>
                   <td colSpan={6} className="px-5 py-8 text-center text-sm text-stone-400">
-                    No keywords match &ldquo;{filter.trim()}&rdquo;.
+                    {query ? (
+                      <>No keywords match &ldquo;{filter.trim()}&rdquo;.</>
+                    ) : (
+                      "No keywords match this filter."
+                    )}
                   </td>
                 </tr>
               )}
@@ -983,6 +1065,15 @@ const VIEW_DEFAULT_DIMENSION = {
   pages: "landingPagePlusQueryString",
 };
 
+// Default METRICS (columns) per Traffic view. Overview shows the fuller set —
+// users, events, key events and average engagement time — so the channel table
+// is richer out of the box (and fills the width). Other views fall back to the
+// two-metric default inside ExploreReport. Sessions is always appended by the
+// report request, so it stays the trailing column.
+const VIEW_DEFAULT_METRICS = {
+  overview: ["activeUsers", "newUsers", "eventCount", "keyEvents", "averageEngagementTime"],
+};
+
 // Dimension picker, organised like GA4's own menu: category ->
 // [user-facing label, GA4 API name]. The API names match the backend's
 // ALLOWED_DIMENSIONS allowlist exactly; selecting one runs a breakdown
@@ -1009,6 +1100,7 @@ const METRICS = {
   "Engagement Rate": "engagementRate",
   "Avg Session Duration": "averageSessionDuration",
   "User Engagement Duration": "userEngagementDuration",
+  "Avg Engagement Time": "averageEngagementTime",
   "Views": "screenPageViews",
   "Event Count": "eventCount",
   "Bounce Rate": "bounceRate",
@@ -1050,7 +1142,7 @@ function metricLabel(apiName) {
 // Rate metrics are fractions (0–1) GA reports as percentages; duration metrics
 // are seconds. Everything else is a plain count. Used for the table cells.
 const RATE_METRICS = new Set(["engagementRate", "bounceRate"]);
-const DURATION_METRICS = new Set(["averageSessionDuration", "userEngagementDuration"]);
+const DURATION_METRICS = new Set(["averageSessionDuration", "userEngagementDuration", "averageEngagementTime"]);
 
 function formatMetric(name, value) {
   if (value == null) return "0";
@@ -1340,6 +1432,7 @@ function TrafficTool({ project, view }) {
             projectId={project.id}
             range={range}
             defaultDimension={VIEW_DEFAULT_DIMENSION[view]}
+            defaultMetrics={VIEW_DEFAULT_METRICS[view]}
           />
         </>
       )}
@@ -1361,9 +1454,9 @@ function TrafficTool({ project, view }) {
    the server returns {error} (HTTP 200) and we show a muted message in place
    of the table — never a crash.
    ════════════════════════════════════════════════════════════════════ */
-function ExploreReport({ projectId, range, defaultDimension }) {
+function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
   const [dimensions, setDimensions] = useState([defaultDimension || "sessionDefaultChannelGroup"]);
-  const [metrics, setMetrics] = useState(["activeUsers", "newUsers"]); // defaults
+  const [metrics, setMetrics] = useState(defaultMetrics || ["activeUsers", "newUsers"]); // defaults
   const [filters, setFilters] = useState([]); // {dimension, operator, value, exclude}
   const [match, setMatch] = useState("AND");
   const [result, setResult] = useState(null); // null = loading
@@ -1686,7 +1779,12 @@ function PickerMenu({ children, onClose }) {
 /* Headline time-series: active + new users per day, GA-style line chart. */
 function TrafficTrendChart({ byDate }) {
   const rows = byDate.rows || [];
-  const chartData = rows.map((r) => ({ ...r, label: formatGADate(r.date) }));
+  // Memoized so the AreaChart only re-renders when the underlying rows change,
+  // not on every parent state change (filter typing, tab switches, etc.).
+  const chartData = useMemo(
+    () => rows.map((r) => ({ ...r, label: formatGADate(r.date) })),
+    [rows]
+  );
 
   return (
     <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-4 sm:p-5">
@@ -1844,26 +1942,32 @@ function ReportResult({ report, onDrill }) {
     ? "line"
     : "bar";
 
-  // Bar: top 15 rows by the first metric; label = cleaned dims joined by " / "
-  // (same label the table uses), wrapped onto 2 lines on the axis.
-  const chartData = rows.slice(0, 15).map((r) => ({
-    name: joinDims(r.dims),
-    value: Number(r.metrics?.[firstMetric]) || 0,
-  }));
+  // All chart-shaping is memoized so the Bar/Donut/Line only re-render when the
+  // rows/metric/dimension actually change — not on unrelated parent re-renders.
+  const { chartData, donutTotal, donutData, lineData } = useMemo(() => {
+    // Bar: top 15 rows by the first metric; label = cleaned dims joined by " / "
+    // (same label the table uses), wrapped onto 2 lines on the axis.
+    const chartData = rows.slice(0, 15).map((r) => ({
+      name: joinDims(r.dims),
+      value: Number(r.metrics?.[firstMetric]) || 0,
+    }));
 
-  // Donut: top 6 categories by the first metric + an "Other" slice; total spans
-  // ALL rows so the tooltip percentages are of the whole.
-  const donutTotal = rows.reduce((s, r) => s + (Number(r.metrics?.[firstMetric]) || 0), 0);
-  const donutTop = rows.slice(0, 6).map((r) => ({ name: joinDims(r.dims), value: Number(r.metrics?.[firstMetric]) || 0 }));
-  const donutRest = rows.slice(6).reduce((s, r) => s + (Number(r.metrics?.[firstMetric]) || 0), 0);
-  const donutData = donutRest > 0 ? [...donutTop, { name: "Other", value: donutRest }] : donutTop;
+    // Donut: top 6 categories by the first metric + an "Other" slice; total
+    // spans ALL rows so the tooltip percentages are of the whole.
+    const donutTotal = rows.reduce((s, r) => s + (Number(r.metrics?.[firstMetric]) || 0), 0);
+    const donutTop = rows.slice(0, 6).map((r) => ({ name: joinDims(r.dims), value: Number(r.metrics?.[firstMetric]) || 0 }));
+    const donutRest = rows.slice(6).reduce((s, r) => s + (Number(r.metrics?.[firstMetric]) || 0), 0);
+    const donutData = donutRest > 0 ? [...donutTop, { name: "Other", value: donutRest }] : donutTop;
 
-  // Line: every row in chronological order by the raw dimension value (GA date
-  // strings sort chronologically); the "date" dimension shows as MM/DD.
-  const lineData = rows
-    .map((r) => ({ raw: String((r.dims || [])[0] ?? ""), value: Number(r.metrics?.[firstMetric]) || 0 }))
-    .sort((a, b) => a.raw.localeCompare(b.raw))
-    .map((d) => ({ name: single === "date" ? formatGADate(d.raw) : d.raw, value: d.value }));
+    // Line: every row in chronological order by the raw dimension value (GA date
+    // strings sort chronologically); the "date" dimension shows as MM/DD.
+    const lineData = rows
+      .map((r) => ({ raw: String((r.dims || [])[0] ?? ""), value: Number(r.metrics?.[firstMetric]) || 0 }))
+      .sort((a, b) => a.raw.localeCompare(b.raw))
+      .map((d) => ({ name: single === "date" ? formatGADate(d.raw) : d.raw, value: d.value }));
+
+    return { chartData, donutTotal, donutData, lineData };
+  }, [rows, firstMetric, single]);
 
   const colCount = dims.length + mets.length;
 
@@ -2278,8 +2382,16 @@ function SearchConsoleTool({ project }) {
   // {error}; a thrown api() error lands in `error`. Either way we show the
   // same muted message in place of the data.
   const failed = error || data?.error;
-  const trendData = (data?.trend || []).map((r) => ({ ...r, label: formatGSCDate(r.date) }));
-  const plotted = SC_METRICS.filter((m) => enabled.includes(m.key));
+  // Memoized so toggling a metric or unrelated state doesn't rebuild the trend
+  // series (and force the chart to re-render) from scratch each time.
+  const trendData = useMemo(
+    () => (data?.trend || []).map((r) => ({ ...r, label: formatGSCDate(r.date) })),
+    [data?.trend]
+  );
+  const plotted = useMemo(
+    () => SC_METRICS.filter((m) => enabled.includes(m.key)),
+    [enabled]
+  );
   const canExport = !!data && !data.error && !!(data.rows && data.rows.length);
 
   return (
@@ -2690,10 +2802,21 @@ function SearchConsoleRowsTable({ label, rows, onPick }) {
    comparison pill, the headline value, and an optional sparkline. Every
    prop beyond label/value is optional, so the simpler Rank Ledger stats
    (which pass only label + value, sometimes a `tone`) render cleanly too. */
-function Stat({ label, value, tone, icon: Icon, delta, deltaDown, spark }) {
+function Stat({ label, value, tone, icon: Icon, delta, deltaDown, spark, onClick, active, title }) {
   const valueClass = tone === "up" ? "text-emerald-600" : tone === "down" ? "text-red-500" : "text-stone-900";
+  const clickable = typeof onClick === "function";
+  const Tag = clickable ? "button" : "div";
+  const cls =
+    "bg-white rounded-xl border shadow-sm p-4 sm:p-5 flex flex-col rise-in " +
+    (active ? "border-orange-400 ring-2 ring-orange-500/30" : "border-stone-200") +
+    (clickable
+      ? " w-full text-left cursor-pointer hover:border-stone-300 hover:shadow transition-all focus:outline-none focus:ring-2 focus:ring-orange-500/40"
+      : "");
   return (
-    <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-4 sm:p-5 flex flex-col rise-in">
+    <Tag
+      className={cls}
+      {...(clickable ? { type: "button", onClick, "aria-pressed": active, title } : {})}
+    >
       {(Icon || delta) && (
         <div className="flex items-center justify-between mb-3">
           {Icon ? (
@@ -2718,7 +2841,7 @@ function Stat({ label, value, tone, icon: Icon, delta, deltaDown, spark }) {
       <p className={`text-2xl font-bold font-data tracking-tight ${valueClass}`}>{value}</p>
       <p className="text-xs font-medium text-stone-500 mt-0.5">{label}</p>
       {spark && spark.length > 1 && <Sparkline data={spark} down={deltaDown} />}
-    </div>
+    </Tag>
   );
 }
 

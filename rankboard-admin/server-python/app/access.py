@@ -3,7 +3,7 @@ user touch?" Both the list filter (GET /api/projects) and the per-route
 guard (require_project_access) call these helpers, so the two can never
 drift apart: change the rule here and both follow.
 
-The rule today: the three staff roles (Super Admin / Admin / Team) see
+The rule today: the global roles (Super Admin / Admin) see
 every project; a Client sees only the projects linked to them in the
 user_projects join table. Unknown roles fall through to the Client path
 (default-deny: no links → no access).
@@ -11,7 +11,7 @@ user_projects join table. Unknown roles fall through to the Client path
 import sqlite3
 
 # Roles that bypass per-project scoping entirely (they see all projects).
-STAFF_ROLES = frozenset({"Super Admin", "Admin", "Team"})
+STAFF_ROLES = frozenset({"Super Admin", "Admin"})
 
 
 def accessible_project_ids(user: sqlite3.Row, db: sqlite3.Connection) -> set[int] | None:

@@ -59,6 +59,10 @@ EMAIL_FROM = os.environ.get("EMAIL_FROM", "RankBoard <onboarding@resend.dev>")
 # refresh endpoint then returns a clear "not configured" message instead of
 # crashing. Quota is tiny, so Moz is only ever called on an explicit refresh.
 MOZ_API_TOKEN = os.environ.get("MOZ_API_TOKEN", "")
+# Moz Links API v2 (legacy-style) credentials: Access ID + Secret Key, used
+# with HTTP Basic auth. Preferred when set; falls back to MOZ_API_TOKEN.
+MOZ_ACCESS_ID = os.environ.get("MOZ_ACCESS_ID", "").strip()
+MOZ_SECRET_KEY = os.environ.get("MOZ_SECRET_KEY", "").strip()
 
 # ── Automatic rank checks (DataForSEO) ──────────────────────────────
 # Leave LOGIN/PASSWORD empty for free SIMULATED mode (random-walk

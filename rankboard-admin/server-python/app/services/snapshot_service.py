@@ -67,12 +67,17 @@ def create_snapshot(
     )
     snapshot_id = cur.lastrowid
 
-    for k in keywords:
-        # current_rank -> rank (NULL stays NULL); term + last_checked copied.
-        db.execute(
+    # current_rank -> rank (NULL stays NULL); term + last_checked copied.
+    # Batched into a single executemany so a project with many keywords is one
+    # round-trip instead of one INSERT per keyword.
+    if keywords:
+        db.executemany(
             "INSERT INTO snapshot_ranks (snapshot_id, keyword_id, term, rank, last_checked)"
             " VALUES (?, ?, ?, ?, ?)",
-            (snapshot_id, k["id"], k["term"], k["current_rank"], k["last_checked"]),
+            [
+                (snapshot_id, k["id"], k["term"], k["current_rank"], k["last_checked"])
+                for k in keywords
+            ],
         )
 
     snap = db.execute("SELECT * FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone()

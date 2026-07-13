@@ -70,12 +70,10 @@ _GA4_METRIC_META = {
 _GA4_TABLES = (
     ("by_channel", "Traffic by Channel", ["Channel"],
      ["totalUsers", "newUsers", "activeUsers", "engagedSessions", "avgEngagementSeconds"]),
-    ("by_country_city", "Users by Country & City", ["Country", "City"],
+    ("by_country_city", "Users by Country & City", ["Country", "Region", "City"],
      ["activeUsers", "newUsers", "engagedSessions", "engagementRate", "avgEngagementSeconds"]),
     ("by_landing_page", "Top Landing Pages", ["Landing page"],
      ["sessions", "activeUsers", "newUsers", "avgEngagementSeconds"]),
-    ("top_pages", "Top Pages", ["Page"],
-     ["screenPageViews", "sessions", "activeUsers", "avgEngagementSeconds"]),
     # Sessions column removed from these four — they show user reach only.
     ("by_device", "Users by Device", ["Device"],
      ["activeUsers", "newUsers"]),
@@ -217,7 +215,8 @@ def _gsc_grid(gsc, present, reason):
 def _gsc_chart(gsc, present, reason):
     trend = (gsc or {}).get("report_month", {}).get("trend", []) if gsc else []
     points = [
-        {"x": (r.get("date") or ""), "clicks": r.get("clicks"), "impressions": r.get("impressions")}
+        {"x": (r.get("date") or ""), "clicks": r.get("clicks"), "impressions": r.get("impressions"),
+         "ctr": r.get("ctr"), "position": r.get("position")}
         for r in trend
     ]
     return {
@@ -231,6 +230,48 @@ def _gsc_chart(gsc, present, reason):
         "series": [
             {"key": "clicks", "label": "Clicks", "type": "count"},
             {"key": "impressions", "label": "Impressions", "type": "count"},
+            {"key": "ctr", "label": "CTR", "type": "percent"},
+            {"key": "position", "label": "Avg. position", "type": "rank"},
+        ],
+        # Four metrics on very different scales -> normalise each line to its own
+        # range so all four are visible (shape over absolute value).
+        "normalize": "series",
+        "points": points,
+    }
+
+
+def _ga4_users_chart(ga4, present, reason):
+    """The GA4 "Users Overview" daily line chart (Active users / New users), seeded
+    from the users_trend section. GA4 returns the date dimension as YYYYMMDD; we
+    normalise to YYYY-MM-DD and sort ascending so the line reads left→right."""
+    sec = _ga4_month_sections(ga4, "report_month").get("users_trend") or {}
+    rows = sec.get("rows", []) or []
+
+    def _fmt_date(d):
+        s = str(d or "")
+        return f"{s[0:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 and s.isdigit() else s
+
+    points = []
+    for r in rows:
+        dims = r.get("dims", []) or []
+        mvals = r.get("metrics", {}) or {}
+        points.append({
+            "x": _fmt_date(dims[0] if dims else ""),
+            "activeUsers": mvals.get("activeUsers"),
+            "newUsers": mvals.get("newUsers"),
+        })
+    points.sort(key=lambda p: p["x"])
+    return {
+        "id": "ga4-users-trend",
+        "type": "chart",
+        "title": "GA4 — Users Overview",
+        "source": "ga4.users_trend",
+        "chartKind": "line",
+        "available": present and bool(points),
+        "unavailableReason": None if (present and points) else (reason or "no daily users for this period"),
+        "series": [
+            {"key": "activeUsers", "label": "Active users", "type": "count"},
+            {"key": "newUsers", "label": "New users", "type": "count"},
         ],
         "points": points,
     }
@@ -375,6 +416,85 @@ def _static_narrative(block_id, role, title, paragraphs):
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
+
+_TARGET_FIELDS = [
+    ("organic_traffic", "Organic Traffic"),
+    ("domain_authority", "Domain Authority"),
+    ("keyword_rankings", "Keyword Rankings"),
+    ("new_backlinks", "New Backlinks"),
+    ("leads", "Leads"),
+    ("new_visitors", "New Visitors"),
+]
+
+
+def _next_period(period_key):
+    """'2026-06' -> '2026-07'. None when the key isn't YYYY-MM."""
+    try:
+        y_s, m_s = str(period_key).split("-")
+        y, m = int(y_s), int(m_s)
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+        return f"{y:04d}-{m:02d}"
+    except Exception:
+        return None
+
+
+def _notes_slot(block_id, title):
+    """An EMPTY editable note slot (a narrative block) the SEO team fills in the
+    editor. Starts blank so it renders a light placeholder until edited."""
+    return {
+        "id": block_id,
+        "type": "narrative",
+        "role": "notes",
+        "title": title,
+        "paragraphs": [],
+        "bullets": [],
+        "editable": True,
+    }
+
+
+def _targets_grid_block(period_key, period_label):
+    """Editable Targets & Goals grid: six metrics x two columns (Previous Month
+    actuals + Current Month Targets). Values are MANUALLY entered by the SEO team
+    in the report editor, so they start empty and are NOT seeded from data. Carries
+    a free-text `notes` box rendered under the grid. Editable (unlike data blocks)."""
+    nxt = _next_period(period_key)
+    next_label = _label_for(nxt) if nxt else "next month"
+    return {
+        "id": "targets",
+        "type": "targets_grid",
+        "role": "targets",
+        "title": "Targets & Goals",
+        "editable": True,
+        "columns": [
+            {"key": "previous", "label": f"Previous Month ({period_label})"},
+            {"key": "current", "label": f"Current Month Targets ({next_label})"},
+        ],
+        "fields": [{"key": k, "label": lbl} for k, lbl in _TARGET_FIELDS],
+        # team-entered values; empty dicts render as em-dash until filled
+        "values": {"previous": {}, "current": {}},
+    }
+
+
+def _posts_block(block_id, title, noun, items):
+    """A content-links list (blogs / LinkedIn), rendered with the same list
+    block as backlinks but with its own noun. Always available; an empty list
+    reads as "none added" in the report."""
+    items = items or []
+    return {
+        "id": block_id,
+        "type": "backlinks_list",
+        "title": title,
+        "source": "posts",
+        "available": True,
+        "unavailableReason": None,
+        "noun": noun,
+        "count": len(items),
+        "items": [{"url": (it or {}).get("url")} for it in items],
+    }
+
+
 def build_document(gathered: dict) -> dict:
     """Assemble the ordered block document from a gathered report (the dict
     gather() returns). Reads the FROZEN blob + presence flags; seeds every block
@@ -408,12 +528,20 @@ def build_document(gathered: dict) -> dict:
     moz = sections.get("moz")
     kw = sections.get("keywords")
     bl = sections.get("backlinks") or {}
+    posts = sections.get("posts") or {}
 
     ga4_present = present("ga4")
     gsc_present = present("gsc")
     moz_present = present("moz")
     kw_present = present("keywords")
     bl_count = bl.get("count", 0)
+
+    # GA4 breakdown tables, built once and placed individually so note slots can
+    # be interleaved and the section order matches the client-facing layout.
+    ga4_tbl = {
+        key: _ga4_table(key, title, dim_labels, metric_keys, ga4, ga4_present, reason("ga4"))
+        for key, title, dim_labels, metric_keys in _GA4_TABLES
+    }
 
     blocks = [
         {
@@ -427,29 +555,47 @@ def build_document(gathered: dict) -> dict:
             "maturing": period_in_progress,
             "maturingNotice": maturing_notice,
         },
+        # 1. Progress Summary
         _progress_summary(period_label, prev_label, ga4, ga4_present, moz, moz_present, bl_count),
-        # Key metrics (Progress Summary numbers) — built from already-seeded helpers.
+        # 2. Key Metrics + Achievements
         _key_metrics_grid(ga4, ga4_present, reason("ga4"), moz, moz_present, reason("moz"), bl_count),
         _achievements(kw, kw_present, period_label),
+        # 3. Domain Authority & Backlinks
         _moz_grid(moz, moz_present, reason("moz")),
+        # 4. GA4 Overview: notes, numbers, graph, graph notes
+        _notes_slot("ga4-overview-notes", "GA4 Notes"),
         _ga4_overview_grid(ga4, ga4_present, reason("ga4")),
-    ]
-    for key, title, dim_labels, metric_keys in _GA4_TABLES:
-        blocks.append(_ga4_table(key, title, dim_labels, metric_keys, ga4, ga4_present, reason("ga4")))
-    blocks.extend([
+        _ga4_users_chart(ga4, ga4_present, reason("ga4")),
+        _notes_slot("ga4-graph-notes", "Graph Notes"),
+        # Traffic by Channel (kept)
+        ga4_tbl["by_channel"],
+        # 5. Users by Country & City: notes + list
+        _notes_slot("ga4-cities-notes", "Cities & Countries Notes"),
+        ga4_tbl["by_country_city"],
+        # 6. Top Landing Pages: notes + list
+        _notes_slot("ga4-landing-notes", "Landing Pages Notes"),
+        ga4_tbl["by_landing_page"],
+        # 7. Detailed Traffic Summary: device / browser / OS / language
+        ga4_tbl["by_device"],
+        ga4_tbl["by_browser"],
+        ga4_tbl["by_operating_system"],
+        ga4_tbl["by_language"],
+        # 8. Search Console: notes, numbers, graph
+        _notes_slot("gsc-notes", "Search Console Notes"),
         _gsc_grid(gsc, gsc_present, reason("gsc")),
         _gsc_chart(gsc, gsc_present, reason("gsc")),
+        # 9-12
         _keyword_table(kw, kw_present, reason("keywords"), period_label, prev_label),
         _backlinks_block(bl),
-        _static_narrative(
-            "targets", "targets", "Targets & Goals",
-            [f"Targets and goals for the period following {period_label} will be "
-             "tracked here — keyword positions to win, traffic and conversion goals."]),
+        _posts_block("posts-blogs", "Blog Posts", "blog post", posts.get("blogs")),
+        _posts_block("posts-linkedin", "LinkedIn Posts", "LinkedIn post", posts.get("linkedin")),
+        _targets_grid_block(period, period_label),
+        _notes_slot("targets-notes", "Notes"),
         _static_narrative(
             "strategy", "strategy", "Strategy & Notes",
             ["Planned strategy, content, and outreach notes for the coming period "
              "will be captured here."]),
-    ])
+    ]
 
     return {
         "type": "report_document",
