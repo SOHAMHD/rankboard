@@ -58,6 +58,9 @@ ALLOWED_DIMENSIONS = {
     # Page / screen
     "landingPagePlusQueryString", "pagePath", "pagePathPlusQueryString",
     "pageTitle", "fullPageUrl", "hostName",
+    # Events — breaks Key Events / Event Count down by the event's name
+    # (e.g. form_submit, click, purchase) so you can see WHICH events matter.
+    "eventName",
     # User
     "newVsReturning", "signedInWithUserId", "audienceName",
     # Time

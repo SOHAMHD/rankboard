@@ -109,6 +109,7 @@ body { margin: 0; font-size: 15px; line-height: 1.55; font-weight: 400; }
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-heading); font-weight: var(--font-heading-weight);
   line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 var(--space-2);
+  color: #0067A6;
 }
 h1 { font-size: 42px; }
 h2 { font-size: 32px; }
@@ -118,6 +119,15 @@ h5 { font-size: 16px; }
 h6 { font-size: 13px; }
 h6 { letter-spacing: 0.08em; text-transform: uppercase; }
 p { margin: 0 0 var(--space-3); }
+/* Rich edited content (Strategy & Notes, section notes): faithful bullet /
+   ordered lists, nested sub-lists, multi-line items, and author blank lines. */
+ul, ol { margin: 0 0 var(--space-3); padding-left: 1.4em; }
+li { margin: 0.2em 0; padding-left: 0.15em; }
+li > p { margin: 0 0 0.25em; }
+li > p:last-child { margin-bottom: 0; }
+li > ul, li > ol { margin: 0.3em 0 0.5em; }
+p.blank { margin: 0; height: 0.7em; }
+li.blank { list-style: none; margin: 0; height: 0.5em; }
 a { color: var(--color-accent); text-underline-offset: 3px; }
 img { display: block; max-width: 100%; }
 figure { margin: 0; }
@@ -213,8 +223,8 @@ textarea.input { min-height: 90px; resize: vertical; }
 }
 .card-body { margin: 0; font-size: 13px; opacity: 0.8; flex: 1; }
 .card-meta {
-  display: flex; align-items: center; gap: 6px; font-size: 11px;
-  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+  display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+  color: color-mix(in srgb, var(--color-text) 88%, transparent);
 }
 .elev-sm { box-shadow: var(--shadow-sm); }
 .elev-md { box-shadow: var(--shadow-md); }
@@ -245,17 +255,28 @@ textarea.input { min-height: 90px; resize: vertical; }
 .nav a:hover, .nav a[aria-current='page'] { color: var(--color-accent); }
 
 /* — tables — */
-.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table { width: 100%; border-collapse: collapse; font-size: 14px; border: 1px solid var(--color-divider); }
 .table th {
-  text-align: left; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
-  padding: var(--space-2); border-bottom: 1px solid var(--color-divider);
+  text-align: center; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700;
+  color: color-mix(in srgb, var(--color-text) 78%, transparent);
+  padding: 11px var(--space-2); border: 1px solid var(--color-divider);
 }
 .table td {
-  padding: var(--space-2);
-  border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent);
+  text-align: center;
+  padding: 11px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--color-text) 14%, transparent);
 }
+/* First column (the label/dimension) is left-aligned in EVERY table; headers
+   and all other data columns stay centered. */
+.table td:first-child { text-align: left; }
 .table tbody tr:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
+/* Left-aligned variant (e.g. Backlinks, where cells hold long URLs). */
+.table.table-left th, .table.table-left td { text-align: left; }
+/* Keyword table: Sr No. (1st col) centered, keyword (2nd col) left-aligned. */
+.table.table-kwleft td:first-child { text-align: center; }
+.table.table-kwleft td:nth-child(2) { text-align: left; }
+/* Backlinks: slightly roomier rows (kept compact so it isn't over-spaced). */
+.table.table-bl td, .table.table-bl th { padding-top: 9px; padding-bottom: 9px; }
 
 /* — dialog — */
 .dialog-backdrop {

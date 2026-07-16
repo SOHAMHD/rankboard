@@ -12,7 +12,7 @@ from ..access import accessible_project_ids
 from ..config import DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD, RANK_LOCATION_CODE
 from ..db import get_db
 from ..locations import VALID_LOCATION_CODES
-from ..security import require_active_user, require_permission, require_project_access
+from ..security import require_active_user, require_permission, require_project_access, require_roles
 from ..services.analytics_provider import (
     ALLOWED_DIMENSIONS,
     ALLOWED_MATCH_TYPES,
@@ -557,15 +557,35 @@ def delete_project(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     return {"ok": True}
 
 
+# ── Rank-check quota ────────────────────────────────────────────────
+# Who may run a rank check, and how often. Only Super Admin and Admin
+# (Manager) can check; each is capped at RANK_CHECK_LIMIT runs per project
+# within a rolling RANK_CHECK_WINDOW_DAYS window. Enforced here on the server —
+# the button being hidden/disabled on the client is only a convenience.
+RANK_CHECK_ROLES = ("Super Admin", "Admin")
+RANK_CHECK_LIMIT = 3
+RANK_CHECK_WINDOW_DAYS = 14
+
+
 @router.post(
     "/{project_id}/check-ranks",
-    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
+    dependencies=[Depends(require_project_access)],
 )
-def check_project_ranks(project_id: int, db: sqlite3.Connection = Depends(get_db)):
+def check_project_ranks(
+    project_id: int,
+    user: sqlite3.Row = Depends(require_roles(*RANK_CHECK_ROLES)),
+    db: sqlite3.Connection = Depends(get_db),
+):
     """Check every keyword in the project against the rank provider and
     record the lookups (current -> previous rotation). This is the same
     write path as manual entry — a future cron job just calls this
-    endpoint on a schedule and the dashboard fills itself in."""
+    endpoint on a schedule and the dashboard fills itself in.
+
+    Restricted to Super Admin / Admin (require_roles above), and rate-limited
+    to RANK_CHECK_LIMIT runs per user per project within a rolling
+    RANK_CHECK_WINDOW_DAYS window."""
+    from datetime import datetime, timedelta, timezone
+
     project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(404, "Project not found.")
@@ -575,6 +595,32 @@ def check_project_ranks(project_id: int, db: sqlite3.Connection = Depends(get_db
     ).fetchall()
     if not kws:
         raise HTTPException(400, "No keywords to check yet.")
+
+    # ── Enforce the quota BEFORE the (slow, paid) provider call. Count this
+    # user's checks on this project inside the rolling window. created_at is
+    # stored as 'YYYY-MM-DD HH:MM:SS' UTC (datetime('now')), so a string compare
+    # against the same-format cutoff is correct and DB-agnostic.
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=RANK_CHECK_WINDOW_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    recent = db.execute(
+        """SELECT created_at FROM rank_check_log
+           WHERE user_id = ? AND project_id = ? AND created_at >= ?
+           ORDER BY created_at ASC""",
+        (user["id"], project_id, cutoff),
+    ).fetchall()
+    if len(recent) >= RANK_CHECK_LIMIT:
+        # The quota frees up when the OLDEST run in the window ages out.
+        try:
+            oldest = datetime.strptime(recent[0]["created_at"], "%Y-%m-%d %H:%M:%S")
+            resets_on = (oldest + timedelta(days=RANK_CHECK_WINDOW_DAYS)).strftime("%b %d, %Y")
+            when = f" You can check again on {resets_on}."
+        except (ValueError, TypeError):
+            when = ""
+        raise HTTPException(
+            429,
+            f"Rank-check limit reached: {RANK_CHECK_LIMIT} checks per project every "
+            f"{RANK_CHECK_WINDOW_DAYS} days.{when}",
+        )
 
     real_mode = bool(DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD)
     if real_mode and not project["domain"]:
@@ -610,7 +656,23 @@ def check_project_ranks(project_id: int, db: sqlite3.Connection = Depends(get_db
         )
         updated += 1
 
-    return {"source": source, "checked": len(kws), "updated": updated, "notFound": not_found}
+    # Record this run against the quota (only reached on a successful check, so
+    # a failed provider call doesn't burn a slot).
+    db.execute(
+        "INSERT INTO rank_check_log (user_id, project_id) VALUES (?, ?)",
+        (user["id"], project_id),
+    )
+    checks_remaining = max(0, RANK_CHECK_LIMIT - (len(recent) + 1))
+
+    return {
+        "source": source,
+        "checked": len(kws),
+        "updated": updated,
+        "notFound": not_found,
+        "checksRemaining": checks_remaining,
+        "checksLimit": RANK_CHECK_LIMIT,
+        "windowDays": RANK_CHECK_WINDOW_DAYS,
+    }
 
 
 # ── Bulk import via Excel ───────────────────────────────────────────

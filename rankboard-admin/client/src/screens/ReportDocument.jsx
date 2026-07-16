@@ -398,8 +398,13 @@ export function ChartBlock({ block, hideTitle }) {
           { key: "impressions", label: "Impressions", type: "count" },
         ];
   const palette = [COLOR_CLICKS, COLOR_IMPRESSIONS, "#15b41f", "#e0362c"];
-  // Two series with very different scales (clicks vs impressions) read best on a
-  // dual axis; same-scale pairs (active/new users) still look fine dual.
+  // 1–2 comparable series read fine on a shared/dual axis. But 3+ series (the
+  // GSC trend: clicks, impressions, CTR, avg. position) have wildly different
+  // scales — on one axis the largest (impressions) flattens the rest onto the
+  // zero line. So give EACH series its own independent, hidden axis; every line
+  // then uses the full height and stays visible (tooltip still shows real
+  // values). This mirrors the normalised PDF chart.
+  const multi = series.length > 2;
   const dual = series.length === 2;
   return (
     <Card>
@@ -408,19 +413,27 @@ export function ChartBlock({ block, hideTitle }) {
         <UnavailableNote reason={block.unavailableReason} />
       ) : (
         <ResponsiveContainer width="100%" height={240}>
-          <LineChart data={points} margin={{ top: 5, right: 8, left: -8, bottom: 0 }}>
+          <LineChart data={points} margin={{ top: 5, right: 8, left: multi ? 0 : -8, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#eef0f5" vertical={false} />
             <XAxis dataKey="x" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={{ stroke: "#e7eaf0" }} minTickGap={24} />
-            <YAxis yAxisId="left" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={false} allowDecimals={false} width={44} />
-            {dual && (
-              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={false} allowDecimals={false} width={48} />
+            {multi ? (
+              series.map((s) => (
+                <YAxis key={s.key} yAxisId={s.key} hide domain={["auto", "auto"]} />
+              ))
+            ) : (
+              <>
+                <YAxis yAxisId="left" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={false} allowDecimals={false} width={44} />
+                {dual && (
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={false} allowDecimals={false} width={48} />
+                )}
+              </>
             )}
             <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e7eaf0", boxShadow: "0 4px 16px rgba(18,24,38,0.08)" }} />
             <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" />
             {series.map((s, i) => (
               <Line
                 key={s.key}
-                yAxisId={dual && i === 1 ? "right" : "left"}
+                yAxisId={multi ? s.key : dual && i === 1 ? "right" : "left"}
                 type="monotone"
                 dataKey={s.key}
                 name={s.label || s.key}
@@ -446,11 +459,14 @@ export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk,
   const items = selectable ? allItems : allItems.filter(rowIncluded);
   const selectedCount = allItems.filter(rowIncluded).length;
   const total = block.count; // frozen total volume for the period
+  // Posts lists (blogs / LinkedIn) carry a `noun` and per-item titles; real
+  // backlinks are URL-only. Wording + rendering adapt to whichever this is.
+  const noun = block.noun || "backlink";
   if (allItems.length === 0) {
     return (
       <Card>
         {!hideTitle && block.title ? <SectionTitle>{block.title}</SectionTitle> : null}
-        <p className="text-sm text-stone-400 py-1">No new backlinks recorded for this period.</p>
+        <p className="text-sm text-stone-400 py-1">No {noun}s recorded for this period.</p>
       </Card>
     );
   }
@@ -458,7 +474,7 @@ export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk,
     <Card>
       {!hideTitle && block.title ? <SectionTitle>{block.title}</SectionTitle> : null}
       <p className="text-xs text-stone-500 mb-2">
-        <span className="font-data font-semibold text-stone-700">{total}</span> new backlink
+        <span className="font-data font-semibold text-stone-700">{total}</span> {noun}
         {total === 1 ? "" : "s"} this period
         {selectedCount !== total ? (
           <span> · showing {selectedCount} of {total}</span>
@@ -491,19 +507,24 @@ export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk,
                 )}
                 <span className="text-xs text-stone-400 font-data mt-0.5 w-5 shrink-0 text-right">{i + 1}.</span>
                 <Link2 size={13} className="shrink-0 text-stone-300 mt-1" />
-                {it.url ? (
-                  <a
-                    href={it.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="text-orange-700 hover:underline break-all inline-flex items-start gap-1"
-                  >
-                    {it.url}
-                    <ExternalLink size={11} className="shrink-0 mt-1 text-stone-300" />
-                  </a>
-                ) : (
-                  <span className="text-stone-400">—</span>
-                )}
+                <span className="min-w-0">
+                  {it.title ? (
+                    <span className="block font-medium text-stone-800">{it.title}</span>
+                  ) : null}
+                  {it.url ? (
+                    <a
+                      href={it.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="text-orange-700 hover:underline break-all inline-flex items-start gap-1"
+                    >
+                      {it.url}
+                      <ExternalLink size={11} className="shrink-0 mt-1 text-stone-300" />
+                    </a>
+                  ) : !it.title ? (
+                    <span className="text-stone-400">—</span>
+                  ) : null}
+                </span>
               </li>
             );
           })}

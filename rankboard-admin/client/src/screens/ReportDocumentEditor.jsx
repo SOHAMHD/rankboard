@@ -487,6 +487,7 @@ function EditableDoc({ version, blobs }) {
       setSavedAt(new Date());
     } catch (e) {
       setSaveError(e.message);
+      throw e; // let callers (e.g. download-before-save) abort instead of exporting stale content
     } finally {
       setSaving(false);
     }
@@ -494,8 +495,9 @@ function EditableDoc({ version, blobs }) {
 
   return (
     <div className="w-full">
-      {/* ── header / save ── */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+      {/* ── header / save (sticky so Download + Save stay reachable while
+          scrolling the long document — no more scrolling back to the top) ── */}
+      <div className="sticky top-0 z-30 -mx-6 px-6 py-3 mb-3 flex flex-wrap items-center justify-between gap-3 bg-stone-100/90 backdrop-blur-sm border-b border-stone-200">
         <div>
           <h2 className="text-lg font-bold text-stone-900 font-display">
             Edit report · {version.periodKey}
@@ -511,9 +513,10 @@ function EditableDoc({ version, blobs }) {
             periodKey={version.periodKey}
             projectName={version.content?.blocks?.find((b) => b.type === "report_header")?.projectName}
             label
+            beforeDownload={save}
             onError={setSaveError}
           />
-          <button onClick={save} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
+          <button onClick={() => save().catch(() => {})} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
             {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft
           </button>
         </div>

@@ -7,7 +7,7 @@
    more than one reason to change.
    ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from "react";
-import { BarChart3, Eye, KeyRound, LoaderCircle, LogOut, Mail, Users, X } from "lucide-react";
+import { Eye, KeyRound, LoaderCircle, LogOut, Mail, Users, X } from "lucide-react";
 import { api } from "./api";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
@@ -88,10 +88,9 @@ export function TopBar({ user, onLogout, onPeople, onHome }) {
     <>
     <header className="bg-white border-b border-stone-200 sticky top-0 z-10">
       <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
-        <button onClick={onHome} className="flex items-center gap-2" aria-label="Go to projects">
-          <span className="h-7 w-7 rounded-lg bg-orange-600 flex items-center justify-center">
-            <BarChart3 size={14} className="text-white" />
-          </span>
+        <button onClick={onHome} className="flex items-center gap-2.5 cursor-pointer" aria-label="Go to projects">
+          <img src="/infapp-logo.png" alt="InfyApp" className="h-7 w-auto" />
+          <span className="h-5 w-px bg-stone-200" aria-hidden="true" />
           <span className="font-bold text-stone-900 font-display">RankBoard</span>
         </button>
         <div className="flex items-center gap-2 sm:gap-3">
@@ -175,8 +174,8 @@ export function DarkShell({ children }) {
     >
       <div className="w-full max-w-sm">
         <div className="flex items-center justify-center gap-3 mb-8">
-          <div className="h-10 w-10 rounded-xl bg-orange-600 flex items-center justify-center shadow-lg">
-            <BarChart3 size={20} className="text-white" />
+          <div className="rounded-xl bg-white px-3 py-2 flex items-center shadow-lg">
+            <img src="/infapp-logo.png" alt="InfyApp" className="h-8 w-auto" />
           </div>
           <div>
             <p className="text-white font-semibold text-lg leading-tight font-display">RankBoard</p>

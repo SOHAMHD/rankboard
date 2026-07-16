@@ -11,6 +11,7 @@ import { useState } from "react";
 import { Download, LoaderCircle } from "lucide-react";
 import { BASE, getToken } from "../api";
 import { BTN_GHOST } from "../ui";
+import { useToast } from "../toast.jsx";
 
 function slug(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "report";
@@ -30,13 +31,19 @@ export default function DownloadPdfButton({
   label = false, // true → "Download PDF" text (editor headers); false → icon-only (list rows)
   className = "",
   onError,
+  beforeDownload, // optional async hook; runs (e.g. saves the draft) before the PDF is fetched
 }) {
   const [downloading, setDownloading] = useState(false);
+  const toast = useToast();
 
   const download = async () => {
     if (downloading) return; // guard the double-click
     setDownloading(true);
     try {
+      // The PDF is rendered server-side from the SAVED content_json, so any
+      // unsaved editor edits (uploaded logo, typed text) must be persisted
+      // first — otherwise they silently won't appear in the download.
+      if (beforeDownload) await beforeDownload();
       const res = await fetch(`${BASE}/api/reports/${versionId}/pdf`, {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
@@ -53,8 +60,11 @@ export default function DownloadPdfButton({
       a.click(); // download starts synchronously here…
       a.remove();
       URL.revokeObjectURL(url); // …so it's safe to revoke now
+      toast.success("Report downloaded.", { title: "PDF ready" });
     } catch (e) {
-      onError?.(e.message || "Couldn't generate the PDF — try again.");
+      const msg = e.message || "Couldn't generate the PDF — try again.";
+      onError?.(msg);
+      toast.error(msg, { title: "Download failed" });
     } finally {
       setDownloading(false);
     }

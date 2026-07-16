@@ -58,7 +58,8 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { api, getToken, BASE } from "../api";
-import { Modal, ErrorNote, ChangePasswordModal, can, isAuthor, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
+import { Modal, ErrorNote, ChangePasswordModal, can, isAuthor, isAdmin, isManager, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
+import { useToast } from "../toast.jsx";
 import { MozOverview } from "./MozOverview";
 import { ReportsPanel } from "./ReportEditor";
 import { BacklinksView } from "./Backlinks";
@@ -76,7 +77,7 @@ const NAV_GROUPS = [
     children: [
       { id: "traffic-overview", label: "Overview" },
       { id: "traffic-audience", label: "Audience" },
-      { id: "traffic-technology", label: "Technology" },
+      { id: "traffic-technology", label: "Device / OS type" },
       { id: "traffic-pages", label: "Pages" },
     ],
   },
@@ -194,6 +195,9 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
       {/* ── Fixed sidebar (desktop) — light premium rail ── */}
       <aside className="hidden lg:flex fixed inset-y-0 left-0 w-64 bg-white border-r border-stone-200 flex-col">
         <div className="p-4 border-b border-stone-200">
+          <button onClick={onBack} aria-label="Back to projects" title="Back to projects" className="block mb-4 cursor-pointer">
+            <img src="/infapp-logo.png" alt="InfyApp" className="h-7 w-auto" />
+          </button>
           <button
             onClick={onBack}
             className="flex items-center gap-1 text-xs text-stone-400 hover:text-stone-700 mb-4 transition-colors"
@@ -215,7 +219,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
           </div>
         </div>
 
-        <nav className="flex-1 p-3 overflow-y-auto">
+        <nav className="flex-1 p-3 overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
           <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-2">SEO tools</p>
           {navGroups.map((group) => {
             const children = group.children || null;
@@ -305,6 +309,11 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
 
       {/* ── Compact header (mobile) — same nav, light theme ── */}
       <div className="lg:hidden bg-white border-b border-stone-200 sticky top-0 z-20">
+        <div className="px-4 pt-3 flex justify-center border-b border-stone-100">
+          <button onClick={onBack} aria-label="Back to projects" title="Back to projects" className="cursor-pointer">
+            <img src="/infapp-logo.png" alt="InfyApp" className="h-6 w-auto" />
+          </button>
+        </div>
         <div className="px-4 pt-4 pb-3 flex items-center justify-between gap-3">
           <button onClick={onBack} className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900">
             <ChevronLeft size={14} /> Projects
@@ -358,10 +367,12 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
    ════════════════════════════════════════════════════════════════════ */
 
 function RankLedger({ user, project, onChanged }) {
+  const toast = useToast();
   const [showAdd, setShowAdd] = useState(false);
   const [recordFor, setRecordFor] = useState(null); // keyword being re-checked
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState(null);
+  const [confirmCheck, setConfirmCheck] = useState(false); // "Are you sure?" gate before a rank check
   const [showImport, setShowImport] = useState(false);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("");
@@ -387,6 +398,10 @@ function RankLedger({ user, project, onChanged }) {
 
   const mayAdd = can(user, "addKeyword");
   const mayDelete = can(user, "deleteKeyword");
+  // Only Super Admin / Admin (Manager) can run a rank check — mirrors the
+  // server's require_roles gate on /check-ranks. Hiding the button is just a
+  // convenience; the backend enforces it regardless.
+  const mayCheck = isAdmin(user) || isManager(user);
   const readOnly = !mayAdd && !mayDelete;
 
   // Derived stats — memoized so typing in the filter does not re-scan the full
@@ -398,16 +413,29 @@ function RankLedger({ user, project, onChanged }) {
     return { improved, declined, unranked };
   }, [kws]);
 
+  // The actual rank check — only called after the user confirms the dialog.
   const runCheck = async () => {
+    setConfirmCheck(false);
     setChecking(true);
     setError(null);
     setCheckResult(null);
     try {
       const d = await api(`/projects/${project.id}/check-ranks`, { method: "POST" });
       setCheckResult(d);
+      const remaining =
+        typeof d.checksRemaining === "number"
+          ? ` ${d.checksRemaining} of ${d.checksLimit} check${d.checksLimit === 1 ? "" : "s"} left for this project.`
+          : "";
+      toast.success(
+        `Updated ${d.updated} of ${d.checked} keyword${d.checked === 1 ? "" : "s"}.${remaining}`,
+        { title: "Rankings checked" }
+      );
       await onChanged();
     } catch (err) {
+      // The server sends a clear 429 message when the quota is hit, and a 403
+      // if the role isn't allowed — surface either verbatim.
       setError(err.message);
+      toast.error(err.message, { title: "Rank check failed" });
     } finally {
       setChecking(false);
     }
@@ -416,9 +444,11 @@ function RankLedger({ user, project, onChanged }) {
   const deleteKeyword = async (kwId) => {
     try {
       await api(`/projects/${project.id}/keywords/${kwId}`, { method: "DELETE" });
+      toast.success("Keyword deleted.");
       await onChanged();
     } catch (err) {
       setError(err.message);
+      toast.error(err.message, { title: "Couldn't delete keyword" });
     }
   };
 
@@ -426,14 +456,16 @@ function RankLedger({ user, project, onChanged }) {
   // the empty state. Gated by the same write permission as before.
   const actions = mayAdd && (
     <div className="flex flex-wrap gap-2">
-      <button
-        onClick={runCheck}
-        disabled={checking || kws.length === 0}
-        title="Look up every keyword's current Google position and record it"
-        className={`${BTN_GHOST} px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed`}
-      >
-        {checking ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />} Check rankings
-      </button>
+      {mayCheck && (
+        <button
+          onClick={() => setConfirmCheck(true)}
+          disabled={checking || kws.length === 0}
+          title="Look up every keyword's current Google position and record it"
+          className={`${BTN_GHOST} px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed`}
+        >
+          {checking ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />} Check rankings
+        </button>
+      )}
       <button
         onClick={() => setShowImport(true)}
         title="Bulk import keywords from an Excel file"
@@ -679,6 +711,36 @@ function RankLedger({ user, project, onChanged }) {
           onClose={() => setShowImport(false)}
           onImported={onChanged}
         />
+      )}
+
+      {confirmCheck && (
+        <Modal title="Check rankings?" onClose={() => setConfirmCheck(false)}>
+          <p className="text-sm text-stone-600">
+            This looks up the current Google position for all{" "}
+            <span className="font-semibold text-stone-800">{kws.length}</span> keyword
+            {kws.length === 1 ? "" : "s"} in{" "}
+            <span className="font-semibold text-stone-800">{project.name}</span> and records the result.
+          </p>
+          <p className="mt-3 text-sm text-stone-500">
+            Rank checks are limited to <span className="font-semibold text-stone-700">3 per project every 2 weeks</span>. Are you sure you want to continue?
+          </p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={() => setConfirmCheck(false)}
+              className={`${BTN_GHOST} px-4 py-2`}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={runCheck}
+              disabled={checking}
+              className={`${BTN_PRIMARY} px-4 py-2 disabled:opacity-40`}
+            >
+              {checking ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+              Yes, check rankings
+            </button>
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -1084,6 +1146,7 @@ const DIMENSION_GROUPS = {
   "Traffic source (first user)": [["Default Channel Group", "firstUserDefaultChannelGroup"], ["Source", "firstUserSource"], ["Medium", "firstUserMedium"], ["Campaign", "firstUserCampaignName"]],
   "Platform / device": [["Device Category", "deviceCategory"], ["Operating System", "operatingSystem"], ["OS + Version", "operatingSystemWithVersion"], ["Browser", "browser"], ["Platform", "platform"], ["Screen Resolution", "screenResolution"], ["Device Model", "mobileDeviceModel"], ["Device Brand", "mobileDeviceBranding"]],
   "Page / screen": [["Landing Page", "landingPagePlusQueryString"], ["Page Path", "pagePath"], ["Page Path + Query", "pagePathPlusQueryString"], ["Page Title", "pageTitle"], ["Full Page URL", "fullPageUrl"], ["Hostname", "hostName"]],
+  "Events": [["Event Name", "eventName"]],
   "User": [["New vs Returning", "newVsReturning"], ["Signed In With User ID", "signedInWithUserId"], ["Audience", "audienceName"]],
   "Time": [["Date", "date"], ["Date + Hour", "dateHour"], ["Hour", "hour"], ["Day of Week", "dayOfWeekName"], ["Week", "week"], ["Month", "month"], ["Year", "year"]],
   "Demographics (needs Google Signals)": [["Age", "userAgeBracket"], ["Gender", "userGender"], ["Interests", "brandingInterest"]],
@@ -1108,16 +1171,6 @@ const METRICS = {
   "Total Revenue": "totalRevenue",
   "Engaged Sessions / Active User": "engagedSessionsPerUser",
 };
-
-// Filter operators (GA4 StringFilter match types): [user-facing label, matchType].
-// matchType matches the backend's ALLOWED_MATCH_TYPES allowlist exactly.
-const OPERATORS = [
-  ["exactly matches", "EXACT"],
-  ["contains", "CONTAINS"],
-  ["begins with", "BEGINS_WITH"],
-  ["ends with", "ENDS_WITH"],
-  ["matches regex", "FULL_REGEXP"],
-];
 
 // The user-facing label for a GA4 API name (for the section title + table
 // column header). Falls back to the raw name if somehow not found.
@@ -1457,44 +1510,26 @@ function TrafficTool({ project, view }) {
 function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
   const [dimensions, setDimensions] = useState([defaultDimension || "sessionDefaultChannelGroup"]);
   const [metrics, setMetrics] = useState(defaultMetrics || ["activeUsers", "newUsers"]); // defaults
-  const [filters, setFilters] = useState([]); // {dimension, operator, value, exclude}
-  const [match, setMatch] = useState("AND");
   const [result, setResult] = useState(null); // null = loading
   const [error, setError] = useState(null); // transport/HTTP failure (api() threw)
   const [runNonce, setRunNonce] = useState(0); // bumped by the Run button to force a fetch
   const [openMenu, setOpenMenu] = useState(null); // "dimension" | "metric" | null
 
-  // Debounce the filter VALUE text so typing doesn't fire a request per
-  // keystroke. Structural changes (dimensions, metrics, match, a filter's
-  // dimension/operator/exclude, adding/removing rows) re-run immediately;
-  // only the typed values are delayed ~500ms via this mirror.
-  const valueKey = filters.map((f) => f.value).join(" ");
-  const [debouncedValueKey, setDebouncedValueKey] = useState(valueKey);
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedValueKey(valueKey), 500);
-    return () => clearTimeout(t);
-  }, [valueKey]);
-
   // Fingerprints of everything that should re-run the report immediately.
   const dimsKey = dimensions.join(",");
   const metricsKey = metrics.join(",");
-  const structuralKey = JSON.stringify(filters.map((f) => [f.dimension, f.operator, f.exclude]));
 
   useEffect(() => {
     let cancelled = false;
     setResult(null);
     setError(null);
-    // Drop half-built rows (no value yet) so we never send a CONTAINS "".
-    const activeFilters = filters
-      .filter((f) => f.value.trim() !== "")
-      .map((f) => ({ dimension: f.dimension, operator: f.operator, value: f.value, exclude: f.exclude }));
     // Sessions is a permanent column on every report — pin it onto the request
     // even when the user hasn't picked it (appended last so it never changes
     // the first metric the chart/ordering uses).
     const reportMetrics = metrics.includes("sessions") ? metrics : [...metrics, "sessions"];
     api(`/projects/${projectId}/analytics/report`, {
       method: "POST",
-      body: { start: range.start, end: range.end, dimensions, metrics: reportMetrics, filters: activeFilters, match, limit: 250 },
+      body: { start: range.start, end: range.end, dimensions, metrics: reportMetrics, filters: [], match: "AND", limit: 250 },
     })
       .then((d) => !cancelled && setResult(d.report))
       .catch((err) => !cancelled && setError(err.message));
@@ -1502,7 +1537,7 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, range.start, range.end, dimsKey, metricsKey, match, structuralKey, debouncedValueKey, runNonce]);
+  }, [projectId, range.start, range.end, dimsKey, metricsKey, runNonce]);
 
   // ── Dimension / metric chip helpers (always keep at least one of each) ──
   const addDimension = (name) => {
@@ -1516,23 +1551,6 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
   };
   const removeMetric = (name) => setMetrics((m) => (m.length > 1 ? m.filter((x) => x !== name) : m));
 
-  // ── Filter row helpers ──
-  const addFilter = () =>
-    setFilters((f) => [...f, { dimension: dimensions[0] || "country", operator: "CONTAINS", value: "", exclude: false }]);
-  const updateFilter = (i, patch) => setFilters((f) => f.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
-  const removeFilter = (i) => setFilters((f) => f.filter((_, idx) => idx !== i));
-
-  // Drill-down: clicking a dimension value in the result table adds it as an
-  // EXACT filter on that dimension, narrowing the report to that row's data
-  // (same click-to-filter the GSC report uses). De-dupes identical filters so
-  // repeated clicks don't stack the same condition.
-  const drillDown = (dimension, value) =>
-    setFilters((f) =>
-      f.some((x) => x.dimension === dimension && x.operator === "EXACT" && x.value === value && !x.exclude)
-        ? f
-        : [...f, { dimension, operator: "EXACT", value, exclude: false }]
-    );
-
   // The server reports incompatible combinations / no data as {error}; a thrown
   // api() error lands in `error`. Either way we show the same muted message.
   const failed = error || result?.error;
@@ -1544,7 +1562,7 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
         <div>
           <h2 className="text-sm font-semibold text-stone-700 font-display">Explore</h2>
           <p className="text-xs text-stone-400 mt-0.5">
-            Build a report from any dimensions, metrics and filters — like GA4&apos;s Free-form exploration.
+            Build a report from any dimensions and metrics — like GA4&apos;s Free-form exploration.
           </p>
         </div>
         <button onClick={() => setRunNonce((n) => n + 1)} title="Re-run the report now" className={`${BTN_PRIMARY} px-4 py-2`}>
@@ -1651,96 +1669,6 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
           </div>
         </div>
 
-        {/* Filters — inline, stackable conditions joined by Match ALL / ANY.
-            Self-contained in each builder so every Traffic page filters
-            independently. The dimension list is the full DIMENSION_GROUPS. */}
-        <div>
-          <div className="flex flex-wrap items-center gap-3 mb-2">
-            <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">Filters</p>
-            {filters.length > 0 && (
-              <div className="inline-flex rounded-lg border border-stone-300 overflow-hidden text-xs">
-                {[["AND", "Match ALL"], ["OR", "Match ANY"]].map(([val, lbl]) => (
-                  <button
-                    key={val}
-                    onClick={() => setMatch(val)}
-                    className={`px-3 py-1 font-medium transition-colors ${
-                      match === val ? "bg-orange-600 text-white" : "bg-white text-stone-600 hover:bg-stone-50"
-                    }`}
-                  >
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {filters.length > 0 && (
-            <div className="space-y-2">
-              {filters.map((f, i) => (
-                <div key={i} className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={f.dimension}
-                    onChange={(e) => updateFilter(i, { dimension: e.target.value })}
-                    aria-label="Filter dimension"
-                    className={`${RANGE_FIELD_CLS} w-auto max-w-[12rem]`}
-                  >
-                    {Object.entries(DIMENSION_GROUPS).map(([category, items]) => (
-                      <optgroup key={category} label={category}>
-                        {items.map(([optLabel, apiName]) => (
-                          <option key={apiName} value={apiName}>
-                            {optLabel}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                  <select
-                    value={f.operator}
-                    onChange={(e) => updateFilter(i, { operator: e.target.value })}
-                    aria-label="Filter operator"
-                    className={`${RANGE_FIELD_CLS} w-auto`}
-                  >
-                    {OPERATORS.map(([lbl, mt]) => (
-                      <option key={mt} value={mt}>
-                        {lbl}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    value={f.value}
-                    onChange={(e) => updateFilter(i, { value: e.target.value })}
-                    placeholder="value"
-                    aria-label="Filter value"
-                    className={`${RANGE_FIELD_CLS} flex-1 min-w-[8rem]`}
-                  />
-                  <button
-                    onClick={() => updateFilter(i, { exclude: !f.exclude })}
-                    title={f.exclude ? "Excluding matches — click to include" : "Including matches — click to exclude"}
-                    className={`h-9 px-3 rounded-lg border text-sm font-medium transition-colors ${
-                      f.exclude
-                        ? "bg-red-50 border-red-200 text-red-600"
-                        : "bg-emerald-50 border-emerald-200 text-emerald-700"
-                    }`}
-                  >
-                    {f.exclude ? "Exclude" : "Include"}
-                  </button>
-                  <button
-                    onClick={() => removeFilter(i)}
-                    aria-label="Remove filter"
-                    className="p-1.5 rounded-md text-stone-300 hover:text-red-500 transition-colors"
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <button onClick={addFilter} className={`${BTN_GHOST} px-3 py-1.5 text-sm mt-2`}>
-            <Plus size={14} /> Add filter
-          </button>
-        </div>
       </div>
 
       {/* ── Result ── */}
@@ -1756,7 +1684,7 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
           </p>
         </div>
       ) : (
-        <ReportResult report={result} onDrill={drillDown} />
+        <ReportResult report={result} />
       )}
     </div>
   );
@@ -2261,6 +2189,8 @@ function SearchConsoleTool({ project }) {
   const [enabled, setEnabled] = useState(["clicks", "impressions"]); // plotted metrics
   const [data, setData] = useState(null); // null = first load
   const [error, setError] = useState(null); // transport/HTTP failure (api() threw)
+  const [busy, setBusy] = useState(false); // a fetch is in flight (incl. refetches after the first load)
+  const [pendingPick, setPendingPick] = useState(null); // raw key of the row the user just clicked to drill into
 
   // No site URL set → friendly empty state, no fetch.
   const notConfigured = !project.gscSiteUrl;
@@ -2283,6 +2213,7 @@ function SearchConsoleTool({ project }) {
     // Keep the previous view on refetch (only the first load shows the big
     // loader) so switching tabs / typing filters doesn't blank the page.
     setError(null);
+    setBusy(true);
     // Drop half-built rows (no value yet) so we never send a contains "".
     const activeFilters = filters
       .filter((f) => f.expression.trim() !== "")
@@ -2292,7 +2223,17 @@ function SearchConsoleTool({ project }) {
       body: { start: range.start, end: range.end, searchType, dimension, filters: activeFilters },
     })
       .then((d) => !cancelled && setData(d))
-      .catch((err) => !cancelled && setError(err.message));
+      .catch((err) => !cancelled && setError(err.message))
+      // Only clear busy for the request that's still current — a superseded
+      // fetch (cancelled) must not switch the loader off while its replacement
+      // is still running. Also drop the clicked-row highlight now the new
+      // (drilled-down) rows are in.
+      .finally(() => {
+        if (!cancelled) {
+          setBusy(false);
+          setPendingPick(null);
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -2337,6 +2278,12 @@ function SearchConsoleTool({ project }) {
   // Pages, see only that query's pages; stack more to narrow further). Uses the
   // RAW key the API returned (not a display value) so the filter matches, and
   // skips adding a duplicate of an identical {dimension, operator, expression}.
+  // Clicking a row: remember which key was clicked (so we can flag that row as
+  // pending while the drill-down request runs), then apply the filter.
+  const pickRow = (filterDimension, expression) => {
+    setPendingPick(expression);
+    addFilterValue(filterDimension, expression);
+  };
   const addFilterValue = (filterDimension, expression) =>
     setFilters((f) =>
       f.some(
@@ -2345,6 +2292,15 @@ function SearchConsoleTool({ project }) {
         ? f
         : [...f, { dimension: filterDimension, operator: "equals", expression }]
     );
+
+  // Switch the active breakdown tab AND clear any drill-down (equals) filter on
+  // that same dimension. Fixes the "can't go back" bug: after clicking a query
+  // to drill in, clicking the Queries tab again now shows the full list right
+  // away — no page refresh needed to shake off the single-query filter.
+  const selectDimension = (name) => {
+    setDimension(name);
+    setFilters((f) => f.filter((x) => !(x.dimension === name && x.operator === "equals")));
+  };
 
   // ── Export the active dimension table as CSV (client-side, no backend) ──
   // Builds the CSV from the loaded rows — the active tab's dimension column +
@@ -2570,6 +2526,25 @@ function SearchConsoleTool({ project }) {
             </button>
           </div>
 
+          {/* Refetch indicator: the first load shows the big spinner below, but
+              a click-to-drill / filter / date change keeps the old table on
+              screen while the (slow, ~10-20s) request runs. Without a signal the
+              user thinks nothing happened, so show a top progress bar plus a
+              viewport-fixed badge whenever a fetch is in flight AND we already
+              have data on screen. Both are `fixed`, so they stay visible even
+              after scrolling down to the table. */}
+          {busy && data !== null && (
+            <>
+              <div className="fixed inset-x-0 top-0 z-50 h-1 overflow-hidden bg-orange-100">
+                <div className="h-full w-2/5 animate-pulse rounded-r-full bg-orange-600" />
+              </div>
+              <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-full border border-stone-200 bg-white px-4 py-2 shadow-lg">
+                <LoaderCircle size={16} className="animate-spin text-orange-600" />
+                <span className="text-sm font-medium text-stone-600">Fetching Search Console data…</span>
+              </div>
+            </>
+          )}
+
           {data === null && !error ? (
             <div className="flex justify-center py-16">
               <LoaderCircle size={22} className="text-orange-600 animate-spin" />
@@ -2581,7 +2556,12 @@ function SearchConsoleTool({ project }) {
               </p>
             </div>
           ) : (
-            <div className="space-y-6">
+            <div
+              className={`space-y-6 transition-opacity ${
+                busy ? "pointer-events-none opacity-60" : ""
+              }`}
+              aria-busy={busy}
+            >
               {/* Toggleable metric cards — a click shows/hides that line. */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {SC_METRICS.map((m) => {
@@ -2662,7 +2642,7 @@ function SearchConsoleTool({ project }) {
                     return (
                       <button
                         key={name}
-                        onClick={() => setDimension(name)}
+                        onClick={() => selectDimension(name)}
                         aria-pressed={active}
                         className={`h-8 px-3 text-sm font-medium rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 ${
                           active
@@ -2678,7 +2658,8 @@ function SearchConsoleTool({ project }) {
                 <SearchConsoleRowsTable
                   label={scDimensionLabel(data.dimension)}
                   rows={data.rows || []}
-                  onPick={data.dimension === "date" ? null : (key) => addFilterValue(data.dimension, key)}
+                  onPick={data.dimension === "date" ? null : (key) => pickRow(data.dimension, key)}
+                  pendingKey={busy ? pendingPick : null}
                 />
               </div>
             </div>
@@ -2695,7 +2676,7 @@ function SearchConsoleTool({ project }) {
    (always visible, never wrap); the label column takes the rest and truncates
    with an ellipsis + title, so long queries/URLs never push columns
    off-screen. */
-function SearchConsoleRowsTable({ label, rows, onPick }) {
+function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
   const [sort, setSort] = useState({ col: "clicks", dir: "desc" }); // default: Clicks desc
 
   // Click a header: same column → flip direction; new column → its default
@@ -2767,18 +2748,27 @@ function SearchConsoleRowsTable({ label, rows, onPick }) {
           ) : (
             sorted.map((r, i) => {
               const cell = r.key || "(not set)";
+              const pending = pendingKey != null && r.key === pendingKey;
               return (
-                <tr key={i} className="hover:bg-stone-50">
+                <tr key={i} className={pending ? "bg-orange-50" : "hover:bg-stone-50"}>
                   <td className="px-5 py-3 font-medium truncate" title={cell}>
                     {/* Clickable when the tab is a filterable dimension AND the row
-                        has a real key — applies the RAW key as a filter (GSC drill-down). */}
+                        has a real key — applies the RAW key as a filter (GSC drill-down).
+                        While its drill-down request is in flight the row shows a
+                        spinner and is disabled so it can't be clicked twice. */}
                     {onPick && r.key ? (
                       <button
                         onClick={() => onPick(r.key)}
-                        title={`Filter by ${label}: ${cell}`}
-                        className="block w-full truncate text-left text-orange-700 hover:text-orange-800 hover:underline cursor-pointer"
+                        disabled={pending}
+                        title={pending ? `Loading ${cell}…` : `Filter by ${label}: ${cell}`}
+                        className={`flex w-full items-center gap-2 truncate text-left ${
+                          pending
+                            ? "text-orange-800 cursor-wait"
+                            : "text-orange-700 hover:text-orange-800 hover:underline cursor-pointer"
+                        }`}
                       >
-                        {cell}
+                        {pending && <LoaderCircle size={13} className="shrink-0 animate-spin" />}
+                        <span className="truncate">{cell}</span>
                       </button>
                     ) : (
                       <span className="text-stone-800">{cell}</span>
@@ -2903,6 +2893,7 @@ function RankChange({ current, previous }) {
 }
 
 function AddKeywordModal({ projectId, onClose, onAdded }) {
+  const toast = useToast();
   const [term, setTerm] = useState("");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -2918,9 +2909,11 @@ function AddKeywordModal({ projectId, onClose, onAdded }) {
         method: "POST",
         body: { term: term.trim() },
       });
+      toast.success(`Added “${term.trim()}”.`, { title: "Keyword added" });
       onAdded();
     } catch (err) {
       setError(err.message);
+      toast.error(err.message, { title: "Couldn't add keyword" });
       setBusy(false);
     }
   };

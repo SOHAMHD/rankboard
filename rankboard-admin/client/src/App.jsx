@@ -14,6 +14,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { LoaderCircle } from "lucide-react";
 import { api, getToken, setToken } from "./api";
 import { can } from "./ui";
+import { useToast } from "./toast.jsx";
 import { LoginView, SetPasswordView, TwoFactorView } from "./screens/Auth.jsx";
 import { ProjectsView } from "./screens/Projects.jsx";
 
@@ -36,6 +37,7 @@ function FullScreenLoader() {
 }
 
 export default function App() {
+  const toast = useToast();
   const [user, setUser] = useState(null);
   const [booting, setBooting] = useState(true);
   const [view, setView] = useState("projects"); // "projects" | "people"
@@ -69,10 +71,21 @@ export default function App() {
   }, [user]);
 
   const handleLogin = async (email, password) => {
-    const d = await api("/auth/login", { method: "POST", body: { email, password } });
-    setToken(d.token);
-    setUser(d.user); // includes the permissions object from the server
-    setTwofa(d.twofa); // {required, enrolled, verified:false} — gates access below
+    try {
+      const d = await api("/auth/login", { method: "POST", body: { email, password } });
+      setToken(d.token);
+      setUser(d.user); // includes the permissions object from the server
+      setTwofa(d.twofa); // {required, enrolled, verified:false} — gates access below
+      // If 2FA still stands between them and the app, say so; otherwise welcome.
+      if (d.twofa && d.twofa.required && !d.twofa.verified) {
+        toast.info("Password accepted — one more step to finish signing in.");
+      } else {
+        toast.success(`Welcome back, ${d.user?.name?.split(" ")[0] || "there"}.`, { title: "Signed in" });
+      }
+    } catch (err) {
+      toast.error(err.message || "Login failed.", { title: "Sign-in failed" });
+      throw err; // let LoginView still show its inline error
+    }
   };
 
   const logout = () => {
@@ -81,6 +94,7 @@ export default function App() {
     setTwofa(null);
     setView("projects");
     setOpenProjectId(null);
+    toast.info("You've been signed out.");
   };
 
   // Called when the authenticator (or a backup) code checks out: swap the
@@ -89,6 +103,7 @@ export default function App() {
     setToken(token);
     setUser(u);
     setTwofa({ required: true, enrolled: true, verified: true });
+    toast.success(`Welcome back, ${u?.name?.split(" ")[0] || "there"}.`, { title: "Signed in" });
   };
 
   if (booting) return <FullScreenLoader />;

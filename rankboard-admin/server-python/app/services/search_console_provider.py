@@ -28,16 +28,39 @@ _SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
 # Row cap for the query / page breakdowns — keep the busiest ~25 rows.
 _ROW_LIMIT = 25
 
+# ── Service cache (per worker thread) ───────────────────────────────────────
+# Building the Search Console service is expensive: it loads the credentials,
+# fetches/parses the API discovery document, and the first real call performs
+# an OAuth token exchange. The old code did all of this on EVERY provider call,
+# and the Performance report makes THREE calls per request — so a single page
+# load paid that cost three times over (a big chunk of the ~20s slowness).
+#
+# We cache the built service per THREAD (not a single global) because the
+# service's underlying httplib2 transport is not safe to share across threads
+# running requests concurrently. FastAPI dispatches these sync endpoints on a
+# bounded worker-thread pool, so each thread builds the service once and reuses
+# it on every later call — the three queries in one request always run on the
+# same thread, sequentially, so they safely share that thread's service.
+import threading
+
+_local = threading.local()   # holds `service` per worker thread once built
+
 
 def _build_service():
-    """Build an authenticated Search Console service from the shared GA4
-    service-account JSON, or return (None, error_message).
+    """Return a per-thread cached, authenticated Search Console service, or
+    (None, error).
 
+    Built once per worker thread and reused (see the cache note above).
     Imported lazily so the rest of the app (and `python -m py_compile`)
-    doesn't hard-depend on google-api-python-client being installed. Tries
-    the modern "searchconsole" v1 discovery doc first and falls back to the
-    legacy "webmasters" v3 if that name/version doesn't resolve against the
-    installed client — both expose searchanalytics().query()."""
+    doesn't hard-depend on google-api-python-client being installed. Tries the
+    modern "searchconsole" v1 discovery doc first and falls back to the legacy
+    "webmasters" v3 if that name/version doesn't resolve against the installed
+    client — both expose searchanalytics().query()."""
+    # Fast path: this thread already built one — reuse it.
+    cached = getattr(_local, "service", None)
+    if cached is not None:
+        return cached, None
+
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
         return None, "Search Console is not configured on the server (no service-account key set)."
 
@@ -47,6 +70,16 @@ def _build_service():
     except ImportError:
         return None, "The google-api-python-client package is not installed on the server."
 
+    service, err = _construct_service(Credentials, build)
+    if err:
+        return None, err
+    _local.service = service
+    return service, None
+
+
+def _construct_service(Credentials, build):
+    """Load credentials and build the service (no caching). Returns
+    (service, None) or (None, error_message)."""
     try:
         # GOOGLE_SERVICE_ACCOUNT_JSON may hold the full JSON key CONTENT (an env
         # var on hosts like Render, where there's no key file on disk) or a PATH

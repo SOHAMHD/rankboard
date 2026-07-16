@@ -491,7 +491,7 @@ def _posts_block(block_id, title, noun, items):
         "unavailableReason": None,
         "noun": noun,
         "count": len(items),
-        "items": [{"url": (it or {}).get("url")} for it in items],
+        "items": [{"url": (it or {}).get("url"), "title": (it or {}).get("title")} for it in items],
     }
 
 
@@ -567,7 +567,8 @@ def build_document(gathered: dict) -> dict:
         _ga4_overview_grid(ga4, ga4_present, reason("ga4")),
         _ga4_users_chart(ga4, ga4_present, reason("ga4")),
         _notes_slot("ga4-graph-notes", "Graph Notes"),
-        # Traffic by Channel (kept)
+        # Traffic by Channel: notes (shown left of the donut) + table
+        _notes_slot("ga4-channel-notes", "Traffic by Channel Notes"),
         ga4_tbl["by_channel"],
         # 5. Users by Country & City: notes + list
         _notes_slot("ga4-cities-notes", "Cities & Countries Notes"),

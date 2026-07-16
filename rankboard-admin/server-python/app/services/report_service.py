@@ -161,7 +161,13 @@ def gather(
         (period_key,) = db.execute("SELECT strftime('%Y-%m','now')").fetchone()
 
     snap = _pick_snapshot(db, project_id, period_key)
-    prev_snap = _pick_prev_snapshot(db, project_id, snap)
+    # The previous-rank column is LABELLED with the previous CALENDAR month
+    # (e.g. "Rank · May 2026" for a June report), so its data must come from that
+    # month's snapshot — not merely the chronologically-previous save. Using the
+    # latter meant a second save in the SAME month (or another month's snapshot)
+    # became the baseline, so every keyword read "no change". Pick by the prior
+    # month's period_key; None when that month was never snapshotted (no deltas).
+    prev_snap = _pick_snapshot(db, project_id, report_google.previous_period(period_key))
     moz = _pick_moz(db, project_id, period_key)
     prev_moz = _pick_prev_moz(db, project_id, moz)
 

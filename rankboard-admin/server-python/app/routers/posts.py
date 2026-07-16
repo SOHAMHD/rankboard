@@ -1,14 +1,19 @@
-"""POST ROUTES — per-project content links: blog posts + LinkedIn posts.
+"""POST ROUTES - per-project content links: blog posts + LinkedIn posts.
 
 Mounted under /api/projects (like moz/backlinks), so paths nest as
 /api/projects/{project_id}/posts...
 
 Auth:
-  • READS (list)          — any signed-in user who can see the project.
-  • WRITES (add, delete)  — AUTHOR roles only (Super Admin / Admin / Team);
+  - READS (list)          - any signed-in user who can see the project.
+  - WRITES (add, delete)  - AUTHOR roles only (Super Admin / Admin / Team);
                             Clients are view-only.
+
+Posts are kept MONTH-WISE (like backlinks): each post carries a "YYYY-MM"
+month, so a report for a given period shows only that month's posts.
 """
+import re
 import sqlite3
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -20,32 +25,48 @@ from ..security import require_active_user, require_project_access, require_role
 router = APIRouter(dependencies=[Depends(require_active_user)])
 
 _KINDS = {"blog", "linkedin"}
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+_SCHEMES = ("http" + "://", "https" + "://")
+
+
+def _current_month() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 def _row(r: sqlite3.Row) -> dict:
-    return {"id": r["id"], "kind": r["kind"], "url": r["url"], "title": r["title"], "createdAt": r["created_at"]}
+    month = r["month"] or (r["created_at"] or "")[:7]
+    return {"id": r["id"], "kind": r["kind"], "url": r["url"], "title": r["title"],
+            "month": month, "createdAt": r["created_at"]}
 
 
 class PostIn(BaseModel):
     kind: str
     url: str
     title: str | None = None
+    month: str | None = None
 
 
 @router.get("/{project_id}/posts", dependencies=[Depends(require_project_access)])
-def list_posts(project_id: int, kind: str | None = None, db: sqlite3.Connection = Depends(get_db)):
-    """A project's posts, newest first. Optional ?kind=blog|linkedin filters."""
+def list_posts(project_id: int, kind: str | None = None, month: str | None = None,
+               db: sqlite3.Connection = Depends(get_db)):
+    """A project's posts, newest first. Optional kind and month filters."""
     if kind is not None and kind not in _KINDS:
         raise HTTPException(400, "Unknown post kind.")
+    if month is not None and not _MONTH_RE.match(month):
+        raise HTTPException(400, "Month must be in YYYY-MM format, e.g. 2026-07.")
+    clauses = ["project_id = ?"]
+    params: list = [project_id]
     if kind:
-        rows = db.execute(
-            "SELECT * FROM posts WHERE project_id = ? AND kind = ? ORDER BY created_at DESC, id DESC",
-            (project_id, kind),
-        ).fetchall()
-    else:
-        rows = db.execute(
-            "SELECT * FROM posts WHERE project_id = ? ORDER BY created_at DESC, id DESC", (project_id,)
-        ).fetchall()
+        clauses.append("kind = ?")
+        params.append(kind)
+    if month:
+        clauses.append("month = ?")
+        params.append(month)
+    where = " AND ".join(clauses)
+    rows = db.execute(
+        "SELECT * FROM posts WHERE " + where + " ORDER BY created_at DESC, id DESC",
+        tuple(params),
+    ).fetchall()
     return {"posts": [_row(r) for r in rows]}
 
 
@@ -58,17 +79,20 @@ def add_post(project_id: int, body: PostIn, db: sqlite3.Connection = Depends(get
     kind = (body.kind or "").strip().lower()
     url = (body.url or "").strip()
     title = (body.title or "").strip() or None
+    month = (body.month or "").strip() or _current_month()
     if kind not in _KINDS:
         raise HTTPException(400, "Kind must be 'blog' or 'linkedin'.")
     if not url:
         raise HTTPException(400, "A link is required.")
-    if not (url.startswith("http://") or url.startswith("https://")):
-        raise HTTPException(400, "Enter a full URL starting with http:// or https://.")
+    if not url.lower().startswith(_SCHEMES):
+        raise HTTPException(400, "Enter a full URL starting with http or https.")
+    if not _MONTH_RE.match(month):
+        raise HTTPException(400, "Month must be in YYYY-MM format, e.g. 2026-07.")
     if db.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone() is None:
         raise HTTPException(404, "Project not found.")
     cur = db.execute(
-        "INSERT INTO posts (project_id, kind, url, title) VALUES (?, ?, ?, ?)",
-        (project_id, kind, url, title),
+        "INSERT INTO posts (project_id, kind, url, title, month) VALUES (?, ?, ?, ?, ?)",
+        (project_id, kind, url, title, month),
     )
     row = db.execute("SELECT * FROM posts WHERE id = ?", (cur.lastrowid,)).fetchone()
     return {"post": _row(row)}

@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { api, BASE, getToken } from "../api";
 import { ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor, isReportDeleter } from "../ui";
+import { useToast } from "../toast.jsx";
 import { createBlobNode } from "../lib/blobNode";
 import {
   applyFormat,
@@ -148,6 +149,7 @@ function findUnresolved(doc, blobsByName) {
 // project dashboard under "Reports", gated to authors).
 // ════════════════════════════════════════════════════════════════════
 export function ReportsPanel({ user, project }) {
+  const toast = useToast();
   const [versions, setVersions] = useState(null);
   const [error, setError] = useState(null);
   const [openId, setOpenId] = useState(null);
@@ -196,19 +198,25 @@ export function ReportsPanel({ user, project }) {
             ? `Report generated for ${period} (in progress — data still maturing).`
             : `Report generated for ${period}.`,
         });
+        toast.success(`Report generated for ${period}.`, { title: "Report ready" });
         load(); // refresh the list so the new draft appears (no auto-navigate)
       } else if (res.status === 409) {
         setGenMsg({ tone: "warn", text: `An unsent report for ${period} already exists — see the list below.` });
+        toast.info(`An unsent report for ${period} already exists.`);
       } else if (res.status === 503) {
         setGenMsg({ tone: "warn", text: "Google timed out, please try again." });
+        toast.error("Google timed out, please try again.", { title: "Couldn't generate" });
       } else if (res.status === 422) {
         // The backend reason is specific (no snapshot / maturation / GA4-or-GSC 403).
         setGenMsg({ tone: "warn", text: data.error || `Can't generate a report for ${period} yet.` });
+        toast.error(data.error || `Can't generate a report for ${period} yet.`, { title: "Couldn't generate" });
       } else {
         setGenMsg({ tone: "warn", text: data.error || "Couldn't generate — try again." });
+        toast.error(data.error || "Couldn't generate — try again.", { title: "Couldn't generate" });
       }
     } catch {
       setGenMsg({ tone: "warn", text: "Couldn't generate — try again." });
+      toast.error("Couldn't generate — try again.", { title: "Couldn't generate" });
     } finally {
       setGenerating(false);
     }
@@ -232,10 +240,12 @@ export function ReportsPanel({ user, project }) {
     try {
       await api(`/reports/${pendingDelete.id}`, { method: "DELETE" });
       setGenMsg({ tone: "ok", text: `Report #${pendingDelete.id} (${pendingDelete.periodKey}) deleted.` });
+      toast.success(`Report #${pendingDelete.id} (${pendingDelete.periodKey}) deleted.`, { title: "Report deleted" });
       closeDelete();
       load();
     } catch (e) {
       setGenMsg({ tone: "warn", text: e.message || "Couldn't delete the report." });
+      toast.error(e.message || "Couldn't delete the report.", { title: "Delete failed" });
       closeDelete();
     } finally {
       setDeleting(false);

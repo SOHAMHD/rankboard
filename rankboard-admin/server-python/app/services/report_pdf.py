@@ -49,7 +49,7 @@ _BLUE_DEEP = "#0a2540"     # TOC hero gradient end
 _BLUE_TINT = "#eef2f7"     # table header / soft fills
 _BLUE_TINT2 = "#f8fafb"    # zebra stripe
 _CHARCOAL = "#424242"      # logo charcoal
-_INK = "#0067A6"           # InfyApp logo blue (cover + top bars)
+_INK = "#2a2f36"           # body text
 _BODY = "#1d1f20"          # body text
 _MUTED = "#8a8a8d"         # secondary text
 _GA = "#3a3f45"            # justified narrative grey
@@ -64,7 +64,7 @@ _RED_BG = "#fdecea"
 _AGENCY_PHONE = "+91 7304 5050 68"
 _AGENCY_EMAIL = "info@infyappdevelopment.com"
 _AGENCY_SITE = "infyappdevelopment.com"
-_AGENCY_ADDR = "Malad (West) - 400064, Mumbai, India"
+_AGENCY_ADDR = "211, Lotus Business Park, Rambaugh Lane,\n Next to Chincholi Signal Petrol Pump,\nMalad West - 400064"
 
 # How many rows/items fit on one physical page for each long section.
 _TABLE_ROWS_PER_PAGE = 20
@@ -81,7 +81,11 @@ def _data_uri(filename: str, mime: str) -> str:
 
 @lru_cache(maxsize=1)
 def _logo_uri() -> str:
-    return _data_uri("2rd Logo In HD Format PNG.png", "image/png")
+    # Use the tightly-cropped logo (whitespace trimmed) so it fills its box under
+    # object-fit:contain and renders at the SAME visual size as the client logo.
+    # The original "2rd Logo In HD Format PNG.png" is a huge square with lots of
+    # padding, which made the mark appear much smaller than the client's logo.
+    return _data_uri("infapp-logo-trimmed.png", "image/png")
 
 
 @lru_cache(maxsize=1)
@@ -94,6 +98,13 @@ def _toc_hero_uri():
         if (_ASSETS / name).exists():
             return _data_uri(name, mime)
     return None
+
+
+@lru_cache(maxsize=1)
+def _wave_uri():
+    """The cover accent band image (assets/wave.png), embedded as a data URI.
+    Returns None when absent so the cover simply omits the band."""
+    return _data_uri("wave.png", "image/png") if (_ASSETS / "wave.png").exists() else None
 
 
 @lru_cache(maxsize=1)
@@ -673,13 +684,16 @@ def _cover_html(header: dict, period_label: str, period_range: str) -> str:
     client_logo = header.get("clientLogo") or ""
     client_logo_html = (f'<img class="cv-client-logo" src="{client_logo}" alt="Client"/>'
                         if client_logo else '<span class="cv-client-logo-ph"></span>')
+    wave_uri = _wave_uri()
+    wave_html = f'<img class="cv-wave" src="{wave_uri}" alt=""/>' if wave_uri else ""
     return f"""
-    <section class="page cover">
+    <section class="page cover{' has-wave' if wave_uri else ''}">
+      {wave_html}
       {_ellipses_svg()}
       {_halftone_svg("cv-dots", "left")}
       <div class="cv-top">{client_logo_html}<img class="cv-logo" src="{_logo_uri()}" alt="InfyApp"/></div>
       <div class="cv-title-wrap">
-        <h1 class="cv-title">Monthly SEO<br>Report</h1>
+        <h1 class="cv-title">Monthly <span class="cv-seo">SEO</span><br>Report</h1>
         <div class="cv-sub">{month}</div>
       </div>
       <div class="cv-client-wrap">
@@ -747,25 +761,34 @@ def _toc_html(entries: list, period_range: str, page_no=None, total=None) -> str
 
 # ── page wrapper ──────────────────────────────────────────────────────────────
 def _wrap_content_page(inner: str, period_range: str, page_no=None, total=None,
-                       *, project_name: str = "", domain: str = "",
+                       *, project_name: str = "", domain: str = "", client_logo: str = "",
                        prepared_by: str = "InfyApp", left_logo: str = "", right_logo: str = "") -> str:
     """A content page in the new house style: a top header with two logo slots
     and a centered "PROJECT · MONTHLY SEO REPORT" title, and a two-tier footer —
     the reporting line (period + prepared-by + domain) and a faint report/page
-    line."""
+    line.
+
+    The running header shows the client's logo on the left and the InfyApp logo
+    on the right on EVERY page; a slot with no logo becomes an invisible spacer
+    (so the title stays centred) rather than an empty bordered "LOGO" box."""
     pg = f"{page_no} / {total}" if page_no and total else (str(page_no) if page_no else "")
     title = _esc(f"{project_name} · Monthly SEO Report".strip(" ·").upper())
 
+    # Left slot: caller override → client logo → empty. Right slot: caller
+    # override → the InfyApp agency logo (present on every page).
+    left_url = left_logo or client_logo
+    right_url = right_logo or _logo_uri()
+
     def _slot(url):
         return (f'<div class="rh-logo"><img src="{_esc(url)}" alt=""></div>'
-                if url else '<div class="rh-logo">LOGO</div>')
+                if url else '<div class="rh-logo rh-empty"></div>')
 
     left = f"Reporting period: {_esc(period_range)}"
     if prepared_by and project_name:
         left += f" · Prepared by {_esc(prepared_by)} for {_esc(project_name)}"
     return f"""
     <section class="page content">
-      <div class="rpt-header">{_slot(left_logo)}<div class="rh-title">{title}</div>{_slot(right_logo)}</div>
+      <div class="rpt-header">{_slot(left_url)}<div class="rh-title">{title}</div>{_slot(right_url)}</div>
       <div class="page-body">{inner}</div>
       <div class="footer">
         <div class="ft-main"><span>{left}</span><span>{_esc(domain)}</span></div>
@@ -780,7 +803,7 @@ def _css() -> str:
       --blue:{_BLUE};--blue-head:{_BLUE_HEAD};--blue-dark:{_BLUE_DARK};--blue-deep:{_BLUE_DEEP};
       --blue-tint:{_BLUE_TINT};--blue-tint2:{_BLUE_TINT2};--charcoal:{_CHARCOAL};
       --ink:{_INK};--body:{_BODY};--muted:{_MUTED};--ga:{_GA};--border:{_BORDER};--bg-soft:{_BG_SOFT};
-      --green:{_GREEN};--green-bg:{_GREEN_BG};--red:{_RED};--red-bg:{_RED_BG};
+      --green:{_GREEN};--green-bg:{_GREEN_BG};--red:{_RED};--red-bg:{_RED_BG};--heading-accent:#0066a6;
     }}"""
     body_css = """
     *{box-sizing:border-box;}
@@ -795,7 +818,7 @@ def _css() -> str:
     /* section eyebrow + heading (industry) */
     .rp-eyebrow{font-family:'Barlow Condensed',Arial,sans-serif;font-weight:600;color:var(--blue);
       font-size:12px;letter-spacing:.09em;text-transform:uppercase;margin:0 0 6px;}
-    h2.section{font-size:30px;color:var(--ink);margin:0 0 14px;font-weight:600;letter-spacing:-.015em;line-height:1.1;}
+    h2.section{font-size:30px;color:var(--heading-accent);margin:0 0 14px;font-weight:600;letter-spacing:-.015em;line-height:1.1;}
     h2.section.tbl-h{font-size:22px;margin:0 0 8px;}
     .blk{margin-bottom:26px;break-inside:avoid;page-break-inside:avoid;}
     .blk:last-child{margin-bottom:0;}
@@ -811,12 +834,19 @@ def _css() -> str:
       border:1px solid var(--border);font-weight:700;color:var(--muted);}
 
     /* ── Cover (unchanged brand motifs) ── */
-    .cover{height:297mm;}
-    .cv-top{position:absolute;top:8mm;left:16mm;right:16mm;display:flex;align-items:center;justify-content:space-between;}
+    .cover{height:297mm;position:relative;overflow:hidden;}
+    /* Wave accent band: a full-height dark strip down the RIGHT edge, sitting
+       BELOW the top logo row and behind all cover text. */
+    .cv-wave{position:absolute;top:34mm;right:0;bottom:0;width:46mm;
+      object-fit:cover;object-position:left center;z-index:0;}
+    .cover.has-wave .cv-top{right:52mm;}   /* keep the InfyApp logo clear of the band */
+    .cover.has-wave .cv-arrow{display:none;} /* arrow would fall on the dark band */
+    .cv-top{position:absolute;top:8mm;left:16mm;right:16mm;display:flex;align-items:center;justify-content:space-between;z-index:1;}
     .cv-client-logo{max-height:150px;max-width:320px;object-fit:contain;display:block;}
     .cv-logo{height:150px;display:block;}
     .cv-title-wrap{position:absolute;left:16mm;top:460px;}
     .cv-title{font-size:72px;line-height:1.0;margin:0;font-weight:600;color:var(--ink);letter-spacing:-.02em;}
+    .cv-seo{color:var(--heading-accent);}
     .cv-sub{font-size:32px;color:var(--ink);margin-top:6px;font-weight:400;}
     .cv-client-wrap{position:absolute;left:16mm;top:690px;}
     .cv-label{font-size:13px;color:var(--muted);margin-bottom:2px;}
@@ -885,7 +915,7 @@ def _css() -> str:
     .toc-hero-img{display:block;width:100%;height:150px;object-fit:cover;margin-bottom:26px;}
     .toc-hero{height:120px;margin-bottom:26px;display:flex;align-items:center;justify-content:center;
       border:1px solid var(--border);}
-    .toc-seo{font-family:'Barlow Condensed',sans-serif;font-size:44px;font-weight:600;color:var(--ink);letter-spacing:.02em;}
+    .toc-seo{font-family:'Barlow Condensed',sans-serif;font-size:44px;font-weight:600;color:var(--heading-accent);letter-spacing:.02em;}
     .toc-cols{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:14px;}
     .toc-row{display:flex;gap:14px;align-items:baseline;margin-bottom:16px;}
     .toc-n{font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:600;color:var(--blue);min-width:30px;}
@@ -897,9 +927,10 @@ def _css() -> str:
     /* ── Content-page header (dual logo slots + centered title) ── */
     .rpt-header{position:absolute;top:0;left:0;right:0;height:22mm;padding:0 16mm;
       display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);}
-    .rh-logo{width:96px;height:40px;border:1px solid var(--border);display:flex;align-items:center;
+    .rh-logo{width:130px;height:44px;display:flex;align-items:center;
       justify-content:center;color:var(--neutral,#b7b7ba);font-size:10px;letter-spacing:.14em;
       font-family:'Barlow Condensed',Arial,sans-serif;overflow:hidden;}
+    .rh-empty{visibility:hidden;}
     .rh-logo img{max-width:100%;max-height:100%;object-fit:contain;}
     .rh-title{flex:1;text-align:center;font-family:'Barlow Condensed',Arial,sans-serif;font-weight:600;
       color:var(--blue);font-size:12px;letter-spacing:.16em;text-transform:uppercase;}
@@ -1325,7 +1356,8 @@ def render_html(version: dict, blobs: list | None = None) -> str:
              _toc_html(toc_entries, period_range, 2, total_pages)]
     for i, pg in enumerate(section_pages):
         parts.append(_wrap_content_page(pg["html"], period_range, content_start + i, total_pages,
-                                        project_name=project_name, domain=domain))
+                                        project_name=project_name, domain=domain,
+                                        client_logo=header.get("clientLogo") or ""))
     parts.append(_thankyou_html())
 
     return (f'<!doctype html><html><head><meta charset="utf-8">'
@@ -1341,27 +1373,93 @@ def render_pdf(version: dict, blobs: list | None = None) -> bytes:
     FastAPI handler, which FastAPI runs in a worker thread."""
     from playwright.sync_api import sync_playwright
 
+    # Render the cover, the content sections, and the thank-you page as SEPARATE
+    # PDFs, then merge them. This is only so the top-right InfyApp logo (added to
+    # the "content" part) appears on the content pages but NOT on the cover or
+    # thank-you page. Each part is rendered with the SAME settings as the old
+    # single-shot render (its own @page CSS via prefer_css_page_size), so page
+    # layout is unchanged — no Playwright header/footer, no margin overrides.
+    parts = None
+    agency = ""
     try:
         from . import report_industry
-        html_str = report_industry.render_document(version, blobs)
+        parts = {pt: report_industry.render_document(version, blobs, part=pt)
+                 for pt in ("cover", "content", "thankyou")}
+        agency = report_industry._agency_logo()
     except Exception as exc:
         print('industry renderer failed, using legacy:', exc)
         html_str = render_html(version, blobs)
+
+    # CONTENT pages only (cover + thank-you are full-bleed, no header/footer):
+    #   • HEADER  — InfyApp logo pinned to the TOP-RIGHT corner of every page.
+    #   • FOOTER  — page number at the bottom-left.
+    logo_img = f'<img src="{agency}" style="height:9mm">' if agency else ""
+    header_tpl = (
+        '<div style="width:100%;box-sizing:border-box;padding:0 14mm;text-align:right;'
+        f'-webkit-print-color-adjust:exact;print-color-adjust:exact">{logo_img}</div>')
+    # Dynamic month for the footer title: e.g. a June report -> "June SEO Report".
+    _content = version.get("content") or {}
+    _hdr = next((b for b in (_content.get("blocks") or []) if b.get("type") == "report_header"), {})
+    _period_label = _hdr.get("periodLabel") or _content.get("period_label") or ""
+    _month = _period_label.split()[0] if _period_label else ""
+    if not _month:
+        _MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
+                   "August", "September", "October", "November", "December"]
+        _pk = _hdr.get("period_key") or _content.get("period_key") or version.get("periodKey") or ""
+        try:
+            _month = _MONTHS[int(str(_pk).split("-")[1])]
+        except Exception:
+            _month = ""
+    _footer_title = f"{_month} SEO Report" if _month else "Monthly SEO Report"
+    footer_tpl = (
+        '<div style="width:100%;box-sizing:border-box;font-size:10px;color:#5d5d60;padding:0 14mm;'
+        'display:flex;align-items:center;justify-content:space-between;'
+        '-webkit-print-color-adjust:exact;print-color-adjust:exact">'
+        f'<span>{_esc(_footer_title)}</span>'
+        '<span><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>')
+
     with sync_playwright() as p:
         browser = p.chromium.launch()
         try:
-            page = browser.new_page()
-            page.set_content(html_str, wait_until="networkidle")
-            try:
-                page.evaluate("() => document.fonts && document.fonts.ready")
-            except Exception:
-                pass
-            page.emulate_media(media="print")
-            pdf = page.pdf(format="A4", print_background=True, prefer_css_page_size=True,
-                           margin={"top": "0", "bottom": "0", "left": "0", "right": "0"})
+            def _to_pdf(html, **kw):
+                page = browser.new_page()
+                page.set_content(html, wait_until="networkidle")
+                try:
+                    page.evaluate("() => document.fonts && document.fonts.ready")
+                except Exception:
+                    pass
+                page.emulate_media(media="print")
+                data = page.pdf(**kw)
+                page.close()
+                return data
+
+            full_bleed = dict(format="A4", print_background=True, prefer_css_page_size=True,
+                              margin={"top": "0", "bottom": "0", "left": "0", "right": "0"})
+            if parts is not None:
+                pdfs = [
+                    _to_pdf(parts["cover"], **full_bleed),
+                    _to_pdf(parts["content"], format="A4", print_background=True,
+                            display_header_footer=True, header_template=header_tpl,
+                            footer_template=footer_tpl,
+                            margin={"top": "24mm", "bottom": "14mm", "left": "14mm", "right": "14mm"}),
+                    _to_pdf(parts["thankyou"], **full_bleed),
+                ]
+            else:
+                pdfs = [_to_pdf(html_str, **full_bleed)]
         finally:
             browser.close()
-    return pdf
+
+    if len(pdfs) == 1:
+        return pdfs[0]
+    import io
+    from pypdf import PdfReader, PdfWriter
+    writer = PdfWriter()
+    for data in pdfs:
+        for pg in PdfReader(io.BytesIO(data)).pages:
+            writer.add_page(pg)
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
 
 
 def pdf_filename(version: dict) -> str:
