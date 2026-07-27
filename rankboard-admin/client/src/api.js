@@ -30,6 +30,10 @@ export async function api(path, { method = "GET", body } = {}) {
   });
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Something went wrong.");
+  if (!res.ok) {
+  const err = new Error(data.error || "Something went wrong.");
+  err.status = res.status;   // ← carry the HTTP status on the error
+  throw err;
+  }
   return data;
 }

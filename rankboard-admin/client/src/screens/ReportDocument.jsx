@@ -513,7 +513,7 @@ export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk,
                   ) : null}
                   {it.url ? (
                     <a
-                      href={it.url}
+                      href={/^https?:\/\//i.test(it.url) ? it.url : undefined}
                       target="_blank"
                       rel="noreferrer noopener"
                       className="text-orange-700 hover:underline break-all inline-flex items-start gap-1"

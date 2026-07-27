@@ -159,7 +159,7 @@ export function BacklinksView({ user, project }) {
                   <li key={b.id} className="flex items-center gap-2 px-5 py-2.5 hover:bg-stone-50 group">
                     <Link2 size={14} className="text-stone-300 shrink-0" />
                     <a
-                      href={b.url}
+                      href={/^https?:\/\//i.test(b.url) ? b.url : undefined}
                       target="_blank"
                       rel="noopener noreferrer"
                       title={b.url}

@@ -10,6 +10,7 @@ shapes: daily-users grouped BARS, the Search-Console clicks/impressions LINE,
 and the Traffic-by-Channel DONUT.
 """
 import os
+import re
 from html import escape as _e
 
 _ASSETS = os.path.join(os.path.dirname(__file__), "..", "assets", "report_design")
@@ -29,6 +30,29 @@ def _included(x):
 
 def esc(v) -> str:
     return _e("" if v is None else str(v))
+
+
+# ── Security allowlists for values that end up in the render browser ────────
+# A rich-text "color" mark is emitted INSIDE a style="" declaration, where
+# html.escape is not enough: ';' ':' '(' ')' survive and enable CSS injection
+# (e.g. background-image:url(http://169.254.169.254/…) → SSRF). Accept only a
+# hex code, rgb()/rgba(), or a plain named color; drop anything else.
+_COLOR_RE = re.compile(r"^(#[0-9a-fA-F]{3,8}|rgba?\([0-9,.\s%]+\)|[a-zA-Z]{1,32})$")
+
+
+def _safe_color(v):
+    s = ("" if v is None else str(v)).strip()
+    return s if _COLOR_RE.match(s) else None
+
+
+# The renderer is a REAL browser, so a user-supplied <img src> is an SSRF sink.
+# Accept ONLY inline base64 data-image URIs (exactly what the editor produces).
+_DATA_IMAGE_RE = re.compile(r"^data:image/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=\s]+$", re.I)
+
+
+def _safe_image_src(v) -> str:
+    s = "" if v is None else str(v)
+    return esc(s) if _DATA_IMAGE_RE.match(s) else ""
 
 
 def _num(v):
@@ -218,9 +242,9 @@ def _inline(nodes):
                 elif mt == "underline":
                     txt = f"<u>{txt}</u>"
                 elif mt in ("textStyle", "color", "highlight"):
-                    col = (m.get("attrs") or {}).get("color")
+                    col = _safe_color((m.get("attrs") or {}).get("color"))
                     if col:
-                        txt = f'<span style="color:{esc(col)}">{txt}</span>'
+                        txt = f'<span style="color:{col}">{txt}</span>'
             out.append(txt)
         elif t == "hardBreak":
             out.append("<br>")
@@ -490,7 +514,7 @@ def render_all(version, blobs=None):
     content = version.get("content") or {}
     header = next((b for b in (content.get("blocks") or []) if b.get("type") == "report_header"), {})
     project = header.get("projectName") or (content.get("project") or {}).get("name") or "SEO Report"
-    client_logo = header.get("clientLogo") or ""
+    client_logo = _safe_image_src(header.get("clientLogo"))
     agency = _agency_logo()
     return {"html": render_document(version, blobs),
             "cover": render_document(version, blobs, part="cover"),
@@ -755,14 +779,14 @@ def render_document(version, blobs=None, part="all") -> str:
         body.append('<div style="height:24px"></div>' + leftover)
 
     css = _asset("ds-industry.css")
-    cover = _cover(project, domain, period_label, period_range, header.get("clientLogo") or "", _agency_logo())
+    cover = _cover(project, domain, period_label, period_range, _safe_image_src(header.get("clientLogo")), _agency_logo())
     # ── Thank-you page ─────────────────────────────────────────────────────
     # Full-bleed page: the wave accent on the right (bleeds to the edges), and a
     # left content column (padded) with the client + InfyApp logos, a two-tone
     # headline, a short note, and a "here to help" call-out. The client logo is
     # the SAME dynamic value used on the cover (header.clientLogo, entered once).
     ty_navy, ty_blue = "#0a2540", "#2f5fd0"
-    ty_client_logo = header.get("clientLogo") or ""
+    ty_client_logo = _safe_image_src(header.get("clientLogo"))
     ty_client = (
         f'<img src="{esc(ty_client_logo)}" style="max-height:52px;max-width:230px;object-fit:contain">'
         if ty_client_logo

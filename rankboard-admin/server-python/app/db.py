@@ -876,4 +876,59 @@ def _init_sqlite() -> None:
     # One-time migration: the one-snapshot-per-month limit was a DB-level
     # UNIQUE(project_id, period_key) constraint, and older snapshots tables
     # lack the full-timestamp created_at column. SQLite can't drop a
-    # constra
+    # constraint in place, so rebuild the snapshots table — but only when the
+    # OLD shape is still present. Idempotent: on a fresh DB (the schema created
+    # by SCHEMA above has no UNIQUE and already has created_at) this is skipped,
+    # so it never fires on the current schema.
+    snap_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'snapshots'"
+    ).fetchone()
+    snap_sql = (snap_row[0] if snap_row else "") or ""
+    snap_cols = {c[1] for c in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+    needs_snapshot_rebuild = bool(snap_cols) and (
+        "created_at" not in snap_cols
+        or ("UNIQUE" in snap_sql.upper() and "PERIOD_KEY" in snap_sql.upper())
+    )
+    if needs_snapshot_rebuild:
+        # Copy every row forward, defaulting any column the OLD table lacked.
+        # Column names come from PRAGMA (trusted schema); fallbacks are literals.
+        label_col = "label" if "label" in snap_cols else "''"
+        captured_col = "captured_at" if "captured_at" in snap_cols else "date('now')"
+        created_col = "created_at" if "created_at" in snap_cols else "datetime('now')"
+        source_col = "source" if "source" in snap_cols else "'manual'"
+        locked_col = "locked" if "locked" in snap_cols else "0"
+        conn.executescript(
+            """
+            CREATE TABLE snapshots_rebuild (
+              id          INTEGER PRIMARY KEY AUTOINCREMENT,
+              project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              period_key  TEXT NOT NULL,
+              label       TEXT NOT NULL,
+              captured_at TEXT NOT NULL DEFAULT (date('now')),
+              created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+              source      TEXT NOT NULL DEFAULT 'manual',
+              locked      INTEGER NOT NULL DEFAULT 0
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO snapshots_rebuild "
+            "(id, project_id, period_key, label, captured_at, created_at, source, locked) "
+            "SELECT id, project_id, period_key, "
+            + label_col + ", " + captured_col + ", " + created_col + ", "
+            + source_col + ", " + locked_col + " FROM snapshots"
+        )
+        conn.executescript(
+            """
+            DROP TABLE snapshots;
+            ALTER TABLE snapshots_rebuild RENAME TO snapshots;
+            CREATE INDEX IF NOT EXISTS idx_snapshots_project_period
+              ON snapshots (project_id, period_key);
+            """
+        )
+        print("Migrated snapshots table: dropped one-per-month UNIQUE, added created_at")
+
+    # First-boot seed, then persist and close (mirrors the Postgres path).
+    _seed(conn)
+    conn.commit()
+    conn.close()

@@ -31,7 +31,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, BASE, getToken } from "../api";
-import { ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor, isReportDeleter } from "../ui";
+import { ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor, isReportDeleter, isReportSender } from "../ui";
 import { useToast } from "../toast.jsx";
 import { createBlobNode } from "../lib/blobNode";
 import {
@@ -42,6 +42,7 @@ import {
 import ReportDocument from "./ReportDocument";
 import ReportDocumentEditor from "./ReportDocumentEditor";
 import DownloadPdfButton from "../lib/DownloadPdfButton";
+import SendReportButton from "../lib/SendReportButton";
 
 // Only scalar sources surface as chips this slice (tabular ranks/keywords are
 // excluded), so the palette groups are GA4 / GSC / Moz plus a "Changes" group
@@ -159,6 +160,7 @@ export function ReportsPanel({ user, project }) {
   // Delete (Super Admin / Admin only — server-enforced too). pendingDelete holds
   // the row awaiting confirmation; sentAck gates the stronger SENT-tier confirm.
   const canDelete = isReportDeleter(user);
+  const canSend = isReportSender(user); // Super Admin / Admin only — Team can author but not send
   const [pendingDelete, setPendingDelete] = useState(null);
   const [sentAck, setSentAck] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -260,6 +262,7 @@ export function ReportsPanel({ user, project }) {
     return (
       <ReportEditor
         versionId={openId}
+        canSend={canSend}
         onBack={() => {
           setOpenId(null);
           load();
@@ -342,6 +345,7 @@ export function ReportsPanel({ user, project }) {
                   periodKey={v.periodKey}
                   onError={(m) => setGenMsg({ tone: "warn", text: m })}
                 />
+                {canSend && <SendReportButton versionId={v.id} periodKey={v.periodKey} />}
                 <button onClick={() => setOpenId(v.id)} className={`${BTN_GHOST} px-3 py-1.5`}>
                   {v.status === "draft" ? "Edit" : "Open"}
                 </button>
@@ -441,7 +445,7 @@ export function ReportsPanel({ user, project }) {
 // EDITOR — loads version + resolved blobs, then mounts the editor once both
 // are ready (so the atomic node bakes in the resolved-blobs map).
 // ════════════════════════════════════════════════════════════════════
-function ReportEditor({ versionId, onBack }) {
+function ReportEditor({ versionId, onBack, canSend = false }) {
   const [version, setVersion] = useState(null);
   const [blobs, setBlobs] = useState(null);
   const [error, setError] = useState(null);
@@ -481,18 +485,18 @@ function ReportEditor({ versionId, onBack }) {
         // document handles BOTH a draft (structure controls + per-narrative chip
         // editors) and a locked/sent version (read-only). The legacy prose/chip
         // editor below is kept only for any pre-block-document draft.
-        <ReportDocumentEditor key={versionId} version={version} blobs={blobs} />
+        <ReportDocumentEditor key={versionId} version={version} blobs={blobs} canSend={canSend} />
       ) : (
         // key={versionId} is load-bearing: it forces a fresh mount per version so
         // the once-only useEditor([]) / useState seeds (which bake in this
         // version's resolved-blobs map + content) re-run when switching versions.
-        <ReportEditorInner key={versionId} version={version} blobs={blobs} />
+        <ReportEditorInner key={versionId} version={version} blobs={blobs} canSend={canSend} />
       )}
     </div>
   );
 }
 
-function ReportEditorInner({ version, blobs }) {
+function ReportEditorInner({ version, blobs, canSend = false }) {
   const isDraft = version.status === "draft";
   const blobsByName = useMemo(() => new Map(blobs.map((b) => [b.name, b])), [blobs]);
   const paletteItems = useMemo(() => buildPaletteItems(blobs), [blobs]);
@@ -563,6 +567,7 @@ function ReportEditorInner({ version, blobs }) {
             <span className="text-xs text-emerald-600">Saved {savedAt.toLocaleTimeString()}</span>
           )}
           <DownloadPdfButton versionId={version.id} periodKey={version.periodKey} label onError={setSaveError} />
+          {canSend && <SendReportButton versionId={version.id} periodKey={version.periodKey} label beforeSend={isDraft ? save : undefined} />}
           {isDraft ? (
             <button onClick={save} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
               {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft

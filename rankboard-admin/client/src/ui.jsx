@@ -33,6 +33,10 @@ export const isAuthor = (user) => isAdmin(user) || isManager(user) || isTeamMemb
 // Mirrors server-python permissions.DELETER_ROLES; this only hides the control —
 // the backend enforces the same set on the endpoint regardless.
 export const isReportDeleter = (user) => isAdmin(user) || isManager(user);
+// May SEND a report to a client: Super Admin + Admin/Manager only (NOT Team).
+// Mirrors server-python permissions.SENDER_ROLES; hiding the control is a
+// convenience — the /reports/{id}/send endpoint enforces the same set.
+export const isReportSender = (user) => isAdmin(user) || isManager(user);
 
 // Display labels for roles. The STORED value stays the raw role string
 // (these are presentation only).
@@ -71,7 +75,7 @@ export const INPUT_CLS =
   "w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-colors";
 
 export const BTN_PRIMARY =
-  "inline-flex items-center justify-center gap-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 disabled:opacity-40 disabled:cursor-not-allowed";
+  "inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-40 disabled:cursor-not-allowed";
 
 export const BTN_GHOST =
   "inline-flex items-center justify-center gap-1.5 rounded-lg border border-stone-300 hover:border-stone-400 bg-white text-stone-700 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500";
@@ -91,7 +95,7 @@ export function TopBar({ user, onLogout, onPeople, onHome }) {
         <button onClick={onHome} className="flex items-center gap-2.5 cursor-pointer" aria-label="Go to projects">
           <img src="/infapp-logo.png" alt="InfyApp" className="h-7 w-auto" />
           <span className="h-5 w-px bg-stone-200" aria-hidden="true" />
-          <span className="font-bold text-stone-900 font-display">RankBoard</span>
+          <span className="font-bold text-stone-900 font-display">SEO Dashboard</span>
         </button>
         <div className="flex items-center gap-2 sm:gap-3">
           {onPeople && (can(user, "manageUsers") || can(user, "assignProjects")) && (
@@ -196,7 +200,7 @@ export function Toggle({ on, onClick }) {
       aria-checked={on}
       aria-label={on ? "Deactivate project" : "Activate project"}
       className={`relative h-6 w-11 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 ${
-        on ? "bg-emerald-500" : "bg-stone-300"
+        on ? "bg-blue-500" : "bg-stone-300"
       }`}
     >
       <span

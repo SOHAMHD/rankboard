@@ -60,11 +60,19 @@ def import_backlinks(db, project_id: int, month: str, urls: list[str]) -> dict:
         ).fetchall()
     }
 
-    added, skipped = 0, 0
+    added, skipped, rejected = 0, 0, 0
     for line in urls or []:
         url = (line or "").strip()
         if not url:
             continue  # blank line — silently ignored, not a "duplicate"
+        # SECURITY: only real web links are stored. A backlink URL is later
+        # rendered as an <a href> in the app, so a "javascript:" or "data:"
+        # scheme here would be a stored-XSS payload. Reject anything that isn't
+        # http(s) (mirrors the posts service). Rejected lines are counted, not
+        # inserted, and never fail the whole import.
+        if not url.lower().startswith(("http://", "https://")):
+            rejected += 1
+            continue
         if url in existing:
             skipped += 1
             continue
@@ -80,7 +88,7 @@ def import_backlinks(db, project_id: int, month: str, urls: list[str]) -> dict:
         existing.add(url)
         added += 1
 
-    return {"month": month, "added": added, "skipped": skipped}
+    return {"month": month, "added": added, "skipped": skipped, "rejected": rejected}
 
 
 def list_backlinks(db, project_id: int, month: str | None = None) -> list[dict]:

@@ -83,10 +83,10 @@ const NAV_GROUPS = [
   },
   {
     id: "rank-ledger",
-    label: "Rank Ledger",
+    label: "Keyword Rankings",
     icon: ListOrdered,
     children: [
-      { id: "rank-live", label: "Live Ledger" },
+      { id: "rank-live", label: "Live rankings" },
       { id: "rank-snapshots", label: "Snapshots" },
     ],
   },
@@ -431,14 +431,17 @@ function RankLedger({ user, project, onChanged }) {
         { title: "Rankings checked" }
       );
       await onChanged();
-    } catch (err) {
-      // The server sends a clear 429 message when the quota is hit, and a 403
-      // if the role isn't allowed — surface either verbatim.
-      setError(err.message);
-      toast.error(err.message, { title: "Rank check failed" });
-    } finally {
-      setChecking(false);
-    }
+} catch (err) {
+  setError(err.message);
+  if (err.status === 402) {
+    toast.error(
+      "Rank checks are out of credit. Top up the DataForSEO balance to run more checks.",
+      { title: "Payment required" }
+    );
+  } else {
+    toast.error(err.message, { title: "Rank check failed" });
+  }
+}
   };
 
   const deleteKeyword = async (kwId) => {
@@ -493,7 +496,6 @@ function RankLedger({ user, project, onChanged }) {
         <p className="text-sm text-stone-500 mt-1">Where each keyword stands now vs. the previous lookup.</p>
       </div>
 
-      <ErrorNote>{error}</ErrorNote>
 
       {checkResult && (
         <div className="text-sm rounded-lg px-3 py-2 mb-4 bg-sky-50 border border-sky-100 text-sky-800">
@@ -571,7 +573,26 @@ function RankLedger({ user, project, onChanged }) {
       )}
 
       {kws.length === 0 ? (
-        <div className="bg-white rounded-xl border border-dashed border-stone-300 py-16 flex flex-col items-center text-center px-6">
+        <div className="bg-white.
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        rounded-xl border border-dashed border-stone-300 py-16 flex flex-col items-center text-center px-6">
           <div className="h-12 w-12 rounded-full bg-stone-100 flex items-center justify-center mb-4">
             <Search size={20} className="text-stone-400" />
           </div>
@@ -590,10 +611,10 @@ function RankLedger({ user, project, onChanged }) {
           )}
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-stone-200 overflow-x-auto">
+        <div className="bg-white-100 rounded-xl border border-stone-200 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-xs uppercase tracking-wider text-stone-400 border-b border-stone-200">
+              <tr className="text-left text-xs uppercase tracking-wider text-stone-900 border-b border-stone-200">
                 <th className="px-5 py-3 font-medium">Keyword</th>
                 <th className="px-5 py-3 font-medium">Previous</th>
                 <th className="px-5 py-3 font-medium">Current</th>
@@ -678,9 +699,6 @@ function RankLedger({ user, project, onChanged }) {
         </div>
       )}
 
-      <p className="text-xs text-stone-400 mt-4">
-        "Check rankings" runs in free simulated mode until DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD are set on the server, then it does real Google lookups for this project&apos;s domain. A scheduled job can later call the same endpoint automatically.
-      </p>
 
       {recordFor && (
         <RecordRankModal
@@ -1192,6 +1210,40 @@ function metricLabel(apiName) {
   return apiName;
 }
 
+// Plain-English "what does this mean" text for each metric, shown as a hover
+// tooltip on the table column headers (GA4 + GSC). Keyed by GA4 API name and by
+// GSC column key (clicks / impressions / ctr / position) — the two never clash.
+const METRIC_HELP = {
+  // ── GA4 ──
+  activeUsers: "The number of distinct people who visited your site in the selected period.",
+  newUsers: "People who visited your site for the very first time in this period.",
+  totalUsers: "All unique visitors in this period — new and returning combined.",
+  sessions: "Visits to your site. One session groups everything a user does within a single visit.",
+  engagedSessions: "Sessions that lasted 10+ seconds, had a key event, or included 2 or more page views.",
+  engagementRate: "The share of sessions that were engaged (engaged sessions ÷ total sessions).",
+  averageSessionDuration: "The average length of a session, from first to last activity.",
+  userEngagementDuration: "The total time users spent actively engaged with your site.",
+  averageEngagementTime: "The average time your site was open and in focus per active user.",
+  screenPageViews: "The total number of pages viewed, including repeat views of the same page.",
+  eventCount: "The total number of events (page views, clicks, scrolls, etc.) that were triggered.",
+  bounceRate: "The share of sessions that were NOT engaged — the opposite of engagement rate.",
+  keyEvents: "How many times visitors completed actions you've marked as important (conversions).",
+  totalRevenue: "Total revenue from purchases, subscriptions, and advertising.",
+  engagedSessionsPerUser: "The average number of engaged sessions per active user.",
+  // ── GSC (Search Console) ──
+  clicks: "How many times people clicked through to your site from Google search results.",
+  impressions: "How many times your site appeared in Google search results, whether clicked or not.",
+  ctr: "Click-through rate — clicks ÷ impressions, shown as a percentage.",
+  position: "Your site's average ranking position in search results (1 is the top; lower is better).",
+};
+
+// The "what does this mean" tooltip for a metric header. Falls back to the
+// human label so the header always has a helpful hover, even for a new metric
+// that isn't in the glossary yet.
+function metricHelp(key) {
+  return METRIC_HELP[key] || metricLabel(key);
+}
+
 // Rate metrics are fractions (0–1) GA reports as percentages; duration metrics
 // are seconds. Everything else is a plain count. Used for the table cells.
 const RATE_METRICS = new Set(["engagementRate", "bounceRate"]);
@@ -1229,8 +1281,8 @@ const MONTH_NAMES = [
 
 // Chart palette — orange is the app accent; sky is the established second
 // series colour (see role styles / rank "New" badge).
-const COLOR_ACTIVE = "#5b5bf7"; // brand purple — active users
-const COLOR_NEW = "#0284c7"; // sky-600 — new users
+const COLOR_ACTIVE = "#00A693"; // brand purple — active users
+const COLOR_NEW = "#5B5BF7"; // sky-600 — new users
 
 // Categorical palette for composition donuts (Channels, Devices, Language…).
 // Leads with the two series colours, then distinct hues; greens/reds are left
@@ -1253,11 +1305,15 @@ function toYMD(d) {
   return `${y}-${m}-${day}`;
 }
 
-// "Last N days" ending today (inclusive), as concrete dates.
+// "Last N days" ending YESTERDAY (today excluded), as concrete dates. Today is
+// left out on purpose: GA4 hasn't finished collecting the current day, so a
+// partial "today" would drag the numbers down. So "Last 7 days" = the 7 full
+// days before today (e.g. run on the 16th → the 9th through the 15th).
 function presetRange(days) {
   const end = new Date();
-  const start = new Date();
-  start.setDate(start.getDate() - (days - 1));
+  end.setDate(end.getDate() - 1); // yesterday — exclude the incomplete current day
+  const start = new Date(end);
+  start.setDate(start.getDate() - (days - 1)); // N full days ending yesterday
   return { start: toYMD(start), end: toYMD(end) };
 }
 
@@ -1292,6 +1348,7 @@ function TrafficTool({ project, view }) {
   const [activePreset, setActivePreset] = useState(28); // highlighted preset, or null
   const [data, setData] = useState(null); // null = still loading
   const [error, setError] = useState(null);
+  const toast = useToast();
 
   // The Overview headline cards + trend follow the shared date range. (Each
   // page's builder fetches its own filtered /report independently below.)
@@ -1309,6 +1366,12 @@ function TrafficTool({ project, view }) {
       cancelled = true;
     };
   }, [project.id, range.start, range.end]);
+
+  // Surface a GA4 error (returned in-band by the server) as a toast.
+  useEffect(() => {
+    if (data?.error) toast.error("We couldn't load traffic for this project. Check that the GA4 property ID is correct and that the RankBoard service account has access to it.",
+      { title: "Traffic" },[data?.error] );
+  });
 
   // No property ID set, or the server reports GA4 isn't configured → empty state.
   const notConfigured = !project.gaPropertyId || (data && data.configured === false);
@@ -1357,8 +1420,6 @@ function TrafficTool({ project, view }) {
           Google Analytics 4 active users, new users, and average engagement time for the selected range.
         </p>
       </div>
-
-      <ErrorNote>{error}</ErrorNote>
 
       {notConfigured ? (
         <div className="bg-white rounded-xl border border-dashed border-stone-300 py-16 flex flex-col items-center text-center px-6">
@@ -1450,10 +1511,6 @@ function TrafficTool({ project, view }) {
             (data === null ? (
               <div className="flex justify-center py-16">
                 <LoaderCircle size={22} className="text-orange-600 animate-spin" />
-              </div>
-            ) : data.error ? (
-              <div className="text-sm rounded-lg px-3 py-2 mb-6 bg-amber-50 border border-amber-100 text-amber-800">
-                {data.error}
               </div>
             ) : (
               (() => {
@@ -1721,9 +1778,7 @@ function TrafficTrendChart({ byDate }) {
           <h2 className="text-sm font-semibold text-stone-900 font-display">Users over time</h2>
           <p className="text-xs text-stone-400 mt-0.5">Active vs. new users across the range</p>
         </div>
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-stone-600 border border-stone-200 rounded-lg px-2.5 py-1">
-          Daily <ChevronDown size={13} className="text-stone-400" />
-        </span>
+        
       </div>
       {chartData.length === 0 ? (
         <p className="py-12 text-center text-sm text-stone-400">No data for this range.</p>
@@ -1949,25 +2004,20 @@ function ReportResult({ report, onDrill }) {
       </div>
 
       {/* Combined table — one column per dimension + one per metric, + totals. */}
-      <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
-        <table className="w-full text-sm table-fixed">
-          <colgroup>
-            {dims.map((d) => (
-              <col key={`d-${d}`} />
-            ))}
-            {mets.map((m) => (
-              <col key={`m-${m}`} className="w-28" />
-            ))}
-          </colgroup>
+      {/* overflow-x-auto + a content-width table (min-w-full, NOT table-fixed):
+          with many metric columns the table grows past the container and scrolls
+          horizontally instead of squeezing every column into the visible width. */}
+      <div className="bg-white rounded-xl border border-stone-200 overflow-x-auto">
+        <table className="min-w-full text-sm">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wider text-stone-400 border-b border-stone-200">
               {dims.map((d) => (
-                <th key={d} className="px-5 py-3 font-medium truncate" title={dimensionLabel(d)}>
+                <th key={d} className="px-5 py-3 font-medium max-w-[16rem] truncate" title={dimensionLabel(d)}>
                   {dimensionLabel(d)}
                 </th>
               ))}
               {mets.map((m) => (
-                <th key={m} className="px-5 py-3 font-medium truncate" title={metricLabel(m)}>
+                <th key={m} className="px-5 py-3 font-medium whitespace-nowrap" title={metricHelp(m)}>
                   {metricLabel(m)}
                 </th>
               ))}
@@ -1987,7 +2037,7 @@ function ReportResult({ report, onDrill }) {
                     const raw = (r.dims || [])[di];
                     const v = cleanDimValue(raw);
                     return (
-                      <td key={d} className="px-5 py-3 font-medium text-stone-800 truncate" title={v}>
+                      <td key={d} className="px-5 py-3 font-medium text-stone-800 max-w-[16rem] truncate" title={v}>
                         {/* Clickable drill-down: applies the RAW value as an EXACT
                             filter on this dimension (same pattern as the GSC report).
                             Plain text for "(not set)"/empty rows — nothing to filter on. */}
@@ -2191,6 +2241,7 @@ function SearchConsoleTool({ project }) {
   const [error, setError] = useState(null); // transport/HTTP failure (api() threw)
   const [busy, setBusy] = useState(false); // a fetch is in flight (incl. refetches after the first load)
   const [pendingPick, setPendingPick] = useState(null); // raw key of the row the user just clicked to drill into
+  const toast = useToast();
 
   // No site URL set → friendly empty state, no fetch.
   const notConfigured = !project.gscSiteUrl;
@@ -2237,6 +2288,9 @@ function SearchConsoleTool({ project }) {
     return () => {
       cancelled = true;
     };
+    useEffect(() => {
+  if (data?.error) toast.error("Google search console isn't configured for this project. Please check the project domain.", { title: "Search Console" });
+}, [error.data?.error]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, range.start, range.end, searchType, dimension, structuralKey, debouncedExprKey, notConfigured]);
 
@@ -2721,7 +2775,11 @@ function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
             {cols.map((c) => {
               const active = sort.col === c.col;
               return (
-                <th key={c.col} className="px-5 py-3 font-medium">
+                <th
+                  key={c.col}
+                  className="px-5 py-3 font-medium"
+                  title={c.col !== "key" ? metricHelp(c.col) : undefined}
+                >
                   <button
                     onClick={() => sortBy(c.col)}
                     className={`inline-flex items-center gap-1 uppercase tracking-wider transition-colors hover:text-stone-600 ${
@@ -2796,8 +2854,7 @@ function Stat({ label, value, tone, icon: Icon, delta, deltaDown, spark, onClick
   const valueClass = tone === "up" ? "text-emerald-600" : tone === "down" ? "text-red-500" : "text-stone-900";
   const clickable = typeof onClick === "function";
   const Tag = clickable ? "button" : "div";
-  const cls =
-    "bg-white rounded-xl border shadow-sm p-4 sm:p-5 flex flex-col rise-in " +
+  const cls ="bg-white rounded-xl border shadow-sm p-4 sm:p-5 flex flex-col rise-in " +
     (active ? "border-orange-400 ring-2 ring-orange-500/30" : "border-stone-200") +
     (clickable
       ? " w-full text-left cursor-pointer hover:border-stone-300 hover:shadow transition-all focus:outline-none focus:ring-2 focus:ring-orange-500/40"
@@ -2865,7 +2922,7 @@ function RankChange({ current, previous }) {
   if (current == null) return <span className="text-stone-300 font-data">—</span>;
   if (previous == null) {
     return (
-      <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full bg-sky-100 text-sky-700">
+      <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-sky-700">
         New
       </span>
     );

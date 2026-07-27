@@ -45,6 +45,7 @@ import { api } from "../api";
 import { ErrorNote, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { createBlobNode } from "../lib/blobNode";
 import DownloadPdfButton from "../lib/DownloadPdfButton";
+import SendReportButton from "../lib/SendReportButton";
 import {
   makeSuggestion,
   SuggestionMenu,
@@ -131,7 +132,7 @@ function ReadOnlyDataBlock({ block, hideTitle }) {
 // ════════════════════════════════════════════════════════════════════
 // ENTRY — draft → editable; locked/sent → read-only.
 // ════════════════════════════════════════════════════════════════════
-export default function ReportDocumentEditor({ version, blobs }) {
+export default function ReportDocumentEditor({ version, blobs, canSend = false }) {
   if (version.status !== "draft") {
     return (
       <div className="w-full">
@@ -516,6 +517,7 @@ function EditableDoc({ version, blobs }) {
             beforeDownload={save}
             onError={setSaveError}
           />
+          {canSend && <SendReportButton versionId={version.id} periodKey={version.periodKey} label beforeSend={save} />}
           <button onClick={() => save().catch(() => {})} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
             {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft
           </button>

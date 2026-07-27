@@ -1,42 +1,123 @@
-"""EMAIL SERVICE — same swappable transport as the Node version.
+"""EMAIL SERVICE — one swappable transport, chosen by config (not code).
 
-RESEND_API_KEY set      -> actually sent via Resend's HTTP API
-RESEND_API_KEY not set  -> dev outbox only (the `emails` table)
+Transport priority (first one configured wins):
+  SMTP_HOST set        -> real send via your own SMTP server (smtplib).
+  BREVO_API_KEY set    -> real send via Brevo's transactional email API.
+  neither set          -> dev outbox only (the `emails` table + console).
+
+Both the SMTP and Brevo transports carry the PDF attachment; only the dev
+outbox skips it (nothing is actually sent).
 
 Either way the email is logged to the outbox for an audit trail, and
-callers only ever know "an invite was sent" / "a code was sent".
+callers only ever know a "delivery" status ("sent" | "failed" | "outbox").
 """
+import base64
 import json
+import smtplib
 import sqlite3
 import urllib.request
+from email.message import EmailMessage
+from email.utils import parseaddr
 
-from ..config import APP_URL, EMAIL_FROM, RESEND_API_KEY
+from ..config import (
+    APP_URL,
+    BREVO_API_KEY,
+    EMAIL_FROM,
+    SMTP_HOST,
+    SMTP_PASS,
+    SMTP_PORT,
+    SMTP_SECURE,
+    SMTP_USER,
+)
 
 
-def _deliver(db: sqlite3.Connection, *, email: str, subject: str, body: str) -> dict:
-    """Send one email via Resend when configured, and ALWAYS log it to the
-    `emails` outbox. Returns the stored row + a `delivery` status
-    ("sent" | "failed" | "outbox"). Never raises — a provider outage must not
-    break sign-in or onboarding."""
-    delivery = "outbox"
-    if RESEND_API_KEY:
-        try:
-            req = urllib.request.Request(
-                "https://api.resend.com/emails",
-                data=json.dumps({"from": EMAIL_FROM, "to": [email], "subject": subject, "text": body}).encode(),
-                headers={
-                    "Authorization": f"Bearer {RESEND_API_KEY}",
-                    "Content-Type": "application/json",
-                    # Cloudflare (in front of Resend's API) 403s urllib's default UA.
-                    "User-Agent": "RankBoard/1.0",
-                },
-                method="POST",
+def _send_via_smtp(*, email: str, subject: str, body: str, attachments=None) -> str:
+    """Send one message (optionally with attachments) through the configured
+    SMTP server. Returns "sent" or "failed"; never raises."""
+    try:
+        msg = EmailMessage()
+        msg["From"] = EMAIL_FROM
+        msg["To"] = email
+        msg["Subject"] = subject
+        msg.set_content(body)
+        for att in attachments or []:
+            maintype, _, subtype = (att.get("mime") or "application/octet-stream").partition("/")
+            msg.add_attachment(
+                att["content"],
+                maintype=maintype,
+                subtype=subtype or "octet-stream",
+                filename=att["filename"],
             )
-            with urllib.request.urlopen(req, timeout=10) as res:
-                delivery = "sent" if 200 <= res.status < 300 else "failed"
-        except Exception as exc:
-            delivery = "failed"
-            print("Could not reach the email provider:", exc)
+
+        if SMTP_SECURE == "ssl":
+            server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20)
+        else:
+            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20)
+        with server:
+            if SMTP_SECURE in ("starttls", "tls"):
+                server.starttls()
+            if SMTP_USER:
+                server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+        return "sent"
+    except Exception as exc:
+        print("SMTP send failed:", exc)
+        return "failed"
+
+
+def _send_via_brevo(*, email: str, subject: str, body: str, attachments=None) -> str:
+    """Send one message through Brevo's transactional email API
+    (POST https://api.brevo.com/v3/smtp/email). Returns "sent" or "failed";
+    never raises. Brevo wants the sender as a {name, email} object and
+    attachments as base64 under `attachment` ({name, content})."""
+    try:
+        # EMAIL_FROM is a header string ("RankBoard <no-reply@x.com>"); Brevo
+        # needs it split into a sender object. parseaddr → (name, addr).
+        from_name, from_addr = parseaddr(EMAIL_FROM)
+        sender = {"email": from_addr}
+        if from_name:
+            sender["name"] = from_name
+
+        payload = {
+            "sender": sender,
+            "to": [{"email": email}],
+            "subject": subject,
+            "textContent": body,
+        }
+        if attachments:
+            payload["attachment"] = [
+                {"name": a["filename"], "content": base64.b64encode(a["content"]).decode()}
+                for a in attachments
+            ]
+        req = urllib.request.Request(
+            "https://api.brevo.com/v3/smtp/email",
+            data=json.dumps(payload).encode(),
+            headers={
+                "api-key": BREVO_API_KEY,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "RankBoard/1.0",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as res:
+            return "sent" if 200 <= res.status < 300 else "failed"
+    except Exception as exc:
+        print("Could not reach the email provider:", exc)
+        return "failed"
+
+
+def _deliver(db: sqlite3.Connection, *, email: str, subject: str, body: str, attachments=None) -> dict:
+    """Send one email via the configured transport (SMTP > Brevo > outbox) and
+    ALWAYS log it to the `emails` outbox. Returns the stored row + a `delivery`
+    status ("sent" | "failed" | "outbox"). Never raises — a provider outage must
+    not break sign-in, onboarding, or a report send."""
+    if SMTP_HOST:
+        delivery = _send_via_smtp(email=email, subject=subject, body=body, attachments=attachments)
+    elif BREVO_API_KEY:
+        delivery = _send_via_brevo(email=email, subject=subject, body=body, attachments=attachments)
+    else:
+        delivery = "outbox"
 
     cur = db.execute(
         "INSERT INTO emails (to_email, subject, body) VALUES (?, ?, ?)", (email, subject, body)
@@ -44,15 +125,48 @@ def _deliver(db: sqlite3.Connection, *, email: str, subject: str, body: str) -> 
     row = db.execute("SELECT * FROM emails WHERE id = ?", (cur.lastrowid,)).fetchone()
     # DEV convenience: with no email provider configured, print the message to
     # the server console so local sign-in / password codes are readable without
-    # a real inbox. In production RESEND_API_KEY is set, so delivery isn't
+    # a real inbox. In production a transport is configured, so delivery isn't
     # "outbox" and nothing is printed.
     if delivery == "outbox":
+        note = " (+1 attachment)" if attachments else ""
         print("=" * 64)
-        print(f"[email outbox — no provider configured] to: {email}")
+        print(f"[email outbox — no provider configured] to: {email}{note}")
         print(f"subject: {subject}")
         print(body)
         print("=" * 64)
     return {**dict(row), "delivery": delivery}
+
+
+def _valid_email(addr: str) -> bool:
+    """Loose but practical check: exactly one @, non-empty local part, and a
+    dotted domain. Good enough to reject typos before we hand off to the MTA."""
+    name, email = parseaddr(addr or "")
+    if not email or email.count("@") != 1:
+        return False
+    local, _, domain = email.partition("@")
+    return bool(local) and "." in domain and not domain.startswith(".") and not domain.endswith(".")
+
+
+def send_report_email(
+    db: sqlite3.Connection,
+    *,
+    email: str,
+    subject: str,
+    body: str,
+    pdf_bytes: bytes,
+    pdf_filename: str,
+) -> dict:
+    """Email a report PDF to a single recipient (the per-recipient unit the
+    /reports/{id}/send endpoint loops over). The PDF rides as an attachment,
+    which only the SMTP and Resend transports support — under the dev outbox the
+    message is logged without the file."""
+    return _deliver(
+        db,
+        email=email,
+        subject=subject,
+        body=body,
+        attachments=[{"filename": pdf_filename, "content": pdf_bytes, "mime": "application/pdf"}],
+    )
 
 
 def send_invite_email(db: sqlite3.Connection, *, name: str, email: str, role: str, temp_password: str) -> dict:

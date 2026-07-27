@@ -252,6 +252,20 @@ def _esc(v) -> str:
     return html.escape("" if v is None else str(v))
 
 
+# Allowlist for any user-supplied value used as an <img src> in the rendered
+# document. The report renderer is a REAL headless browser, so an arbitrary URL
+# here is an SSRF sink (it would fetch http://169.254.169.254/… etc.) and an
+# arbitrary string is an attribute-injection sink. We accept ONLY inline
+# base64 data-image URIs — exactly what the editor produces — and drop anything
+# else to empty. Returns a safe, attribute-escaped string.
+_DATA_IMAGE_RE = re.compile(r"^data:image/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=\s]+$", re.I)
+
+
+def _safe_image_src(v) -> str:
+    s = "" if v is None else str(v)
+    return _esc(s) if _DATA_IMAGE_RE.match(s) else ""
+
+
 def _chunk(seq, n):
     seq = seq or []
     return [seq[i:i + n] for i in range(0, len(seq), n)] or [[]]
@@ -681,7 +695,7 @@ def _cover_html(header: dict, period_label: str, period_range: str) -> str:
     domain = _esc(header.get("domain") or "")
     month = _esc(period_label or header.get("periodLabel") or "")
     domain_html = f'<div class="cv-domain">{domain}</div>' if domain else ""
-    client_logo = header.get("clientLogo") or ""
+    client_logo = _safe_image_src(header.get("clientLogo"))  # allowlist to data:image/* only
     client_logo_html = (f'<img class="cv-client-logo" src="{client_logo}" alt="Client"/>'
                         if client_logo else '<span class="cv-client-logo-ph"></span>')
     wave_uri = _wave_uri()

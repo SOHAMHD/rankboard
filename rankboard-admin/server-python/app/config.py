@@ -48,8 +48,25 @@ DEBUG = os.environ.get("DEBUG", "false").strip().lower() in {"1", "true", "yes",
 # Browser CORS allowlist — comma-separated origins, defaulting to the frontend
 # (APP_URL). NEVER "*", especially with credentials.
 CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", APP_URL).split(",") if o.strip()]
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "RankBoard <onboarding@resend.dev>")
+# Brevo (formerly Sendinblue) transactional email — the API key from
+# Brevo dashboard → SMTP & API → API Keys (starts with "xkeysib-").
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+# The From address. With Brevo the address (or its domain) must be a
+# verified sender/domain in your Brevo account, or the send is rejected.
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "RankBoard <no-reply@example.com>")
+
+# ── SMTP transport (preferred when configured) ──────────────────────
+# Set SMTP_HOST to send real email through your own mail server / Gmail /
+# any SMTP provider (including Brevo's SMTP relay, smtp-relay.brevo.com:587)
+# — this takes priority over the Brevo API. Leave SMTP_HOST empty to fall
+# back to the Brevo API, then to the dev outbox. SMTP_SECURE: "ssl"
+# (implicit TLS, usually port 465), "starttls"/"tls" (upgrade on port 587,
+# the default), or "none".
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
+SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+SMTP_PASS = os.environ.get("SMTP_PASS", "")
+SMTP_SECURE = os.environ.get("SMTP_SECURE", "starttls").strip().lower()
 
 # ── Moz API (domain Authority overview) ─────────────────────────────
 # The base64 API token copied straight from the Moz API dashboard, sent in the

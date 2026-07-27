@@ -19,11 +19,12 @@ import sqlite3
 from datetime import datetime, timedelta
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from ..db import get_db
 from ..permissions import EMAIL_2FA_ROLES, PERMISSIONS
+from ..services import throttle
 from ..security import (
     create_pending_token,
     create_token,
@@ -124,16 +125,26 @@ class LoginIn(BaseModel):
 
 
 @router.post("/login")
-def login(body: LoginIn, db: sqlite3.Connection = Depends(get_db)):
-    user = db.execute(
-        "SELECT * FROM users WHERE email = ?", (body.email.strip().lower(),)
-    ).fetchone()
+def login(body: LoginIn, request: Request, db: sqlite3.Connection = Depends(get_db)):
+    # Brute-force guard: after several failures for this IP+email the endpoint
+    # locks out for a cooldown. Keyed by IP AND email so one attacker can't lock
+    # out a victim globally, and a victim's account isn't hammered from one IP.
+    email = body.email.strip().lower()
+    ip = request.client.host if request.client else "?"
+    key = f"{ip}|{email}"
+    wait = throttle.login_retry_after(key)
+    if wait:
+        raise HTTPException(429, f"Too many attempts. Try again in about {wait} seconds.")
+
+    user = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
 
     # Same generic message whether the email or the password is wrong —
     # no account enumeration.
     if user is None or not bcrypt.checkpw(body.password.encode(), user["password_hash"].encode()):
+        throttle.login_failed(key)
         raise HTTPException(401, "No account matches that email and password.")
 
+    throttle.login_ok(key)  # clear the counter on a correct password
     # Password ok — but NOT signed in yet. Hand back a pending token; the client
     # must complete the authenticator step before it gets a usable session.
     token = create_pending_token(user["id"], user["role"])
@@ -223,13 +234,23 @@ def twofa_verify(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Returning-user step: verify the current authenticator code → verified token."""
+    wait = throttle.twofa_retry_after(user["id"])
+    if wait:
+        raise HTTPException(429, f"Too many attempts. Try again in about {wait} seconds.")
     row = db.execute(
         "SELECT totp_secret, totp_enabled FROM users WHERE id = ?", (user["id"],)
     ).fetchone()
     if row is None or not row["totp_enabled"] or not row["totp_secret"]:
         raise HTTPException(400, "Set up two-step verification first.")
+    # Replay guard: a TOTP code is valid for ~90s (window=1); reject a code we've
+    # already accepted for this user so an observed/phished code can't be reused.
+    if throttle.code_replayed(user["id"], body.code):
+        raise HTTPException(401, "That code was already used — wait for a new one.")
     if not totp.verify(row["totp_secret"], body.code):
+        throttle.twofa_failed(user["id"])
         raise HTTPException(401, "That code isn't right. Try again.")
+    throttle.mark_code_consumed(user["id"], body.code)
+    throttle.twofa_ok(user["id"])
     return _advance(user, db)
 
 
@@ -240,6 +261,9 @@ def twofa_verify_backup(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Recovery path: consume one single-use backup code → verified token."""
+    wait = throttle.twofa_retry_after(user["id"])
+    if wait:
+        raise HTTPException(429, f"Too many attempts. Try again in about {wait} seconds.")
     rows = db.execute(
         "SELECT id, code_hash FROM twofa_backup_codes WHERE user_id = ? AND used_at IS NULL",
         (user["id"],),
@@ -249,7 +273,9 @@ def twofa_verify_backup(
             db.execute(
                 "UPDATE twofa_backup_codes SET used_at = datetime('now') WHERE id = ?", (r["id"],)
             )
+            throttle.twofa_ok(user["id"])
             return _advance(user, db, extra={"backupRemaining": len(rows) - 1})
+    throttle.twofa_failed(user["id"])
     raise HTTPException(401, "That backup code isn't valid.")
 
 

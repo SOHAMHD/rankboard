@@ -46,6 +46,16 @@
       { "name": "Calgary", "locationCode": 1001801 },
       { "name": "Ottawa", "locationCode": 1002376 },
       { "name": "Edmonton", "locationCode": 1001808 }
+    ]},
+    { "name": "United Arab Emirates", "iso": "AE", "locationCode": 2784, "cities": [
+      { "name": "Dubai", "locationCode": 1000013 },
+      { "name": "Abu Dhabi", "locationCode": 1000010 },
+      { "name": "Sharjah", "locationCode": 9047580 },
+      { "name": "Al Ain", "locationCode": 1000012 },
+      { "name": "Ajman", "locationCode": 1000011 },
+      { "name": "Ras Al Khaimah", "locationCode": 1000014 },
+      { "name": "Fujairah", "locationCode": 9047577 },
+      { "name": "Umm Al Quwain", "locationCode": 9047100 }
     ]}
   ]
 }

@@ -164,7 +164,7 @@ export function ProjectsView({ user, onOpenProject, onPeople, onLogout }) {
             </p>
           </div>
           {can(user, "addProject") && (
-            <button onClick={() => setShowAdd(true)} className={`${BTN_PRIMARY} px-4 py-2`}>
+            <button onClick={() => setShowAdd(true)} className={`${BTN_PRIMARY} px-4 py-2 `}>
               <Plus size={16} /> Add project
             </button>
           )}
@@ -266,7 +266,7 @@ function ProjectCard({ project, user, confirming, onOpen, onEdit, onToggle, onDe
         </div>
         <span
           className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${
-            project.active ? "bg-emerald-100 text-emerald-700" : "bg-stone-200 text-stone-500"
+            project.active ? "bg-blue-100 text-blue-700" : "bg-stone-200 text-stone-500"
           }`}
         >
           {project.active ? "Active" : "Inactive"}

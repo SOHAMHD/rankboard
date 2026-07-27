@@ -5,22 +5,49 @@ changes, list a project's versions, and fetch one version's frozen blob to
 INSPECT it. There is NO rendering, sending, status-transition-to-sent, or public
 link here — those are later slices.
 
-Every endpoint is gated to report AUTHORS (require_roles(*AUTHOR_ROLES)); since
-the author roles are all staff, they already reach every project, so no extra
-per-project access check is needed.
+Every endpoint is gated to report AUTHORS (require_roles(*AUTHOR_ROLES)) AND to
+the caller's project access. IMPORTANT: "Team" is an author but is a project-
+SCOPED role (not staff), so role-gating alone is NOT enough — each handler
+resolves the target project and calls _require_project_access /
+_require_version_access to prevent cross-project (cross-client) access (IDOR).
+Sending to a client is further restricted to SENDER_ROLES.
 """
+import json
 import sqlite3
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from ..db import get_db
-from ..permissions import AUTHOR_ROLES, DELETER_ROLES
+from ..permissions import AUTHOR_ROLES, DELETER_ROLES, SENDER_ROLES
 from ..security import require_roles
+from ..access import user_can_access_project
 from ..services import report_service
 from ..services import report_pdf
+from ..services import email_service
 
 router = APIRouter()
+
+
+def _require_project_access(db: sqlite3.Connection, user: sqlite3.Row, project_id: int) -> int:
+    """403 unless this user may access the project. Staff (Super Admin/Admin)
+    always pass; Team/Client must be linked via user_projects. Closes the IDOR
+    where a non-staff author role (Team) could reach reports for projects it
+    isn't assigned to."""
+    if not user_can_access_project(user, project_id, db):
+        raise HTTPException(403, "You don't have access to this project's reports.")
+    return project_id
+
+
+def _require_version_access(db: sqlite3.Connection, user: sqlite3.Row, version_id: int) -> int:
+    """Resolve version_id → project_id (404 if the version is missing), then
+    enforce project access. Returns the project_id."""
+    row = db.execute(
+        "SELECT project_id FROM report_version WHERE id = ?", (version_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, "Report version not found.")
+    return _require_project_access(db, user, row["project_id"])
 
 
 class GenerateIn(BaseModel):
@@ -40,6 +67,7 @@ def generate_report(
     rank snapshot or Moz row exists for the period (422), or when an unsent
     version already exists for that project+period (409 — fork it instead).
     Returns the new version including its frozen data blob."""
+    _require_project_access(db, user, body.projectId)
     version = report_service.generate(db, body.projectId, body.periodKey, user["id"])
     return {"version": version}
 
@@ -53,6 +81,7 @@ def fork_report(
     """Fork a version for "changes": a new draft that copies the source's frozen
     data and editable content verbatim (never re-gathers), with
     parentVersionId set to the source. 404 if the source doesn't exist."""
+    _require_version_access(db, user, version_id)
     version = report_service.fork_for_changes(db, version_id, user["id"])
     return {"version": version}
 
@@ -68,6 +97,7 @@ def delete_report(
     of what the UI shows. Allowed for ANY status incl. 'sent' (the destructive
     case the UI double-confirms). 404 if the version doesn't exist. Deleting a fork
     parent is safe: children's parent_version_id is set NULL by the FK."""
+    _require_version_access(db, user, version_id)
     return report_service.delete_version(db, version_id)
 
 
@@ -79,6 +109,7 @@ def list_reports(
 ):
     """List a project's report versions, newest first (metadata only: id,
     period, status, parent, created_at — no blob)."""
+    _require_project_access(db, user, projectId)
     return {"versions": report_service.list_versions(db, projectId)}
 
 
@@ -90,6 +121,7 @@ def get_report(
 ):
     """Fetch one version's frozen data_json + editable content_json so the editor
     can rehydrate (prose + chips with their saved formats). 404 if missing."""
+    _require_version_access(db, user, version_id)
     version = report_service.get_version(db, version_id, include_data=True)
     return {"version": version}
 
@@ -107,6 +139,7 @@ def download_report_pdf(
     PROOF SLICE: only the cover + one section are rendered (see report_pdf). This is
     a SYNC handler on purpose — FastAPI runs it in a worker thread, so the
     Playwright sync API has no running asyncio loop to clash with."""
+    _require_version_access(db, user, version_id)
     version = report_service.get_version(db, version_id, include_data=True)
     # Pass the resolved scalar blobs so inserted-data chips in edited narrative
     # text render their frozen values in the PDF (not just the on-screen view).
@@ -120,6 +153,92 @@ def download_report_pdf(
     )
 
 
+class SendReportIn(BaseModel):
+    recipients: list[str]        # one or more email addresses
+    subject: str | None = None   # optional custom subject; a sensible default is built
+    message: str | None = None   # optional note prepended to the email body
+
+
+@router.post("/{version_id}/send")
+def send_report(
+    version_id: int,
+    body: SendReportIn,
+    user: sqlite3.Row = Depends(require_roles(*SENDER_ROLES)),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Email this report's PDF to one OR MANY recipients.
+
+    Renders the PDF ONCE (same on-demand path as the download endpoint — reads the
+    frozen content_json + data_json, stores nothing), then sends a copy to each
+    recipient via the configured transport (SMTP > Brevo > dev outbox). Returns a
+    per-recipient delivery result so the UI can show partial success.
+
+    GATING: restricted to SENDER_ROLES (Super Admin / Admin) — Team may author a
+    report but must NOT send it to clients. Also project-scoped like the rest.
+
+    422 if no valid recipient is supplied. A single recipient failing to send does
+    NOT fail the whole request — its status comes back as "failed" in `results`."""
+    _require_version_access(db, user, version_id)
+    # ── Validate + de-duplicate recipients up front ──────────────────────────
+    raw = body.recipients or []
+    seen: set[str] = set()
+    valid: list[str] = []
+    invalid: list[str] = []
+    for addr in raw:
+        clean = (addr or "").strip()
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        (valid if email_service._valid_email(clean) else invalid).append(clean)
+
+    if not valid:
+        raise HTTPException(422, "Add at least one valid email address.")
+
+    # ── Render the PDF once (shared across every recipient) ───────────────────
+    version = report_service.get_version(db, version_id, include_data=True)
+    blobs = report_service.available_blobs(db, version_id)
+    pdf_bytes = report_pdf.render_pdf(version, blobs)
+    filename = report_pdf.pdf_filename(version)
+
+    # A friendly, project-aware subject + body when the caller doesn't supply one.
+    proj = db.execute(
+        "SELECT name FROM projects WHERE id = ?", (version["projectId"],)
+    ).fetchone()
+    project_name = proj["name"] if proj else "your project"
+    period = version.get("periodKey") or ""
+    subject = (body.subject or "").strip() or f"SEO report for {project_name} — {period}".rstrip(" —")
+    intro = (body.message or "").strip()
+    email_body = "\n\n".join(filter(None, [
+        intro,
+        f"Hi,\n\nPlease find attached the SEO report for {project_name}"
+        + (f" ({period})" if period else "") + ".",
+        "Best regards,\nThe RankBoard team",
+    ]))
+
+    # ── Deliver one copy per recipient; collect per-address results ───────────
+    results = []
+    for addr in valid:
+        outcome = email_service.send_report_email(
+            db,
+            email=addr,
+            subject=subject,
+            body=email_body,
+            pdf_bytes=pdf_bytes,
+            pdf_filename=filename,
+        )
+        results.append({"email": addr, "delivery": outcome["delivery"]})
+
+    return {
+        "sent": sum(1 for r in results if r["delivery"] in ("sent", "outbox")),
+        "failed": sum(1 for r in results if r["delivery"] == "failed"),
+        "skipped": invalid,   # addresses rejected as malformed (never attempted)
+        "results": results,
+    }
+
+
 @router.get("/{version_id}/blobs")
 def get_report_blobs(
     version_id: int,
@@ -129,6 +248,7 @@ def get_report_blobs(
     """The SCALAR blobs available to insert, resolved from this version's FROZEN
     data — { name, label, type, source, group, currentValue, deltaValue }. The
     single source the palette AND the live preview consume. 404 if missing."""
+    _require_version_access(db, user, version_id)
     return {"blobs": report_service.available_blobs(db, version_id)}
 
 
@@ -142,6 +262,7 @@ def get_template_blocks(
     so the editable document can RE-ADD a section the author removed (the data is
     still in data_json). Read-only; no live fetch; data_json untouched. 404 if
     missing."""
+    _require_version_access(db, user, version_id)
     return {"blocks": report_service.template_blocks(db, version_id)}
 
 
@@ -157,6 +278,16 @@ def save_report_content(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Save the editor's document into content_json. DRAFT-ONLY: 409 if the version
-    is in_review/sent (locked). 404 if missing. Returns the updated version."""
+    is in_review/sent (locked). 404 if missing. Returns the updated version.
+
+    SECURITY: this document is later rendered by a server-side headless browser,
+    so it is UNTRUSTED input. Project access is enforced here, a size cap rejects
+    absurd payloads, and — critically — the renderer escapes/allowlists every
+    value it emits (see report_pdf / report_industry), so stored content can
+    never inject markup or a URL into the render browser."""
+    _require_version_access(db, user, version_id)
+    # Cheap DoS guard: reject a wildly oversized document before storing it.
+    if len(json.dumps(body.content)) > 500_000:
+        raise HTTPException(413, "Report document is too large.")
     version = report_service.save_content(db, version_id, body.content, user["id"])
     return {"version": version}
