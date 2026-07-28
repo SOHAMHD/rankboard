@@ -211,12 +211,14 @@ def send_report(
     period = version.get("periodKey") or ""
     subject = (body.subject or "").strip() or f"SEO report for {project_name} — {period}".rstrip(" —")
     intro = (body.message or "").strip()
-    email_body = "\n\n".join(filter(None, [
-        intro,
-        f"Hi,\n\nPlease find attached the SEO report for {project_name}"
-        + (f" ({period})" if period else "") + ".",
-        "Best regards,\nThe RankBoard team",
-    ]))
+    if intro:
+            email_body = intro
+    else:
+            email_body = "\n\n".join([
+                f"Hi,\n\nPlease find attached the SEO report for {project_name}"
+                + (f" ({period})" if period else "") + ".",
+                "Best regards,\nThe RankBoard team",
+            ])
 
     # ── Deliver one copy per recipient; collect per-address results ───────────
     results = []
