@@ -28,10 +28,14 @@ LOGIN_LOCK = 900       # lockout duration (s) once the cap is hit
 TWOFA_MAX = 5          # failed 2FA guesses (per user) before lockout
 TWOFA_LOCK = 900       # 2FA lockout duration (s)
 REPLAY_TTL = 120       # remember a consumed TOTP code this long (s) — blocks replay
+RESET_MAX = 5          # email-code REQUESTS (per key) in the window before cooldown
+RESET_WINDOW = 3600    # rolling window (s) for counting code requests
+RESET_LOCK = 3600      # cooldown (s) once the request cap is hit
 
 _lock = threading.Lock()
 _login: dict[str, list] = {}   # key -> [count, first_ts, locked_until]
 _twofa: dict[int, list] = {}   # user_id -> [count, first_ts, locked_until]
+_reset: dict[str, list] = {}   # key -> [count, first_ts, locked_until]
 _consumed: dict[int, dict] = {}  # user_id -> {code: consumed_ts}
 
 
@@ -82,6 +86,19 @@ def twofa_ok(user_id: int) -> None:
     with _lock:
         _twofa.pop(user_id, None)
         _consumed.pop(user_id, None)
+
+
+def reset_retry_after(key: str) -> int:
+    """Seconds until another password-reset / change-password code may be
+    requested for this key (0 = allowed). Caps both email-bombing and the
+    'guess 5 → re-request a fresh code → guess 5 more' unbounded-guessing loop."""
+    with _lock:
+        return _retry_after(_reset, key)
+
+
+def reset_requested(key: str) -> None:
+    with _lock:
+        _record_failure(_reset, key, RESET_MAX, RESET_WINDOW, RESET_LOCK)
 
 
 def code_replayed(user_id: int, code: str) -> bool:

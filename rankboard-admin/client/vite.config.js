@@ -9,9 +9,11 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: { "/api": "http://localhost:4000" },
-    // Allow importing the shared location seed that lives with the server
-    // (server-python/app/locations.json) — one directory up, outside the
-    // client root. Without this the dev server blocks the cross-dir import.
-    fs: { allow: [".."] },
+    // Allow importing ONLY the shared location seed that lives with the server
+    // (server-python/app/locations.json). Previously this was ["﻿.."], which let
+    // the dev server serve the WHOLE rankboard-admin tree over /@fs — including
+    // server-python/.env and the Google service-account key. Scope it to exactly
+    // the one file the client imports; everything else stays unreachable.
+    fs: { allow: [".", "../server-python/app/locations.json"] },
   },
 });

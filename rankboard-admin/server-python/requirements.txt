@@ -1,12 +1,15 @@
-fastapi
-uvicorn
-bcrypt
-PyJWT
-openpyxl
-python-multipart
-google-analytics-data            # GA4 Data API (traffic + report GA4 sections)
-google-api-python-client         # Search Console API (GSC totals + trend)
-google-auth                      # service-account credentials for GA4 + GSC
-psycopg[binary]  # Postgres driver (psycopg 3); used when DATABASE_URL points at Supabase
-playwright       # headless-Chrome HTML->PDF for report PDF export; run `playwright install chromium` after install (LOCAL slice)
-pypdf            # merge full-bleed cover PDF with the body PDF (running header/footer excluded from cover)
+# Version-pinned to the known-good set currently installed in the venv, so a
+# rebuild/redeploy is reproducible and can't silently pull a breaking or
+# compromised release. Regenerate deliberately (e.g. `pip freeze`) when bumping.
+fastapi==0.139.0
+uvicorn==0.51.0
+bcrypt==5.0.0
+PyJWT==2.13.0
+openpyxl==3.1.5
+python-multipart==0.0.32
+google-analytics-data==0.23.0        # GA4 Data API (traffic + report GA4 sections)
+google-api-python-client==2.198.0    # Search Console API (GSC totals + trend)
+google-auth==2.55.2                  # service-account credentials for GA4 + GSC
+psycopg[binary]==3.3.4               # Postgres driver (psycopg 3); used when DATABASE_URL points at Supabase
+playwright==1.61.0                   # headless-Chrome HTML->PDF for report PDF export; run `playwright install chromium` after install
+pypdf==6.14.2                        # merge full-bleed cover PDF with the body PDF (running header/footer excluded from cover)

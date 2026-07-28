@@ -707,28 +707,29 @@ def _seed(conn) -> None:
     """
     (count,) = conn.execute("SELECT COUNT(*) FROM users").fetchone()
     if count == 0:
-        # The seed password is NOT hardcoded. It comes from the environment
-        # (SEED_ADMIN_PASSWORD, e.g. in server-python/.env); if that's unset a
-        # random one-time password is generated and printed once. Only the
-        # bcrypt HASH is ever written to the database.
+        # The seed password comes ONLY from the environment (SEED_ADMIN_PASSWORD).
+        # We never auto-generate-and-print a password: printing a working Super
+        # Admin credential to stdout leaks it into log aggregation forever. If the
+        # env var is unset we SKIP the seed (no default credential ever ships).
+        # The seeded account is forced to rotate its password on first sign-in.
         env_pw = os.environ.get("SEED_ADMIN_PASSWORD", "").strip()
-        temp_password = env_pw or "".join(secrets.choice(_SEED_PW_CHARS) for _ in range(12))
-        pw_hash = bcrypt.hashpw(temp_password.encode(), bcrypt.gensalt()).decode()
-        conn.execute(
-            "INSERT INTO users (name, email, role, password_hash, must_change_password, status)"
-            " VALUES (?, ?, ?, ?, 0, 'active')",
-            ("Soham Dhokiya", "soham@infyappdevelopment.com", "Super Admin", pw_hash),
-        )
-        print("=" * 64)
-        print("Seeded first Super Admin:")
-        print("  email:    soham@infyappdevelopment.com")
-        if env_pw:
-            print("  password: (taken from the SEED_ADMIN_PASSWORD environment variable)")
+        if not env_pw:
+            print(
+                "No users found and SEED_ADMIN_PASSWORD is unset — skipping the "
+                "Super Admin seed. Set SEED_ADMIN_PASSWORD and restart to create it."
+            )
         else:
-            print(f"  password: {temp_password}")
-            print("  ^ auto-generated one-time password — set SEED_ADMIN_PASSWORD to choose your own.")
-        print("  Stored as a bcrypt hash, never in plain text.")
-        print("=" * 64)
+            pw_hash = bcrypt.hashpw(env_pw.encode(), bcrypt.gensalt()).decode()
+            conn.execute(
+                "INSERT INTO users (name, email, role, password_hash, must_change_password, status)"
+                " VALUES (?, ?, ?, ?, 1, 'active')",
+                ("Soham Dhokiya", "soham@infyappdevelopment.com", "Super Admin", pw_hash),
+            )
+            print(
+                "Seeded first Super Admin (soham@infyappdevelopment.com) — must change "
+                "password on first sign-in. Only the bcrypt hash is stored; the "
+                "password is never printed."
+            )
 
     (pcount,) = conn.execute("SELECT COUNT(*) FROM projects").fetchone()
     if pcount == 0:

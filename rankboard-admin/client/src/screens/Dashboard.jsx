@@ -2183,8 +2183,14 @@ function scDimensionSlug(dimension) {
 
 // One CSV field: wrap in double quotes and double any embedded quotes, so
 // commas (in queries / page URLs / locale-formatted numbers) stay contained.
+// Also neutralise CSV FORMULA INJECTION: Excel/Sheets evaluate a cell that
+// starts with = + - @ (or tab/CR) as a formula, so a value like
+// "=HYPERLINK(...)" surfaced as a search query could run on open. Prefix such
+// values with a single quote so they're treated as literal text.
 function csvField(value) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+  let s = String(value ?? "");
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return `"${s.replace(/"/g, '""')}"`;
 }
 
 // The four toggleable metrics, in card/legend order, each with its plotting

@@ -247,7 +247,10 @@ def get_analytics(
     try:
         client = _analytics_client()
     except Exception as exc:
-        return {"error": f"Could not load the Google service-account key: {exc}"}
+        # Don't echo the raw exception to the client — it can include the
+        # service-account key's file PATH. Log it server-side; return generic.
+        print("GA4 service-account key load failed:", exc)
+        return {"error": "Google Analytics isn't configured correctly on the server."}
 
     # GA4 wants the property as "properties/<id>"; accept either form.
     prop = str(property_id).strip()
@@ -467,7 +470,10 @@ def run_custom_report(
     try:
         client = _analytics_client()
     except Exception as exc:
-        return {"error": f"Could not load the Google service-account key: {exc}"}
+        # Don't echo the raw exception to the client — it can include the
+        # service-account key's file PATH. Log it server-side; return generic.
+        print("GA4 service-account key load failed:", exc)
+        return {"error": "Google Analytics isn't configured correctly on the server."}
 
     # GA4 wants the property as "properties/<id>"; accept either form.
     prop = str(property_id).strip()

@@ -44,10 +44,16 @@ ISSUER = "RankBoard"
 EMAIL_CODE_TTL_MINUTES = 10
 EMAIL_CODE_MAX_ATTEMPTS = 5
 
-# Change-password email step. FROZEN for local dev (no outbound email): with
-# this False, changing a password needs no emailed code — the user just sets a
-# new one. Set back to True to require the emailed OTP again.
-PASSWORD_OTP_ENABLED = False
+# Change-password email step. Requires an emailed one-time code before a
+# signed-in user can change their password. (Was temporarily frozen for local
+# dev when there was no outbound email; email now goes out via Brevo/SMTP, so
+# it's re-enabled. Set to False only for local testing without a mail provider.)
+PASSWORD_OTP_ENABLED = True
+
+# A throwaway bcrypt hash used to equalise login timing: when the email doesn't
+# exist we still run one bcrypt verification against this, so a missing account
+# and a wrong password take the same ~time (no timing-based account enumeration).
+_DUMMY_PW_HASH = bcrypt.hashpw(b"timing-equaliser-not-a-real-password", bcrypt.gensalt()).decode()
 
 
 def _mask_email(email: str) -> str:
@@ -138,9 +144,13 @@ def login(body: LoginIn, request: Request, db: sqlite3.Connection = Depends(get_
 
     user = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
 
-    # Same generic message whether the email or the password is wrong —
-    # no account enumeration.
-    if user is None or not bcrypt.checkpw(body.password.encode(), user["password_hash"].encode()):
+    # Always run ONE bcrypt verification — against the real hash if the account
+    # exists, else against a throwaway hash — so a missing email and a wrong
+    # password take the same time (no timing-based account enumeration). Same
+    # generic message for both, too.
+    hashed = user["password_hash"] if user is not None else _DUMMY_PW_HASH
+    password_ok = bcrypt.checkpw(body.password.encode(), hashed.encode())
+    if user is None or not password_ok:
         throttle.login_failed(key)
         raise HTTPException(401, "No account matches that email and password.")
 
@@ -168,10 +178,24 @@ class SetPasswordIn(BaseModel):
 def set_password(
     body: SetPasswordIn,
     user: sqlite3.Row = Depends(require_auth),
+    claims: dict = Depends(token_claims),
     db: sqlite3.Connection = Depends(get_db),
 ):
     if len(body.newPassword) < 8:
         raise HTTPException(400, "Password needs at least 8 characters.")
+    if len(body.newPassword.encode()) > 72:
+        raise HTTPException(400, "Password is too long (72 bytes max).")
+    if len(body.newPassword.encode()) > 72:
+        # bcrypt silently truncates at 72 bytes — reject rather than hash a
+        # partial password (which would make the extra characters meaningless).
+        raise HTTPException(400, "Password is too long (72 bytes max).")
+    # A PENDING (pre-two-step) token may set a password ONLY as part of the
+    # mandated first-time change (must_change_password). It must never overwrite
+    # an already-established password before completing two-step verification —
+    # otherwise a password-only attacker could reset the victim's password.
+    verified = (claims or {}).get("tfa") in (None, "verified")
+    if not verified and not user["must_change_password"]:
+        raise HTTPException(403, "Finish two-step verification before changing your password.")
 
     new_hash = bcrypt.hashpw(body.newPassword.encode(), bcrypt.gensalt()).decode()
     db.execute(
@@ -357,6 +381,10 @@ def password_request_code(
     (or, when the email step is frozen, tell the client no code is needed)."""
     if not PASSWORD_OTP_ENABLED:
         return {"ok": True, "otpRequired": False}
+    wait = throttle.reset_retry_after(f"pwchange:{user['id']}")
+    if wait:
+        raise HTTPException(429, f"Too many code requests. Try again in about {wait} seconds.")
+    throttle.reset_requested(f"pwchange:{user['id']}")
     _issue_password_code(user, db)
     return {"ok": True, "otpRequired": True, "emailSentTo": _mask_email(user["email"])}
 
@@ -376,6 +404,8 @@ def password_change(
     the password is NOT changed."""
     if len(body.newPassword) < 8:
         raise HTTPException(400, "Password needs at least 8 characters.")
+    if len(body.newPassword.encode()) > 72:
+        raise HTTPException(400, "Password is too long (72 bytes max).")
     if PASSWORD_OTP_ENABLED:
         row = db.execute(
             "SELECT code_hash, expires_at, attempts FROM password_otp WHERE user_id = ?", (user["id"],)
@@ -404,12 +434,24 @@ class ForgotRequestIn(BaseModel):
 
 
 @router.post("/forgot-password/request")
-def forgot_password_request(body: ForgotRequestIn, db: sqlite3.Connection = Depends(get_db)):
+def forgot_password_request(
+    body: ForgotRequestIn, request: Request, db: sqlite3.Connection = Depends(get_db)
+):
     """Send a reset code to the account's email. ALWAYS returns the same
     response whether or not the email exists — no account enumeration. (Always
     requires the emailed code; unrelated to the change-password freeze flag,
-    since there's no signed-in session to trust here.)"""
+    since there's no signed-in session to trust here.)
+
+    Rate-limited per IP+email: once the request cap is hit we silently stop
+    sending (still returning the same generic {ok:true}) — this caps both email
+    bombing and the re-request-to-reset-the-guess-counter loop, WITHOUT leaking
+    whether the account exists."""
     email = body.email.strip().lower()
+    ip = request.client.host if request.client else "?"
+    key = f"{ip}|{email}"
+    if throttle.reset_retry_after(key):
+        return {"ok": True}  # over the cap — respond identically, but don't send
+    throttle.reset_requested(key)
     user = db.execute("SELECT id, name, email FROM users WHERE email = ?", (email,)).fetchone()
     if user is not None:
         _issue_password_code(user, db)
@@ -429,6 +471,8 @@ def forgot_password_reset(body: ForgotResetIn, db: sqlite3.Connection = Depends(
     enumeration)."""
     if len(body.newPassword) < 8:
         raise HTTPException(400, "Password needs at least 8 characters.")
+    if len(body.newPassword.encode()) > 72:
+        raise HTTPException(400, "Password is too long (72 bytes max).")
     email = body.email.strip().lower()
     user = db.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
     invalid = HTTPException(401, "That code isn't right or has expired.")

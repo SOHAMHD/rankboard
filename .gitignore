@@ -1,23 +1,32 @@
-# ─── Secrets / local env files ───────────────────────────────────────
-# (.env.example files are intentionally NOT ignored — they document vars.)
-rankboard-admin/server-python/.env
-rankboard-admin/client/.env
-rankboard-admin/client/.env.local
+# Secrets — never commit
+.env
+seo-dashboard-499607-25e8ccaf16ad.json
 
-# ─── Local SQLite database files ─────────────────────────────────────
-rankboard-admin/server-python/*.db
-rankboard-admin/server-python/*.db-journal
-
-# ─── Google service-account key (Search Console / GA4) ───────────────
-rankboard-admin/server-python/seo-dashboard-*.json
-
-# ─── Python bytecode caches (any depth) ──────────────────────────────
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
 
-# ─── Python virtual environment ──────────────────────────────────────
-rankboard-admin/server-python/.venv/
+# Node / Vite frontend
+node_modules/
+dist/
+build/
+.vite/
 
-# ─── Node dependencies / build output ────────────────────────────────
-rankboard-admin/client/node_modules/
+# SQLite database (client data — back up separately)
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+
 rankboard-admin/client/dist/
