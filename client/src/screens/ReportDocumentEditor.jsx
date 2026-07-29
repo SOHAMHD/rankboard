@@ -143,7 +143,7 @@ export default function ReportDocumentEditor({ version, blobs, canSend = false }
       </div>
     );
   }
-  return <EditableDoc version={version} blobs={blobs} />;
+  return <EditableDoc version={version} blobs={blobs} canSend={canSend} />;
 }
 
 // ── one narrative block, edited with the EXISTING TipTap chip editor ───────────
@@ -351,7 +351,7 @@ function IconBtn({ label, onClick, disabled, danger, children }) {
 }
 
 // ── the editable document ─────────────────────────────────────────────────────
-function EditableDoc({ version, blobs }) {
+function EditableDoc({ version, blobs, canSend = false }) {
   const blobsByName = useMemo(() => new Map((blobs || []).map((b) => [b.name, b])), [blobs]);
   const paletteItems = useMemo(() => buildPaletteItems(blobs || []), [blobs]);
   const BlobNode = useMemo(() => createBlobNode(blobsByName), [blobsByName]);
