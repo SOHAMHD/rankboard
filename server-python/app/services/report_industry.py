@@ -170,9 +170,13 @@ def _posts_table(items) -> str:
 
 
 def _keyword_table_html(block):
-    # Drop the "Change" (delta) column; number the rows with a leading "Sr No.".
+    # Drop the "Change" (delta) column. "Sr No." now arrives as a real column from
+    # report_document, so it is NOT prepended here any more — doing both would
+    # render the number twice. Legacy blocks without it still get one prepended.
     cols = [c for c in (block.get("columns") or []) if c.get("kind") != "delta"]
-    th = '<th>Sr No.</th>' + "".join(f"<th>{esc(c.get('label'))}</th>" for c in cols)
+    has_sr = any(c.get("key") == "sr_no" for c in cols)
+    th = ("" if has_sr else '<th>Sr No.</th>') + "".join(
+        f"<th>{esc(c.get('label'))}</th>" for c in cols)
     trs = []
     i = 0
     for r in block.get("rows") or []:
@@ -187,9 +191,11 @@ def _keyword_table_html(block):
         declined = pv is not None and cv is not None and cv > pv
         style = (' style="background:rgba(22,163,74,0.16)"' if improved
                  else ' style="background:rgba(220,38,38,0.14)"' if declined else "")
-        tds = [f'<td>{i}</td>']
+        tds = [] if has_sr else [f'<td>{i}</td>']
         for c in cols:
-            v = cells.get(c.get("key"))
+            # Renumber the sr_no cell over the INCLUDED rows so a deselection in
+            # the editor doesn't leave a gap in the sequence.
+            v = i if c.get("key") == "sr_no" else cells.get(c.get("key"))
             if c.get("kind") == "dim":
                 tds.append(f"<td>{esc(v)}</td>")
             else:

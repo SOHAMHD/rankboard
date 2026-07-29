@@ -523,10 +523,15 @@ def _keyword_pages(block: dict) -> list:
     pages = []
     chunks = _chunk(rows, _KEYWORD_ROWS_PER_PAGE)
     total = len(chunks)
+    sr = 0  # runs across chunks so numbering continues onto the next page
     for i, chunk in enumerate(chunks, 1):
         body_rows = []
         for r in chunk:
-            cells = (r or {}).get("cells") or {}
+            cells = dict((r or {}).get("cells") or {})
+            # Renumber over the rows actually drawn — `rows` is already filtered to
+            # the included ones, so this closes the gaps a deselection would leave.
+            sr += 1
+            cells["sr_no"] = sr
             delta = cells.get("rank_delta")
             # row tone from the change: negative delta = improved = green
             if _num(delta) and delta != 0:
@@ -1072,10 +1077,13 @@ def _data_table_inline(b: dict) -> str:
         body = f'<tr><td colspan="{len(columns)}" class="empty">{_esc(msg)}</td></tr>'
         return head + f'<table class="{cls}">{thead}<tbody>{body}</tbody></table>'
     body_rows = []
-    for r in rows:
+    for _i, r in enumerate(rows, 1):
         cells = (r or {}).get("cells") or {}
         tone = ""
         if is_kw:
+            # Renumber Sr No. over the included rows (see _keyword_pages).
+            cells = dict(cells)
+            cells["sr_no"] = _i
             d = cells.get("rank_delta")
             tone = "row-up" if (_num(d) and d < 0) else ("row-down" if (_num(d) and d > 0) else "")
         tds = "".join(_table_cell_html(c, cells.get(c.get("key"))) for c in columns)
