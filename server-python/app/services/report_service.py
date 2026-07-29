@@ -167,7 +167,14 @@ def gather(
     # latter meant a second save in the SAME month (or another month's snapshot)
     # became the baseline, so every keyword read "no change". Pick by the prior
     # month's period_key; None when that month was never snapshotted (no deltas).
-    prev_snap = _pick_snapshot(db, project_id, report_google.previous_period(period_key))
+    prev_period = report_google.previous_period(period_key)
+    prev_snap = _pick_snapshot(db, project_id, prev_period)
+    # THIRD month back (e.g. May 2026 for a July report). Same calendar-month
+    # rule as prev_snap: labelled with a specific month, so it must come from
+    # that month's snapshot. None when never snapshotted — the column then
+    # renders empty rather than the section failing.
+    prev2_period = report_google.previous_period(prev_period)
+    prev2_snap = _pick_snapshot(db, project_id, prev2_period)
     moz = _pick_moz(db, project_id, period_key)
     prev_moz = _pick_prev_moz(db, project_id, moz)
 
@@ -183,23 +190,36 @@ def gather(
 
         # Previous-period ranks, keyed by keyword_id (preferred) then term, so a
         # keyword still matches across months even if its id changed.
-        prev_by_kw, prev_by_term = {}, {}
-        if prev_snap is not None:
-            for r in db.execute(
-                "SELECT keyword_id, term, rank FROM snapshot_ranks WHERE snapshot_id = ?",
-                (prev_snap["id"],),
-            ).fetchall():
-                if r["keyword_id"] is not None:
-                    prev_by_kw[r["keyword_id"]] = r["rank"]
-                prev_by_term[r["term"]] = r["rank"]
+        def _rank_maps(s):
+            """(by_keyword_id, by_term) rank lookups for one snapshot. Empty dicts
+            when the snapshot is missing, so callers need no None-guard."""
+            by_kw, by_term = {}, {}
+            if s is not None:
+                for r in db.execute(
+                    "SELECT keyword_id, term, rank FROM snapshot_ranks WHERE snapshot_id = ?",
+                    (s["id"],),
+                ).fetchall():
+                    if r["keyword_id"] is not None:
+                        by_kw[r["keyword_id"]] = r["rank"]
+                    by_term[r["term"]] = r["rank"]
+            return by_kw, by_term
+
+        prev_by_kw, prev_by_term = _rank_maps(prev_snap)
+        prev2_by_kw, prev2_by_term = _rank_maps(prev2_snap)
 
         rank_items, keyword_items = [], []
         for r in rank_rows:
             cur = r["rank"]
+            # Match on keyword_id first so a keyword survives a term rename, then
+            # fall back to the term so it survives an id change.
             if r["keyword_id"] is not None and r["keyword_id"] in prev_by_kw:
                 prev = prev_by_kw[r["keyword_id"]]
             else:
                 prev = prev_by_term.get(r["term"])
+            if r["keyword_id"] is not None and r["keyword_id"] in prev2_by_kw:
+                prev2 = prev2_by_kw[r["keyword_id"]]
+            else:
+                prev2 = prev2_by_term.get(r["term"])
             rank_items.append({
                 "term": r["term"],
                 "rank": cur,                       # None = never checked when frozen
@@ -209,6 +229,7 @@ def gather(
                 "term": r["term"],
                 "current_rank": cur,
                 "previous_rank": prev,             # None = no prior snapshot / new keyword
+                "previous2_rank": prev2,           # None = that month was never snapshotted
                 "rank_delta": _delta(cur, prev),   # current - previous (negative = improved)
             })
 
@@ -223,6 +244,7 @@ def gather(
             "source": registry.SOURCE_KEYWORDS,
             "snapshot_id": snap["id"],
             "prev_snapshot_id": prev_snap["id"] if prev_snap is not None else None,
+            "prev2_snapshot_id": prev2_snap["id"] if prev2_snap is not None else None,
             "items": keyword_items,
         }
 
@@ -314,6 +336,7 @@ def gather(
         "schema_version": BLOB_SCHEMA_VERSION,
         "period_key": period_key,
         "prev_period_key": prev_period,
+        "prev2_period_key": prev2_period,
         "project": {
             "id": project["id"],
             "name": project["name"],

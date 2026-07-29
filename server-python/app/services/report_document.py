@@ -16,6 +16,8 @@ THE BLOCK DOCUMENT CONTRACT (content_json shape)
   "period_label": "May 2026",
   "prev_period_key": "2026-04",
   "prev_period_label": "April 2026",
+  "prev2_period_key": "2026-03",
+  "prev2_period_label": "March 2026",
   "project": {id, name, domain},
   "blocks": [ <block>, ... ]          # ordered; render top-to-bottom
 }
@@ -301,20 +303,29 @@ def _moz_grid(moz, present, reason):
     }
 
 
-def _keyword_table(kw, present, reason, period_label, prev_label):
-    columns = [
-        {"key": "term", "label": "Keyword", "kind": "dim", "type": "text"},
+def _keyword_table(kw, present, reason, period_label, prev_label, prev2_label=""):
+    # THREE months of ranks, ordered oldest -> newest so the eye reads the trend
+    # left to right. There is deliberately NO "Change" column: the movement is
+    # shown by the green/red row tint instead (report_pdf reads rank_delta off
+    # the row cells, which are still populated below).
+    columns = [{"key": "term", "label": "Keyword", "kind": "dim", "type": "text"}]
+    if prev2_label:
+        columns.append({"key": "previous2_rank", "label": f"Rank · {prev2_label}",
+                        "kind": "metric", "type": "rank"})
+    columns += [
         {"key": "previous_rank", "label": f"Rank · {prev_label}", "kind": "metric", "type": "rank"},
         {"key": "current_rank", "label": f"Rank · {period_label}", "kind": "metric", "type": "rank"},
-        {"key": "rank_delta", "label": "Change", "kind": "delta", "type": "rank"},
     ]
     rows = []
     if present:
         for it in (kw or {}).get("items", []):
             rows.append({"cells": {
                 "term": it.get("term"),
-                "previous_rank": it.get("previous_rank"),
+                "previous2_rank": it.get("previous2_rank"),
                 "current_rank": it.get("current_rank"),
+                "previous_rank": it.get("previous_rank"),
+                # NOT a displayed column — kept so report_pdf can tint the row
+                # and _achievements can name the biggest movers.
                 "rank_delta": it.get("rank_delta"),
             }})
     return {
@@ -509,6 +520,11 @@ def build_document(gathered: dict) -> dict:
 
     period_label = _label_for(period)
     prev_label = _label_for(prev_period) if prev_period else "previous period"
+    # Third month back. Blank for reports frozen before the 3-month keyword table
+    # existed (no prev2_period_key in the blob) — _keyword_table then omits the
+    # column entirely rather than emitting one headed "Rank · ".
+    prev2_period = blob.get("prev2_period_key")
+    prev2_label = _label_for(prev2_period) if prev2_period else ""
     # The current, in-progress month is FLAGGED (not blocked): its figures cover the
     # month so far and keep changing until it ends and Google finalises the data.
     period_in_progress = bool(blob.get("period_in_progress"))
@@ -586,7 +602,7 @@ def build_document(gathered: dict) -> dict:
         _gsc_grid(gsc, gsc_present, reason("gsc")),
         _gsc_chart(gsc, gsc_present, reason("gsc")),
         # 9-12
-        _keyword_table(kw, kw_present, reason("keywords"), period_label, prev_label),
+        _keyword_table(kw, kw_present, reason("keywords"), period_label, prev_label, prev2_label),
         _backlinks_block(bl),
         _posts_block("posts-blogs", "Blog Posts", "blog post", posts.get("blogs")),
         _posts_block("posts-linkedin", "LinkedIn Posts", "LinkedIn post", posts.get("linkedin")),
@@ -605,6 +621,8 @@ def build_document(gathered: dict) -> dict:
         "period_label": period_label,
         "prev_period_key": prev_period,
         "prev_period_label": prev_label,
+        "prev2_period_key": prev2_period,
+        "prev2_period_label": prev2_label,
         "period_in_progress": period_in_progress,
         "project": {"id": project.get("id"), "name": project.get("name"), "domain": project.get("domain")},
         "blocks": blocks,
