@@ -101,3 +101,34 @@ RANK_CHECK_DEPTH = int(os.environ.get("RANK_CHECK_DEPTH", 30))
 # account is reused for every project; each project stores its own
 # GA4 property ID in the database.
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "seo-dashboard-499607-25e8ccaf16ad.json")
+
+# ── Publicly served report assets (email cover thumbnails) ──────────
+# The monthly report email embeds a thumbnail of page 1 of the report PDF.
+# Mail clients fetch images over plain HTTPS with no cookies and no auth
+# headers, so the file MUST live in a publicly reachable directory and be
+# referenced by an ABSOLUTE url. REPORT_ASSET_DIR is where the app writes the
+# PNG; REPORT_ASSET_BASE_URL is the public url prefix serving that same
+# directory. Filenames are random tokens, so the urls are unguessable.
+#
+# On the cPanel host these point into public_html, e.g.
+#   REPORT_ASSET_DIR=/home/<cpuser>/public_html/report-covers
+#   REPORT_ASSET_BASE_URL=https://your-domain/report-covers
+REPORT_ASSET_DIR = os.environ.get(
+    "REPORT_ASSET_DIR",
+    str(Path(__file__).resolve().parent.parent / "assets" / "public"),
+)
+REPORT_ASSET_BASE_URL = os.environ.get(
+    "REPORT_ASSET_BASE_URL", f"{APP_URL.rstrip('/')}/report-covers"
+).rstrip("/")
+
+# Absolute url of the logo in the report email's header bar. Publicly
+# reachable for the same reason as the cover thumbnail.
+EMAIL_LOGO_URL = os.environ.get(
+    "EMAIL_LOGO_URL", f"{APP_URL.rstrip('/')}/infapp-logo.png"
+)
+
+# Values rendered into the report email's support line and legal strip.
+SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "info@infyappdevelopment.com")
+UNSUBSCRIBE_URL = os.environ.get(
+    "UNSUBSCRIBE_URL", "https://infyappdevelopment.com/unsubscribe"
+)

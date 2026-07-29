@@ -13,11 +13,21 @@ _require_version_access to prevent cross-project (cross-client) access (IDOR).
 Sending to a client is further restricted to SENDER_ROLES.
 """
 import json
+import re
+import secrets
 import sqlite3
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
+from ..config import (
+    EMAIL_LOGO_URL,
+    REPORT_ASSET_BASE_URL,
+    REPORT_ASSET_DIR,
+    UNSUBSCRIBE_URL,
+)
 from ..db import get_db
 from ..permissions import AUTHOR_ROLES, DELETER_ROLES, SENDER_ROLES
 from ..security import require_roles
@@ -27,6 +37,13 @@ from ..services import report_pdf
 from ..services import email_service
 
 router = APIRouter()
+
+# The monthly report email's HTML body (the design handoff template). Rendered
+# with simple {{placeholder}} substitution in send_report() below — there are no
+# loops or conditionals in the markup, so this avoids a Jinja2 dependency.
+_EMAIL_TEMPLATE = (
+    Path(__file__).resolve().parent.parent / "assets" / "email" / "seo-report-email.html"
+)
 
 
 def _require_project_access(db: sqlite3.Connection, user: sqlite3.Row, project_id: int) -> int:
@@ -205,20 +222,84 @@ def send_report(
 
     # A friendly, project-aware subject + body when the caller doesn't supply one.
     proj = db.execute(
-        "SELECT name FROM projects WHERE id = ?", (version["projectId"],)
+        "SELECT name, domain FROM projects WHERE id = ?", (version["projectId"],)
     ).fetchone()
     project_name = proj["name"] if proj else "your project"
+    client_domain = (proj["domain"] if proj else "") or ""
     period = version.get("periodKey") or ""
+
+    # periodKey is "2026-06", but the email template wants "June 2026" in the
+    # heading and a full date range in the eyebrow. Both come off the frozen
+    # report_header block, with report_pdf's own helper for the range.
+    _content = version.get("content") or {}
+    _hdr = next(
+        (b for b in (_content.get("blocks") or []) if b.get("type") == "report_header"),
+        {},
+    )
+    period_label = _hdr.get("periodLabel") or _content.get("period_label") or period
+    period_range = report_pdf._period_range_label(period, period_label)
+    if not client_domain:
+        client_domain = _hdr.get("domain") or ""
+
     subject = (body.subject or "").strip() or f"SEO report for {project_name} — {period}".rstrip(" —")
+
+    # PLAIN-TEXT body. The caller's note now REPLACES the boilerplate instead of
+    # being prepended to it (previously both appeared). This stays as the
+    # text/plain alternative alongside the HTML template below — clients that
+    # block HTML fall back to it, and sending both improves deliverability.
     intro = (body.message or "").strip()
     if intro:
-            email_body = intro
+        email_body = intro
     else:
-            email_body = "\n\n".join([
-                f"Hi,\n\nPlease find attached the SEO report for {project_name}"
-                + (f" ({period})" if period else "") + ".",
-                "Best regards,\nThe RankBoard team",
-            ])
+        email_body = "\n\n".join([
+            f"Hi,\n\nPlease find attached the SEO report for {project_name}"
+            + (f" ({period_label})" if period_label else "") + ".",
+            "Best regards,\nThe RankBoard team",
+        ])
+
+    # ── Cover thumbnail ───────────────────────────────────────────────────────
+    # Page 1 of the report, rendered to PNG and written into the PUBLIC asset
+    # dir so the email can reference it by absolute url (mail clients fetch
+    # images with no cookies or auth, so it cannot be access-controlled — the
+    # random filename is what keeps the url unguessable).
+    #
+    # Best-effort by design: a thumbnail failure must NOT fail the send. The PDF
+    # attachment is the actual deliverable.
+    cover_url = ""
+    try:
+        _png = report_pdf.render_cover_png(version, blobs)
+        Path(REPORT_ASSET_DIR).mkdir(parents=True, exist_ok=True)
+        _cover_name = f"{secrets.token_urlsafe(16)}.png"
+        (Path(REPORT_ASSET_DIR) / _cover_name).write_bytes(_png)
+        cover_url = f"{REPORT_ASSET_BASE_URL}/{_cover_name}"
+    except Exception as exc:
+        print("report cover thumbnail failed:", exc)
+
+    # ── HTML body ─────────────────────────────────────────────────────────────
+    html_body = None
+    try:
+        html_body = _EMAIL_TEMPLATE.read_text(encoding="utf-8")
+        if not cover_url:
+            # Drop the <img> rather than emitting src="" — an empty src renders
+            # a broken-image icon in several clients.
+            html_body = re.sub(
+                r"<img[^>]*\{\{cover_image_url\}\}[^>]*>", "", html_body
+            )
+        for _key, _val in {
+            "client_name": project_name,
+            "client_domain": client_domain,
+            "report_month": period_label,
+            "period_range": period_range,
+            "cover_image_url": cover_url,
+            "logo_url": EMAIL_LOGO_URL,
+            "unsubscribe_url": UNSUBSCRIBE_URL,
+            "year": str(datetime.now().year),
+        }.items():
+            html_body = html_body.replace("{{" + _key + "}}", _val or "")
+    except Exception as exc:
+        # Template missing or unreadable → send the plain-text version only.
+        print("report email template failed, sending text only:", exc)
+        html_body = None
 
     # ── Deliver one copy per recipient; collect per-address results ───────────
     results = []
@@ -228,6 +309,7 @@ def send_report(
             email=addr,
             subject=subject,
             body=email_body,
+            html=html_body,
             pdf_bytes=pdf_bytes,
             pdf_filename=filename,
         )

@@ -31,15 +31,23 @@ from ..config import (
 )
 
 
-def _send_via_smtp(*, email: str, subject: str, body: str, attachments=None) -> str:
-    """Send one message (optionally with attachments) through the configured
-    SMTP server. Returns "sent" or "failed"; never raises."""
+def _send_via_smtp(*, email: str, subject: str, body: str, html: str | None = None,
+                   attachments=None) -> str:
+    """Send one message (optionally with an HTML alternative and attachments)
+    through the configured SMTP server. Returns "sent" or "failed"; never
+    raises."""
     try:
         msg = EmailMessage()
         msg["From"] = EMAIL_FROM
         msg["To"] = email
         msg["Subject"] = subject
         msg.set_content(body)
+        # ORDER MATTERS: set_content() writes the text/plain part, then
+        # add_alternative() promotes the message to multipart/alternative with
+        # the HTML LAST — mail clients render the last part they understand.
+        # add_attachment() below then wraps the whole thing in multipart/mixed.
+        if html:
+            msg.add_alternative(html, subtype="html")
         for att in attachments or []:
             maintype, _, subtype = (att.get("mime") or "application/octet-stream").partition("/")
             msg.add_attachment(
@@ -65,7 +73,7 @@ def _send_via_smtp(*, email: str, subject: str, body: str, attachments=None) -> 
         return "failed"
 
 
-def _send_via_brevo(*, email: str, subject: str, body: str, attachments=None) -> str:
+def _send_via_brevo(*, email: str, subject: str, body: str, html: str | None = None, attachments=None) -> str:
     """Send one message through Brevo's transactional email API
     (POST https://api.brevo.com/v3/smtp/email). Returns "sent" or "failed";
     never raises. Brevo wants the sender as a {name, email} object and
@@ -84,6 +92,10 @@ def _send_via_brevo(*, email: str, subject: str, body: str, attachments=None) ->
             "subject": subject,
             "textContent": body,
         }
+        # Send BOTH parts: textContent is the fallback for clients that block
+        # HTML, and providing both improves deliverability.
+        if html:
+            payload["htmlContent"] = html
         if attachments:
             payload["attachment"] = [
                 {"name": a["filename"], "content": base64.b64encode(a["content"]).decode()}
@@ -107,15 +119,18 @@ def _send_via_brevo(*, email: str, subject: str, body: str, attachments=None) ->
         return "failed"
 
 
-def _deliver(db: sqlite3.Connection, *, email: str, subject: str, body: str, attachments=None) -> dict:
+def _deliver(db: sqlite3.Connection, *, email: str, subject: str, body: str,
+             html: str | None = None, attachments=None) -> dict:
     """Send one email via the configured transport (SMTP > Brevo > outbox) and
     ALWAYS log it to the `emails` outbox. Returns the stored row + a `delivery`
     status ("sent" | "failed" | "outbox"). Never raises — a provider outage must
     not break sign-in, onboarding, or a report send."""
     if SMTP_HOST:
-        delivery = _send_via_smtp(email=email, subject=subject, body=body, attachments=attachments)
+        delivery = _send_via_smtp(email=email, subject=subject, body=body, html=html,
+                                  attachments=attachments)
     elif BREVO_API_KEY:
-        delivery = _send_via_brevo(email=email, subject=subject, body=body, attachments=attachments)
+        delivery = _send_via_brevo(email=email, subject=subject, body=body, html=html,
+                                   attachments=attachments)
     else:
         delivery = "outbox"
 
@@ -155,6 +170,7 @@ def send_report_email(
     body: str,
     pdf_bytes: bytes,
     pdf_filename: str,
+    html: str | None = None,
 ) -> dict:
     """Email a report PDF to a single recipient (the per-recipient unit the
     /reports/{id}/send endpoint loops over). The PDF rides as an attachment,
@@ -165,6 +181,7 @@ def send_report_email(
         email=email,
         subject=subject,
         body=body,
+        html=html,
         attachments=[{"filename": pdf_filename, "content": pdf_bytes, "mime": "application/pdf"}],
     )
 

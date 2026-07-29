@@ -1490,3 +1490,41 @@ def pdf_filename(version: dict) -> str:
         s = re.sub(r"[^a-z0-9]+", "-", str(s).lower()).strip("-")
         return s or "report"
     return f"{slug(project)}-{slug(period)}-seo-report.pdf"
+
+# ── cover thumbnail (for the monthly report email) ────────────────────────────
+def render_cover_png(version: dict, blobs: list | None = None, width: int = 440) -> bytes:
+    """Render page 1 of the report (the cover) to PNG bytes, for embedding as a
+    thumbnail in the monthly report email.
+
+    Reuses the SAME Playwright/Chromium path and the SAME cover HTML as
+    render_pdf() — report_industry.render_document(part="cover") — so the
+    thumbnail always matches the attached PDF. Nothing is cached or stored here;
+    the caller decides where the bytes go.
+
+    The page is rendered at FULL A4 (794x1123 css px = 210x297mm at 96dpi) and
+    shrunk via device_scale_factor rather than rendered into a small viewport,
+    because the cover's CSS is authored in millimetres for print and would
+    reflow at 440px wide. This also avoids needing Pillow to resize.
+
+    MUST be called from a SYNC context (no running asyncio loop) — same
+    constraint as render_pdf().
+    """
+    from playwright.sync_api import sync_playwright
+    from . import report_industry
+
+    html = report_industry.render_document(version, blobs, part="cover")
+
+    A4_W, A4_H = 794, 1123
+    scale = width / A4_W
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            page = browser.new_page(
+                viewport={"width": A4_W, "height": A4_H},
+                device_scale_factor=scale,
+            )
+            page.set_content(html, wait_until="networkidle")
+            return page.screenshot(type="png")
+        finally:
+            browser.close()
