@@ -1369,7 +1369,7 @@ function TrafficTool({ project, view }) {
 
   // Surface a GA4 error (returned in-band by the server) as a toast.
   useEffect(() => {
-    if (data?.error) toast.error("We couldn't load traffic for this project. Check that the GA4 property ID is correct and that the RankBoard service account has access to it.",
+    if (data?.error) toast.error("We couldn't load traffic for this project. Check that the GA4 property ID is correct and that the SEO Dashboard service account has access to it.",
       { title: "Traffic" },[data?.error] );
   });
 
@@ -3088,7 +3088,7 @@ function BulkImportModal({ projectId, onClose, onImported }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "rankboard-keywords-template.xlsx";
+      a.download = "seo-dashboard-keywords-template.xlsx";
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {

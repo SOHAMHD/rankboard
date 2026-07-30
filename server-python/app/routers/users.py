@@ -148,14 +148,19 @@ def resend_invite(user_id: int, db: sqlite3.Connection = Depends(get_db)):
     user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     if user is None:
         raise HTTPException(404, "User not found.")
-    if user["status"] != "invited":
-        raise HTTPException(400, "This person has already activated their account.")
 
-    # Can't re-show the old temp password — only its hash exists. So
-    # "resend" = generate a NEW one, overwrite the hash, email again.
+    # DESTRUCTIVE for an ACTIVE account. Only the temp password's HASH is stored,
+    # so the original can never be re-shown — "resend" therefore means issue a NEW
+    # temp password and overwrite the old hash. For someone who already set their
+    # own password that password STOPS WORKING. Allowed deliberately (admins need
+    # to re-send when an invite is lost), and the UI confirms before calling this
+    # for an active user.
+    #
+    # must_change_password = 1 forces the set-password screen on next sign-in, so
+    # the emailed temp password can't linger as their real one.
     temp_password = generate_temp_password()
     db.execute(
-        "UPDATE users SET password_hash = ? WHERE id = ?",
+        "UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?",
         (bcrypt.hashpw(temp_password.encode(), bcrypt.gensalt()).decode(), user_id),
     )
     email_record = send_invite_email(

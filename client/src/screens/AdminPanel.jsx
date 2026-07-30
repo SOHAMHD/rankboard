@@ -75,9 +75,23 @@ export function AdminPanelView({ user, onBack, onLogout }) {
     }
   };
 
-  const resendInvite = async (id) => {
+  // Resending always issues a NEW temp password and invalidates the old one. For
+  // someone still "invited" that's harmless (they never set one). For an ACTIVE
+  // account it breaks the password they chose, so confirm before calling.
+  const resendInvite = async (u) => {
+    if (
+      u.status === "active" &&
+      !window.confirm(
+        `${u.name} has already activated their account.\n\n` +
+          "Resending will email a NEW temporary password and their current " +
+          "password will stop working. They'll have to set a new one on next sign-in.\n\n" +
+          "Continue?"
+      )
+    ) {
+      return;
+    }
     try {
-      const d = await api(`/users/${id}/resend-invite`, { method: "POST" });
+      const d = await api(`/users/${u.id}/resend-invite`, { method: "POST" });
       setEmailModal(d.email); // contains the NEW temp password
     } catch (err) {
       setError(err.message);
@@ -195,12 +209,20 @@ export function AdminPanelView({ user, onBack, onLogout }) {
                               {u.projectIds?.length || 0}
                             </button>
                           )}
-                          {canManage && u.status === "invited" && (
+                          {canManage && (
                             <button
-                              onClick={() => resendInvite(u.id)}
-                              title="Resend invite (generates a new temporary password)"
+                              onClick={() => resendInvite(u)}
+                              title={
+                                u.status === "active"
+                                  ? "Re-send invite email — issues a NEW temporary password and invalidates their current one"
+                                  : "Resend invite (generates a new temporary password)"
+                              }
                               aria-label={`Resend invite to ${u.name}`}
-                              className="p-1.5 rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors"
+                              className={`p-1.5 rounded-md transition-colors ${
+                                u.status === "active"
+                                  ? "text-stone-300 hover:text-amber-600 hover:bg-amber-50"
+                                  : "text-stone-400 hover:text-stone-700 hover:bg-stone-100"
+                              }`}
                             >
                               <Mail size={15} />
                             </button>
@@ -635,14 +657,16 @@ function OnboardWizard({ onClose, onCreated }) {
   );
 }
 
-/* Renders an email record exactly as the server composed it. */
+/* Renders an email record as the server composed it. NOTE: the From line is
+   hardcoded below and must be kept in step with EMAIL_FROM in server-python/.env
+   — it is not returned by the API. */
 export function EmailPreview({ email }) {
   return (
     <div className="rounded-xl border border-stone-200 overflow-hidden">
       <div className="bg-stone-50 border-b border-stone-200 px-4 py-3 text-xs text-stone-500 space-y-1">
         <p className="flex items-center gap-1.5">
           <Mail size={13} className="text-stone-400" />
-          <span className="font-medium text-stone-600">From:</span> RankBoard &lt;no-reply@rankboard.com&gt;
+          <span className="font-medium text-stone-600">From:</span> InfyApp SEO Portal &lt;info@infyappseodashboard.website&gt;
         </p>
         <p>
           <span className="font-medium text-stone-600">To:</span> <span className="font-data">{email.to_email}</span>

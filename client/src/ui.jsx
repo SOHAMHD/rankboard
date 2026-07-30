@@ -182,7 +182,7 @@ export function DarkShell({ children }) {
             <img src="/infapp-logo.png" alt="InfyApp" className="h-8 w-auto" />
           </div>
           <div>
-            <p className="text-white font-semibold text-lg leading-tight font-display">RankBoard</p>
+            <p className="text-white font-semibold text-lg leading-tight font-display">SEO Dashboard</p>
             <p className="text-xs text-slate-400">Know where every keyword stands.</p>
           </div>
         </div>

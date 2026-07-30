@@ -308,14 +308,7 @@ def _keyword_table(kw, present, reason, period_label, prev_label, prev2_label=""
     # left to right. There is deliberately NO "Change" column: the movement is
     # shown by the green/red row tint instead (report_pdf reads rank_delta off
     # the row cells, which are still populated below).
-    # SR_NO is baked 1..N here so the data-driven React table picks it up with no
-    # frontend change, but every RENDERER renumbers it over the rows it actually
-    # draws (see report_pdf / report_industry) — otherwise deselecting a row in the
-    # editor would leave a gap like 1, 2, 4.
-    columns = [
-        {"key": "sr_no", "label": "Sr No.", "kind": "dim", "type": "text"},
-        {"key": "term", "label": "Keyword", "kind": "dim", "type": "text"},
-    ]
+    columns = [{"key": "term", "label": "Keyword", "kind": "dim", "type": "text"}]
     if prev2_label:
         columns.append({"key": "previous2_rank", "label": f"Rank · {prev2_label}",
                         "kind": "metric", "type": "rank"})
@@ -325,9 +318,8 @@ def _keyword_table(kw, present, reason, period_label, prev_label, prev2_label=""
     ]
     rows = []
     if present:
-        for _i, it in enumerate((kw or {}).get("items", []), 1):
+        for it in (kw or {}).get("items", []):
             rows.append({"cells": {
-                "sr_no": _i,
                 "term": it.get("term"),
                 "previous2_rank": it.get("previous2_rank"),
                 "current_rank": it.get("current_rank"),

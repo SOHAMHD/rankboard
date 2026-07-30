@@ -69,7 +69,7 @@ def build_sample_workbook() -> bytes:
         "How to use this template:",
         "• Replace the example rows above with your own keywords — one per row.",
         "• Keyword: the search term you want to track (required).",
-        "• You don't need to enter any rank — RankBoard finds each keyword's current position automatically the next time you run “Check rankings”.",
+        "• You don't need to enter any rank — SEO Dashboard finds each keyword's current position automatically the next time you run “Check rankings”.",
         "• Keep the header row. Delete these notes if you like.",
         "• Up to %d keywords per file." % MAX_ROWS,
     ]

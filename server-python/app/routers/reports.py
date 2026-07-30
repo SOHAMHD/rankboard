@@ -254,7 +254,7 @@ def send_report(
         email_body = "\n\n".join([
             f"Hi,\n\nPlease find attached the SEO report for {project_name}"
             + (f" ({period_label})" if period_label else "") + ".",
-            "Best regards,\nThe RankBoard team",
+            "Best regards,\nThe SEO Dashboard team",
         ])
 
     # ── Cover thumbnail ───────────────────────────────────────────────────────

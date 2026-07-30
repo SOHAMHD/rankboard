@@ -38,7 +38,7 @@ from ..services.email_service import send_login_code_email, send_password_code_e
 router = APIRouter()
 
 # Shown in the authenticator app as the account issuer.
-ISSUER = "RankBoard"
+ISSUER = "SEO Dashboard"
 
 # Third factor (email code) lifetime + guessing limit.
 EMAIL_CODE_TTL_MINUTES = 10

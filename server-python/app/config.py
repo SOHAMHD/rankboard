@@ -53,7 +53,7 @@ CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", APP_URL).split
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
 # The From address. With Brevo the address (or its domain) must be a
 # verified sender/domain in your Brevo account, or the send is rejected.
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "RankBoard <no-reply@example.com>")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "SEO Dashboard <no-reply@example.com>")
 
 # ── SMTP transport (preferred when configured) ──────────────────────
 # Set SMTP_HOST to send real email through your own mail server / Gmail /

@@ -686,7 +686,7 @@ def download_sample_template(user=Depends(require_active_user)):
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="rankboard-keywords-template.xlsx"'},
+        headers={"Content-Disposition": 'attachment; filename="seo-dashboard-keywords-template.xlsx"'},
     )
 
 

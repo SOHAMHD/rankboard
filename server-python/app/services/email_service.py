@@ -79,7 +79,7 @@ def _send_via_brevo(*, email: str, subject: str, body: str, html: str | None = N
     never raises. Brevo wants the sender as a {name, email} object and
     attachments as base64 under `attachment` ({name, content})."""
     try:
-        # EMAIL_FROM is a header string ("RankBoard <no-reply@x.com>"); Brevo
+        # EMAIL_FROM is a header string ("SEO Dashboard <no-reply@x.com>"); Brevo
         # needs it split into a sender object. parseaddr → (name, addr).
         from_name, from_addr = parseaddr(EMAIL_FROM)
         sender = {"email": from_addr}
@@ -108,7 +108,7 @@ def _send_via_brevo(*, email: str, subject: str, body: str, html: str | None = N
                 "api-key": BREVO_API_KEY,
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "User-Agent": "RankBoard/1.0",
+                "User-Agent": "SEODashboard/1.0",
             },
             method="POST",
         )
@@ -187,11 +187,11 @@ def send_report_email(
 
 
 def send_invite_email(db: sqlite3.Connection, *, name: str, email: str, role: str, temp_password: str) -> dict:
-    subject = "You've been added to RankBoard"
+    subject = "You've been added to SEO Dashboard"
     body = "\n".join([
         f"Hi {name.split(' ')[0]},",
         "",
-        f"You've been added to the RankBoard workspace as {role}.",
+        f"You've been added to the SEO Dashboard workspace as {role}.",
         "",
         f"Sign in here: {APP_URL}",
         f"Email: {email}",
@@ -206,13 +206,13 @@ def send_invite_email(db: sqlite3.Connection, *, name: str, email: str, role: st
 
 def send_password_code_email(db: sqlite3.Connection, *, name: str, email: str, code: str) -> dict:
     """Code emailed when a signed-in user wants to change their password."""
-    subject = "Your RankBoard password-change code"
+    subject = "Your SEO Dashboard password-change code"
     body = "\n".join([
         f"Hi {name.split(' ')[0]},",
         "",
         f"Your password-change verification code is: {code}",
         "",
-        "It expires in 10 minutes. Enter it in RankBoard to set a new password.",
+        "It expires in 10 minutes. Enter it in SEO Dashboard to set a new password.",
         "",
         "If you didn't request this, ignore this email — your password stays the same.",
     ])
@@ -221,7 +221,7 @@ def send_password_code_email(db: sqlite3.Connection, *, name: str, email: str, c
 
 def send_login_code_email(db: sqlite3.Connection, *, name: str, email: str, code: str) -> dict:
     """The Admin / Super Admin third-factor code, emailed at sign-in."""
-    subject = "Your RankBoard sign-in code"
+    subject = "Your SEO Dashboard sign-in code"
     body = "\n".join([
         f"Hi {name.split(' ')[0]},",
         "",

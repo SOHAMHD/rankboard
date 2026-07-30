@@ -24,7 +24,7 @@ from .routers import auth, backlinks, moz, posts, projects, reports, snapshots, 
 init_db()
 
 app = FastAPI(
-    title="RankBoard API (Python)",
+    title="SEO Dashboard API (Python)",
     # Docs expose the full API surface — disabled unless DEBUG is set.
     docs_url="/docs" if DEBUG else None,
     redoc_url="/redoc" if DEBUG else None,
