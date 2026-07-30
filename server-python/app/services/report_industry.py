@@ -845,6 +845,32 @@ def render_document(version, blobs=None, part="all") -> str:
         '<path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8A8.5 8.5 0 0 1 21 11.5z"/>'
         '<circle cx="8.5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="15.5" cy="12" r="1"/></svg>'
     )
+    # Contact icons are inline SVG, not Unicode/emoji glyphs. Entities such as
+    # &#9742; (☎) or &#128205; (📍) depend on a symbol/emoji font being present
+    # on the rendering host; on a bare Linux server Chromium has no such font
+    # and draws tofu boxes instead. SVG has no font dependency at all.
+    def _ci_svg(body: str) -> str:
+        return (
+            f'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="{ty_blue}" '
+            f'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" '
+            f'style="flex:none;display:block">{body}</svg>'
+        )
+
+    ic_phone = _ci_svg(
+        '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2'
+        'A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.3 1.8.6 2.6a2 2 0 0 1-.5 2.1L8.1 9.6a16 16 0 0 0 6 6l1.2-1.2'
+        'a2 2 0 0 1 2.1-.5c.8.3 1.7.5 2.6.6a2 2 0 0 1 1.7 2z"/>'
+    )
+    ic_mail = _ci_svg(
+        '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2.5 6.5 9.5 7 9.5-7"/>'
+    )
+    ic_globe = _ci_svg(
+        '<circle cx="12" cy="12" r="9.5"/><path d="M2.5 12h19"/>'
+        '<path d="M12 2.5a15 15 0 0 1 0 19 15 15 0 0 1 0-19z"/>'
+    )
+    ic_pin = _ci_svg(
+        '<path d="M20 10.5c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10.5" r="2.8"/>'
+    )
     thankyou = (
         '<div style="position:relative;min-height:100vh;box-sizing:border-box;overflow:hidden;break-before:page">'
         f'{_wave_band()}'
@@ -870,13 +896,13 @@ def render_document(version, blobs=None, part="all") -> str:
         # contact details — below the message, one per line (stacked, not side by side)
         '<div style="margin-top:46px;display:flex;flex-direction:column;gap:12px;'
         'font-size:14px;color:#2b2b2b">'
-        f'<div style="display:flex;align-items:center;gap:10px"><span style="color:{ty_blue};font-size:16px">&#9742;</span>'
+        f'<div style="display:flex;align-items:center;gap:10px">{ic_phone}'
         f'<span>{esc(report_pdf._AGENCY_PHONE)}</span></div>'
-        f'<div style="display:flex;align-items:center;gap:10px"><span style="color:{ty_blue};font-size:16px">&#9993;</span>'
+        f'<div style="display:flex;align-items:center;gap:10px">{ic_mail}'
         f'<span>{esc(report_pdf._AGENCY_EMAIL)}</span></div>'
-        f'<div style="display:flex;align-items:center;gap:10px"><span style="color:{ty_blue};font-size:16px">&#127760;</span>'
+        f'<div style="display:flex;align-items:center;gap:10px">{ic_globe}'
         f'<span><u>{esc(report_pdf._AGENCY_SITE)}</u></span></div>'
-        f'<div style="display:flex;align-items:center;gap:10px"><span style="color:{ty_blue};font-size:16px">&#128205;</span>'
+        f'<div style="display:flex;align-items:center;gap:10px">{ic_pin}'
         f'<span>{esc(report_pdf._AGENCY_ADDR)}</span></div>'
         '</div>'
         '</div></div>'

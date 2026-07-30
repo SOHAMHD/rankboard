@@ -269,7 +269,11 @@ def _fmt_delta(type_: str, d):
     elif type_ == "percent":
         text = f"{s}{round(d * 100, 2)}%"
     elif type_ == "rank":
-        text = ("▲ " if improved else "▼ ") + str(abs(round(d, 1)))
+        # CSS-drawn triangle, not "▲"/"▼" (U+25B2/25BC): those glyphs are absent
+        # from Barlow and from the default font set on a bare Linux server, so
+        # they render as tofu boxes there while looking fine on Windows.
+        arrow = '<span class="tri t-up"></span>' if improved else '<span class="tri t-down"></span>'
+        text = arrow + str(abs(round(d, 1)))
     else:
         text = html.escape(str(d))
     return (text, tone)
@@ -565,8 +569,8 @@ def _keyword_pages(block: dict) -> list:
         cont = f" (cont. {i}/{total})" if total > 1 else ""
         table = f'<table class="dt kw">{thead}<tbody>{"".join(body_rows)}</tbody></table>'
         legend = ('<div class="legend">'
-                  '<span class="lg up">▲ improved</span>'
-                  '<span class="lg down">▼ declined</span>'
+                  '<span class="lg up"><span class="tri t-up"></span> improved</span>'
+                  '<span class="lg down"><span class="tri t-down"></span> declined</span>'
                   '<span class="lg flat">— no change</span></div>') if i == 1 else ""
         pages.append(_section_head((title + cont) if title.strip() else "", sub if i == 1 else "") + legend + table)
     return pages
@@ -754,6 +758,34 @@ def _cover_html(header: dict, period_label: str, period_range: str) -> str:
     </section>"""
 
 
+def _ci_svg(body: str) -> str:
+    """Inline SVG contact icon.
+
+    Deliberately NOT a Unicode/emoji entity (&#9742; etc.): those require a
+    symbol or emoji font on the rendering host. A bare Linux server has none,
+    so Chromium renders tofu boxes. Inline SVG has no font dependency.
+    """
+    return (
+        '<svg class="ci" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" '
+        'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>'
+    )
+
+
+_IC_PHONE = _ci_svg(
+    '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2'
+    'A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.3 1.8.6 2.6a2 2 0 0 1-.5 2.1L8.1 9.6a16 16 0 0 0 6 6l1.2-1.2'
+    'a2 2 0 0 1 2.1-.5c.8.3 1.7.5 2.6.6a2 2 0 0 1 1.7 2z"/>'
+)
+_IC_MAIL = _ci_svg('<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2.5 6.5 9.5 7 9.5-7"/>')
+_IC_GLOBE = _ci_svg(
+    '<circle cx="12" cy="12" r="9.5"/><path d="M2.5 12h19"/>'
+    '<path d="M12 2.5a15 15 0 0 1 0 19 15 15 0 0 1 0-19z"/>'
+)
+_IC_PIN = _ci_svg(
+    '<path d="M20 10.5c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10.5" r="2.8"/>'
+)
+
+
 def _thankyou_html() -> str:
     """Closing page — matches the reference: infApp mark, big "Thank you!",
     a short note, the agency contact block, and two halftone discs."""
@@ -769,10 +801,10 @@ def _thankyou_html() -> str:
         hesitate to reach out to us.</p>
       </div>
       <div class="ty-contact">
-        <div><span class="ci">&#9742;</span> {_esc(_AGENCY_PHONE)}</div>
-        <div><span class="ci">&#9993;</span> {_esc(_AGENCY_EMAIL)}</div>
-        <div><span class="ci">&#127760;</span> <u>{_esc(_AGENCY_SITE)}</u></div>
-        <div><span class="ci">&#9679;</span> {_esc(_AGENCY_ADDR)}</div>
+        <div>{_IC_PHONE} {_esc(_AGENCY_PHONE)}</div>
+        <div>{_IC_MAIL} {_esc(_AGENCY_EMAIL)}</div>
+        <div>{_IC_GLOBE} <u>{_esc(_AGENCY_SITE)}</u></div>
+        <div>{_IC_PIN} {_esc(_AGENCY_ADDR)}</div>
       </div>
     </section>"""
 
@@ -993,7 +1025,13 @@ def _css() -> str:
     .ty-title{font-family:'Barlow Condensed',sans-serif;font-size:56px;font-weight:600;color:var(--ink);margin:0 0 22px;letter-spacing:-.02em;}
     .ty-p{font-size:17px;line-height:1.6;color:var(--ga);margin:0;}
     .ty-contact{position:absolute;right:16mm;bottom:120px;font-size:15px;color:var(--ink);line-height:2.1;z-index:2;}
-    .ty-contact .ci{color:var(--blue);margin-right:10px;}
+    /* Delta arrows drawn with borders — no font glyph, so they survive any host. */
+    .tri{display:inline-block;width:0;height:0;vertical-align:middle;margin-right:5px;
+      border-left:4px solid transparent;border-right:4px solid transparent;}
+    .tri.t-up{border-bottom:6px solid currentColor;}
+    .tri.t-down{border-top:6px solid currentColor;}
+    .ty-contact>div{display:flex;align-items:center;gap:10px;}
+    .ty-contact .ci{color:var(--blue);flex:none;display:block;}
 
     /* -- Previous vs current comparison -- */
     .cmp-grid{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:8px;}

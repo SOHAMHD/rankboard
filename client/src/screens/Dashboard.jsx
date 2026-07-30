@@ -6,7 +6,7 @@
    <main>. The Rank Ledger fetches its data from the API, derives its
    stats at render time, and refetches after every mutation.
    ════════════════════════════════════════════════════════════════════ */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   Camera,
@@ -61,9 +61,21 @@ import { api, getToken, BASE } from "../api";
 import { Modal, ErrorNote, ChangePasswordModal, can, isAuthor, isAdmin, isManager, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { useToast } from "../toast.jsx";
 import { MozOverview } from "./MozOverview";
-import { ReportsPanel } from "./ReportEditor";
 import { BacklinksView } from "./Backlinks";
 import { PostsView } from "./Posts";
+
+/* CODE-SPLIT: the Reports panel drags in the whole rich-text editor stack
+   (@tiptap/* + prosemirror-*), which is the single largest thing in this screen's
+   bundle. Statically imported it landed in the Dashboard chunk, so EVERY user
+   downloaded the editor on first open — including Clients, who can't author
+   reports at all. Lazily loaded it becomes its own chunk, fetched only when the
+   Reports tab is actually opened.
+
+   Prefetched on idle below for authors only, so the tab still opens instantly for
+   the people who use it without costing everyone else the download. */
+const ReportsPanel = lazy(() =>
+  import("./ReportEditor").then((m) => ({ default: m.ReportsPanel }))
+);
 
 // Sidebar navigation, GA4-style: collapsible groups whose sub-items each select
 // a view in the main area. A group given no `children` becomes a plain clickable
@@ -172,6 +184,23 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
   useEffect(() => {
     refresh();
   }, [projectId]);
+
+  // Warm the lazily-split Reports chunk (the TipTap editor) once the browser is
+  // idle — AUTHORS ONLY. Clients can't open Reports at all, so they never pay for
+  // it. This keeps the tab feeling instant for the people who use it while still
+  // keeping the editor out of the initial dashboard download.
+  useEffect(() => {
+    if (!isAuthor(user)) return;
+    const warm = () => {
+      import("./ReportEditor").catch(() => {}); // best-effort; a failure just means
+    };                                          // the Suspense fallback shows later
+    if (typeof requestIdleCallback === "function") {
+      const id = requestIdleCallback(warm, { timeout: 4000 });
+      return () => cancelIdleCallback(id);
+    }
+    const t = setTimeout(warm, 2500);
+    return () => clearTimeout(t);
+  }, [user]);
 
   if (!project) {
     return (
@@ -354,7 +383,17 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
         )}
         {activeNav === "search-console" && <SearchConsoleToolMemo project={project} />}
         {activeNav === "authority" && <MozOverview project={project} user={user} />}
-        {activeNav === "reports" && isAuthor(user) && <ReportsPanel user={user} project={project} />}
+        {activeNav === "reports" && isAuthor(user) && (
+          <Suspense
+            fallback={
+              <div className="flex justify-center py-16">
+                <LoaderCircle size={22} className="text-orange-600 animate-spin" />
+              </div>
+            }
+          >
+            <ReportsPanel user={user} project={project} />
+          </Suspense>
+        )}
       </main>
     </div>
   );
