@@ -29,6 +29,7 @@ import urllib.request
 import uuid
 
 from ..config import MOZ_ACCESS_ID, MOZ_SECRET_KEY, MOZ_API_TOKEN
+from .response_cache import cached
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,7 @@ def _fetch_jsonrpc(normalized):
     return _map_metrics(normalized, sm, {"site_metrics": body})
 
 
+@cached("fetch_moz_metrics")
 def fetch_moz_metrics(domain):
     """Fetch Moz authority metrics for a domain, choosing the auth scheme by which
     credentials are configured. Returns the shared flat dict; raises MozApiError

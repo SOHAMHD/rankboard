@@ -19,6 +19,7 @@ all come back as {"error": "..."} so a misconfigured project degrades to
 a friendly message instead of a 500.
 """
 from ..config import GOOGLE_SERVICE_ACCOUNT_JSON
+from .response_cache import cached
 
 # Read-only scope — we only ever query, never write. The SAME service-account
 # JSON GA4 uses works here once the Search Console API is enabled and the
@@ -130,6 +131,7 @@ def _metrics(row: dict) -> dict:
     }
 
 
+@cached("get_search_console")
 def get_search_console(
     site_url: str | None,
     start_date: str | None = None,
@@ -215,6 +217,7 @@ def get_search_console(
     return {"totals": totals, "queries": queries, "pages": pages, "trend": trend}
 
 
+@cached("query_performance")
 def query_performance(
     site_url: str | None,
     start: str,

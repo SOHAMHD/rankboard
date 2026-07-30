@@ -3,6 +3,7 @@ Ledger keywords. Viewing is open to all signed-in users (provisional);
 every mutation asks the matrix.
 """
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -201,25 +202,29 @@ def project_analytics(
         return {"analytics": {"error": err}}
 
     filters = [f.model_dump() for f in body.filters]
-    analytics = get_analytics(
-        project["ga_property_id"],
-        start_date=body.start,
-        end_date=body.end,
-        filters=filters,
-        match=body.match,
-    )
+    kw = dict(start_date=body.start, end_date=body.end, filters=filters, match=body.match)
+
     # Returning users is a separate headline value, derived from the
-    # newVsReturning dimension (see get_returning_users). Add it alongside the
-    # other summary numbers when the summary report succeeded — filtered the
-    # same way so the card matches the rest of the summary.
-    if isinstance(analytics, dict) and isinstance(analytics.get("summary"), dict):
-        analytics["summary"]["returningUsers"] = get_returning_users(
-            project["ga_property_id"],
-            start_date=body.start,
-            end_date=body.end,
-            filters=filters,
-            match=body.match,
-        )
+    # newVsReturning dimension (see get_returning_users), so it needs its own GA4
+    # round trip alongside the main one.
+    #
+    # These two used to run BACK TO BACK, which meant the endpoint's latency was
+    # the sum of two multi-second GA4 calls even though neither depends on the
+    # other's result. Firing them together makes it the slower of the two instead.
+    # get_analytics already fans out internally with the same pattern, and the
+    # provider caches its Google client PER THREAD, so being called from a worker
+    # thread is expected.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        analytics_job = pool.submit(get_analytics, project["ga_property_id"], **kw)
+        returning_job = pool.submit(get_returning_users, project["ga_property_id"], **kw)
+        analytics = analytics_job.result()
+        # Only attach it when the summary report itself succeeded — filtered the
+        # same way so the card matches the rest of the summary. The extra call is
+        # wasted when the summary failed, but it ran concurrently, so it cost no
+        # extra wall-clock time.
+        if isinstance(analytics, dict) and isinstance(analytics.get("summary"), dict):
+            analytics["summary"]["returningUsers"] = returning_job.result()
+
     return {"analytics": analytics}
 
 

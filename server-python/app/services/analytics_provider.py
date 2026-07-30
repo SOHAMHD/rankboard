@@ -16,6 +16,7 @@ hand straight to the client — so a misconfigured project degrades to a
 friendly message instead of a 500.
 """
 from ..config import GOOGLE_SERVICE_ACCOUNT_JSON
+from .response_cache import cached
 
 # The GA4 metrics every report requests, in this order. Average engagement
 # time is NOT a raw metric — it's derived as userEngagementDuration /
@@ -174,6 +175,7 @@ def build_dimension_filter(filters: list[dict] | None, match: str = "AND"):
     return FilterExpression(or_group=group)
 
 
+@cached("get_analytics")
 def get_analytics(
     property_id: str | None,
     start_date: str | None = None,
@@ -317,6 +319,7 @@ def get_analytics(
     return out
 
 
+@cached("get_dimension_breakdown")
 def get_dimension_breakdown(
     property_id: str | None,
     dimension: str,
@@ -406,6 +409,7 @@ def get_dimension_breakdown(
     }
 
 
+@cached("run_custom_report")
 def run_custom_report(
     property_id: str | None,
     start: str | None,
@@ -561,6 +565,7 @@ def _apply_derived(report: dict, selected: list[str], derived_selected: list[str
     }
 
 
+@cached("get_returning_users")
 def get_returning_users(
     property_id: str | None,
     start_date: str | None = None,
