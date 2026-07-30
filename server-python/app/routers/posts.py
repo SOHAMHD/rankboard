@@ -60,7 +60,11 @@ def list_posts(project_id: int, kind: str | None = None, month: str | None = Non
         clauses.append("kind = ?")
         params.append(kind)
     if month:
-        clauses.append("month = ?")
+        # Match the NULL fallback _row() uses (and the report gather): a row
+        # created before the `month` column existed belongs to the month it was
+        # created in. A bare `month = ?` would make those rows invisible to every
+        # month filter while still showing an inferred month in the response.
+        clauses.append("COALESCE(month, substr(created_at, 1, 7)) = ?")
         params.append(month)
     where = " AND ".join(clauses)
     rows = db.execute(

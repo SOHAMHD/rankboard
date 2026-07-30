@@ -323,9 +323,22 @@ def gather(
 
     # ── posts (blog + LinkedIn content links): a plain per-project DB read that
     # always succeeds (an empty list is "none added", not an error).
+    #
+    # SCOPED TO THIS PERIOD, like backlinks above. This query previously had no
+    # month filter, so every report listed every post the project had ever had —
+    # which read as "a month with no blogs is pulling in another month's". An
+    # empty month must render as "none added", never as a neighbour's content.
+    #
+    # COALESCE(month, substr(created_at, 1, 7)) mirrors the posts router's _row():
+    # `month` is NULL on rows created before the column existed, and those fall
+    # back to the month they were created in. Both functions behave identically on
+    # SQLite and Postgres, and created_at is "YYYY-MM-DD HH:MM:SS" on both, so
+    # substr(1, 7) yields "YYYY-MM".
     post_rows = db.execute(
-        "SELECT kind, url, title FROM posts WHERE project_id = ? ORDER BY created_at DESC, id DESC",
-        (project_id,),
+        "SELECT kind, url, title FROM posts"
+        " WHERE project_id = ? AND COALESCE(month, substr(created_at, 1, 7)) = ?"
+        " ORDER BY created_at DESC, id DESC",
+        (project_id, period_key),
     ).fetchall()
     posts_section = {
         "blogs": [{"url": r["url"], "title": r["title"]} for r in post_rows if r["kind"] == "blog"],

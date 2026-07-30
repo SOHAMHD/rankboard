@@ -35,6 +35,16 @@ const compact = (n, digits) =>
     .format(Number(n))
     .toLowerCase();
 const sign = (v) => (v > 0 ? "+" : ""); // negatives already carry "-"
+// Seconds -> "47s" / "1m 5s" / "2m". Splits on the ABSOLUTE value so a negative
+// delta reads "-1m 5s", not "-1m -5s", and drops a trailing "0s".
+const humanDuration = (v, signed = false) => {
+  const total = Math.round(Math.abs(Number(v) || 0));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  const body = m === 0 ? `${s}s` : s === 0 ? `${m}m` : `${m}m ${s}s`;
+  const prefix = Number(v) < 0 ? "-" : signed && Number(v) > 0 ? "+" : "";
+  return prefix + body;
+};
 const ordinal = (n) => {
   const s = ["th", "st", "nd", "rd"];
   const v = Math.abs(Math.round(n)) % 100;
@@ -65,12 +75,19 @@ export const FORMATS = {
     ],
   },
   duration: {
+    // "auto" is FIRST and therefore the DEFAULT (see defaultFormatId, which takes
+    // list[0]). Under a minute reads as seconds, a minute or more switches to
+    // minutes — matching formatEngagement() in Dashboard.jsx and
+    // _human_duration() in report_pdf.py. The older fixed formats stay available
+    // so any blob that already stored formatId:"seconds" keeps rendering as it did.
     value: [
+      { id: "auto", name: "Auto (s under 1m)", fn: (v) => humanDuration(v) },     // 47s / 1m 5s / 2m
       { id: "seconds", name: "Seconds", fn: (v) => `${round(v)}s` },              // 47s
       { id: "minutes", name: "Minutes", fn: (v) => `${round(v / 60, 1)} min` },   // 0.8 min
       { id: "clock", name: "Clock", fn: (v) => `${Math.floor(v / 60)}m ${round(v % 60)}s` }, // 0m 47s
     ],
     delta: [
+      { id: "signedAuto", name: "Signed auto", fn: (v) => humanDuration(v, true) }, // +1m 5s
       { id: "signedSeconds", name: "Signed seconds", fn: (v) => `${sign(v)}${round(v, 1)}s` }, // +0.4s
       { id: "signedMinutes", name: "Signed minutes", fn: (v) => `${sign(v)}${round(v / 60, 1)} min` },
     ],

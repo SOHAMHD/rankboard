@@ -206,6 +206,31 @@ def _num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def _human_duration(seconds, signed: bool = False) -> str:
+    """Seconds -> "45s" / "1m 5s" / "2m". Under a minute stays in seconds; at a
+    minute or more it switches to minutes, and the trailing "0s" is dropped so a
+    round two minutes reads "2m" rather than "2m 0s".
+
+    Mirrors the frontend's formatEngagement() in Dashboard.jsx and the "auto"
+    duration format in lib/blobFormats.js — the three must agree or the same
+    figure reads differently on screen and in the PDF.
+
+    `signed` prefixes a "+" on positives (for deltas); negatives already carry
+    their own "-", and the minutes/seconds split is done on the ABSOLUTE value so
+    -65 renders "-1m 5s" and not "-1m -5s".
+    """
+    total = int(round(abs(seconds)))
+    minutes, secs = divmod(total, 60)
+    if minutes == 0:
+        body = f"{secs}s"
+    elif secs == 0:
+        body = f"{minutes}m"
+    else:
+        body = f"{minutes}m {secs}s"
+    prefix = "-" if seconds < 0 else ("+" if signed and seconds > 0 else "")
+    return prefix + body
+
+
 def _fmt_value(type_: str, v) -> str:
     """Default per-type display (matches blobFormats default format ids). PERCENT
     values are stored as FRACTIONS (0–1) so they're ×100 for display."""
@@ -215,7 +240,7 @@ def _fmt_value(type_: str, v) -> str:
         if type_ == "count":
             return f"{round(v):,}"
         if type_ == "duration":
-            return f"{round(v)}s"
+            return _human_duration(v)
         if type_ == "percent":
             return f"{round(v * 100, 2)}%"
         if type_ == "rank":
@@ -238,7 +263,7 @@ def _fmt_delta(type_: str, d):
     if type_ == "count":
         text = f"{s}{round(d):,}"
     elif type_ == "duration":
-        text = f"{s}{round(d, 1)}s"
+        text = _human_duration(d, signed=True)
     elif type_ == "percent":
         text = f"{s}{round(d * 100, 2)}%"
     elif type_ == "rank":
