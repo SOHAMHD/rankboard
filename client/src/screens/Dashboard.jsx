@@ -2143,38 +2143,11 @@ const SC_DIMENSION_TABS = [
   ["Dates", "date", "Date"],
 ];
 
-// Filter-bar dimensions: [label, API dimension]. (`date` isn't a filter
-// dimension in GSC — only a breakdown — so it's intentionally absent here.)
-const SC_FILTER_DIMENSIONS = [
-  ["Query", "query"],
-  ["Page", "page"],
-  ["Country", "country"],
-  ["Device", "device"],
-  ["Search appearance", "searchAppearance"],
-];
-
-// Operators by dimension: Query & Page take the full text set; Country, Device
-// and Search appearance only "is". [user-facing label, API operator] — the API
-// names match the backend's SC_OPERATORS allowlist exactly.
-const SC_TEXT_OPERATORS = [
-  ["contains", "contains"],
-  ["doesn't contain", "notContains"],
-  ["exactly matches", "equals"],
-  ["matches regex", "includingRegex"],
-  ["doesn't match regex", "excludingRegex"],
-];
-const SC_IS_OPERATORS = [["is", "equals"]];
-
-function scOperatorsFor(dimension) {
-  return dimension === "query" || dimension === "page" ? SC_TEXT_OPERATORS : SC_IS_OPERATORS;
-}
-
-// Placeholder hint for a filter's value input, by dimension.
-function scValuePlaceholder(dimension) {
-  if (dimension === "country") return "3-letter code, e.g. ind, aus";
-  if (dimension === "device") return "DESKTOP, MOBILE or TABLET";
-  return "value";
-}
+// NOTE: SC_FILTER_DIMENSIONS / SC_TEXT_OPERATORS / SC_IS_OPERATORS /
+// scOperatorsFor / scValuePlaceholder lived here to drive the manual filter bar,
+// which has been removed. They went with it. The BACKEND still accepts the full
+// operator set (see its SC_OPERATORS allowlist), so restoring the bar is a
+// frontend-only job — `git log` has the originals.
 
 // The table column header for an active breakdown dimension.
 function scDimensionLabel(dimension) {
@@ -2322,24 +2295,8 @@ function SearchConsoleTool({ project }) {
   const toggleMetric = (key) =>
     setEnabled((m) => (m.includes(key) ? m.filter((x) => x !== key) : [...m, key]));
 
-  // ── Filter row helpers (stackable conditions combined with AND) ──
-  const addFilter = () =>
-    setFilters((f) => [...f, { dimension: "query", operator: "contains", expression: "" }]);
-  const updateFilter = (i, patch) =>
-    setFilters((f) =>
-      f.map((row, idx) => {
-        if (idx !== i) return row;
-        const next = { ...row, ...patch };
-        // When the dimension changes, snap the operator to one this dimension
-        // actually offers (text dims → contains; "is"-only dims → equals).
-        if (patch.dimension !== undefined) {
-          const ops = scOperatorsFor(next.dimension).map(([, op]) => op);
-          if (!ops.includes(next.operator)) next.operator = ops[0];
-        }
-        return next;
-      })
-    );
-  const removeFilter = (i) => setFilters((f) => f.filter((_, idx) => idx !== i));
+  // (addFilter / updateFilter / removeFilter removed with the filter bar. The
+  // only remaining writer of `filters` is the drill-down below.)
 
   // Clicking a dimension-table row applies that value as an "equals" filter on
   // the current tab's dimension — the GSC drill-down (click a query, switch to
@@ -2370,37 +2327,9 @@ function SearchConsoleTool({ project }) {
     setFilters((f) => f.filter((x) => !(x.dimension === name && x.operator === "equals")));
   };
 
-  // ── Export the active dimension table as CSV (client-side, no backend) ──
-  // Builds the CSV from the loaded rows — the active tab's dimension column +
-  // Clicks / Impressions / CTR / Avg Position, the same values the table shows
-  // (with the current search type + date range + filters already applied since
-  // `data` was fetched with them) — and triggers a download via a Blob + a
-  // temporary anchor. Named gsc-<dimension>-<start>_<end>.csv.
-  const exportCsv = () => {
-    if (!data || data.error || !(data.rows && data.rows.length)) return;
-    const header = [scDimensionLabel(data.dimension), "Clicks", "Impressions", "CTR", "Avg Position"];
-    const lines = [header.map(csvField).join(",")];
-    for (const r of data.rows) {
-      lines.push(
-        [
-          r.key || "(not set)",
-          formatCount(r.clicks),
-          formatCount(r.impressions),
-          formatCtr(r.ctr),
-          formatPosition(r.position),
-        ]
-          .map(csvField)
-          .join(",")
-      );
-    }
-    const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `gsc-${scDimensionSlug(data.dimension)}-${range.start}_${range.end}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  // (exportCsv removed with the filter bar — that card held the only Export
+  // button. It was pure client-side CSV assembly, no backend involved, so
+  // reinstating it is a copy-paste from git plus a button anywhere on screen.)
 
   // The server reports no access / no data / a misconfigured property as
   // {error}; a thrown api() error lands in `error`. Either way we show the
@@ -2416,7 +2345,6 @@ function SearchConsoleTool({ project }) {
     () => SC_METRICS.filter((m) => enabled.includes(m.key)),
     [enabled]
   );
-  const canExport = !!data && !data.error && !!(data.rows && data.rows.length);
 
   return (
     <div className="w-full">
@@ -2515,84 +2443,21 @@ function SearchConsoleTool({ project }) {
             </p>
           </div>
 
-          {/* ── Filter bar — stackable conditions combined with AND ── */}
-          <div className="bg-white rounded-xl border border-stone-200 p-4 mb-6">
-            <div className="flex items-center justify-between gap-3 mb-2">
-              <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">Filters</p>
-              <div className="flex items-center gap-2">
-                {filters.length > 0 && (
-                  <button
-                    onClick={() => setFilters([])}
-                    title="Remove all filters and show the full report"
-                    className={`${BTN_GHOST} px-3 py-1.5 text-sm`}
-                  >
-                    <X size={14} /> Reset
-                  </button>
-                )}
-                <button
-                  onClick={exportCsv}
-                  disabled={!canExport}
-                  title="Download the current table as a CSV"
-                  className={`${BTN_GHOST} px-3 py-1.5 text-sm disabled:opacity-40 disabled:cursor-not-allowed`}
-                >
-                  <Download size={14} /> Export
-                </button>
-              </div>
-            </div>
-            {filters.length > 0 && (
-              <div className="space-y-2 mb-2">
-                {filters.map((f, i) => (
-                  <div key={i} className="flex flex-wrap items-center gap-2">
-                    {i > 0 && (
-                      <span className="text-xs font-semibold text-stone-400 px-1.5 py-0.5 rounded bg-stone-100">AND</span>
-                    )}
-                    <select
-                      value={f.dimension}
-                      onChange={(e) => updateFilter(i, { dimension: e.target.value })}
-                      aria-label="Filter dimension"
-                      className={`${RANGE_FIELD_CLS} w-auto`}
-                    >
-                      {SC_FILTER_DIMENSIONS.map(([label, name]) => (
-                        <option key={name} value={name}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={f.operator}
-                      onChange={(e) => updateFilter(i, { operator: e.target.value })}
-                      aria-label="Filter operator"
-                      className={`${RANGE_FIELD_CLS} w-auto`}
-                    >
-                      {scOperatorsFor(f.dimension).map(([label, op]) => (
-                        <option key={op} value={op}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      value={f.expression}
-                      onChange={(e) => updateFilter(i, { expression: e.target.value })}
-                      placeholder={scValuePlaceholder(f.dimension)}
-                      aria-label="Filter value"
-                      className={`${RANGE_FIELD_CLS} flex-1 min-w-[10rem]`}
-                    />
-                    <button
-                      onClick={() => removeFilter(i)}
-                      aria-label="Remove filter"
-                      className="p-1.5 rounded-md text-stone-300 hover:text-red-500 transition-colors"
-                    >
-                      <X size={15} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <button onClick={addFilter} className={`${BTN_GHOST} px-3 py-1.5 text-sm`}>
-              <Plus size={14} /> Add filter
-            </button>
-          </div>
+          {/* The manual Filters card (dimension/operator/value rows, Add filter,
+              Reset, Export) was REMOVED by request — it read as clutter, since
+              it sat empty most of the time.
+
+              What still works: clicking a table row drills down (pickRow ->
+              addFilterValue appends an "equals" filter), and clicking a
+              breakdown tab clears that dimension's drill-down
+              (selectDimension). So the `filters` state is still live and still
+              sent with every query.
+
+              What you give up: an active drill-down filter is no longer
+              DISPLAYED anywhere, so the only way back to the unfiltered list is
+              re-clicking the tab. If that becomes confusing, the smallest fix is
+              a single "Filtered by X · clear" chip above the table rather than
+              restoring this whole card. */}
 
           {/* Refetch indicator: the first load shows the big spinner below, but
               a click-to-drill / filter / date change keeps the old table on

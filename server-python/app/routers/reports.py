@@ -13,6 +13,7 @@ _require_version_access to prevent cross-project (cross-client) access (IDOR).
 Sending to a client is further restricted to SENDER_ROLES.
 """
 import json
+import os
 import re
 import secrets
 import sqlite3
@@ -270,7 +271,15 @@ def send_report(
         _png = report_pdf.render_cover_png(version, blobs)
         Path(REPORT_ASSET_DIR).mkdir(parents=True, exist_ok=True)
         _cover_name = f"{secrets.token_urlsafe(16)}.png"
-        (Path(REPORT_ASSET_DIR) / _cover_name).write_bytes(_png)
+        _cover_path = Path(REPORT_ASSET_DIR) / _cover_name
+        _cover_path.write_bytes(_png)
+        # Force world-READABLE (0644). The PNG inherits the service's umask,
+        # which on a hardened/cPanel host is often 0077 -> the file lands as
+        # 0600. Apache serves static files as a DIFFERENT user, so it gets a 403
+        # and the recipient sees a broken image — with nothing in the app log,
+        # because the write itself succeeded. Setting the mode explicitly makes
+        # the send independent of whatever umask the unit happens to run with.
+        os.chmod(_cover_path, 0o644)
         cover_url = f"{REPORT_ASSET_BASE_URL}/{_cover_name}"
     except Exception as exc:
         print("report cover thumbnail failed:", exc)

@@ -6,6 +6,24 @@
 <meta name="color-scheme" content="light dark">
 <meta name="supported-color-schemes" content="light dark">
 <title>Your Monthly SEO Report</title>
+<!--
+  PLACEHOLDERS — substituted by routers/reports.py send_report(). Names must
+  match EXACTLY. An unrecognised placeholder is NOT an error: it is left in the
+  markup as literal text, and inside an img src that renders as a broken image
+  with nothing in the logs. That is the failure mode this comment exists for.
+
+  The full, and only, set available (written here without braces on purpose, so
+  a grep for a real placeholder never matches this comment):
+      client_name        client_domain
+      report_month       period_range
+      cover_image_url    - page 1 of the PDF, rendered to PNG
+      logo_url           - derived from EMAIL_LOGO_URL / APP_URL
+      unsubscribe_url    year
+
+  Common mistake: the placeholder is logo_url, NOT EMAIL_LOGO_URL — the latter
+  is the ENVIRONMENT VARIABLE's name, which the template never sees. Likewise
+  the cover is cover_image_url, not REPORT_ASSET_BASE_URL.
+-->
 <!--[if mso]>
 <style>body,table,td,a,h1,p,span{font-family:Arial,Helvetica,sans-serif !important;}</style>
 <![endif]-->
@@ -21,20 +39,17 @@
 </head>
 <body style="margin:0;padding:0;background-color:#EBF5FB;">
 <span style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;mso-hide:all;">Your {{report_month}} SEO report is attached as a PDF &mdash; traffic, keywords, backlinks and next month&rsquo;s targets.</span>
-
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#EBF5FB;">
 <tr>
 <td align="center" style="padding:30px 12px 40px 12px;">
-
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" class="wrap" style="width:600px;max-width:600px;">
-
     <!-- Logo bar -->
     <tr>
       <td class="px" bgcolor="#FFFFFF" style="background-color:#FFFFFF;padding:20px 40px;">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr>
             <td align="left" valign="middle">
-              <img src="https://infyappseodashboard.website/infapp-logo.png" alt="InfyApp" width="112" style="display:block;width:112px;height:auto;border:0;">
+              <img src="{{logo_url}}" alt="InfyApp" width="112" style="display:block;width:112px;height:auto;border:0;">
             </td>
             <td align="right" valign="middle" style="font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;mso-line-height-rule:exactly;letter-spacing:1.8px;text-transform:uppercase;color:#3D8FC0;">
               Monthly SEO Report
@@ -43,7 +58,6 @@
         </table>
       </td>
     </tr>
-
     <!-- Hero band -->
     <tr>
       <td class="px" bgcolor="#0067A6" style="background-color:#0067A6;padding:44px 44px 46px 44px;">
@@ -58,26 +72,23 @@
         </p>
       </td>
     </tr>
-
     <!-- Card -->
     <tr>
       <td bgcolor="#FFFFFF" style="background-color:#FFFFFF;">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-
           <tr>
             <td class="px" style="padding:38px 44px 0 44px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:27px;mso-line-height-rule:exactly;color:#4A5568;">
               <p style="margin:0 0 16px 0;color:#00304D;font-size:17px;font-weight:bold;">Hi {{client_name}} team,</p>
               <p style="margin:0;">Your monthly SEO report is ready and attached to this email as a PDF.</p>
             </td>
           </tr>
-
           <!-- Cover + what's inside -->
           <tr>
             <td class="px" style="padding:30px 44px 0 44px;">
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                 <tr>
                   <td class="stack stack-pad" valign="top" width="200" style="width:200px;padding:0 24px 0 0;">
-                    <img src="{{REPORT_ASSET_BASE_URL}}" alt="{{report_month}} SEO Report cover" width="200" style="display:block;width:200px;height:auto;border:1px solid #D6E6F2;">
+                    <img src="{{cover_image_url}}" alt="{{report_month}} SEO Report cover" width="200" style="display:block;width:200px;height:auto;border:1px solid #D6E6F2;">
                   </td>
                   <td class="stack" valign="top" style="padding:0;">
                     <p style="margin:0 0 16px 0;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;mso-line-height-rule:exactly;letter-spacing:1.8px;text-transform:uppercase;color:#3D8FC0;">
@@ -114,7 +125,6 @@
               </table>
             </td>
           </tr>
-
           <tr>
             <td class="px" style="padding:30px 44px 44px 44px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:23px;mso-line-height-rule:exactly;color:#4A5568;">
               If you have any issues regarding anything please contact us at
@@ -123,11 +133,9 @@
               <a href="tel:+917304505068" style="color:#0067A6;text-decoration:none;font-weight:bold;">+91 7304 5050 68</a>.
             </td>
           </tr>
-
         </table>
       </td>
     </tr>
-
     <!-- Footer -->
     <tr>
       <td class="px" bgcolor="#00304D" style="background-color:#00304D;padding:30px 44px 24px 44px;">
@@ -146,7 +154,6 @@
         </table>
       </td>
     </tr>
-
     <!-- Legal -->
     <tr>
       <td class="px" align="center" bgcolor="#00304D" style="background-color:#00304D;padding:0 44px 28px 44px;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:19px;mso-line-height-rule:exactly;color:#94A3B8;">
@@ -155,9 +162,7 @@
         <a href="{{unsubscribe_url}}" style="color:#94A3B8;text-decoration:underline;">Unsubscribe</a>
       </td>
     </tr>
-
   </table>
-
 </td>
 </tr>
 </table>

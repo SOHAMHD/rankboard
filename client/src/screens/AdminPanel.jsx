@@ -302,7 +302,15 @@ function ProjectChecklist({ projects, selected, onToggle, loading }) {
         return (
           <label
             key={p.id}
-            className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-stone-50 transition-colors"
+            /* `relative` is REQUIRED, not decorative. The input below is
+               `sr-only`, which is `position:absolute; margin:-1px; clip:...`.
+               Without a positioned ancestor it resolves against a container far
+               up the tree, so (a) focusing it on click made the browser scroll
+               that distant box into view — the "jumps to the bottom" bug — and
+               (b) its escaped, negatively-margined box inflated this list's
+               scroll height, producing a scrollbar with nothing to scroll to.
+               Positioning the row pins the input inside its own row. */
+            className="relative flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-stone-50 transition-colors"
           >
             {/* Native control kept for keyboard/AT; the square below is the visual. */}
             <input

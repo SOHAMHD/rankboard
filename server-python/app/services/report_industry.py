@@ -110,9 +110,25 @@ _PIE_COLORS = ["#3366a6", "#d97a34", "#3f9b6a", "#b0498a",
                "#5a6b7a", "#8f5b3c"]
 
 
-def donut(slices, total_label="") -> str:
+def donut(slices, total_label="", center_value=None) -> str:
     """stroke-dasharray donut on r=79, stroke-width 32 (circumference ≈ 496.37).
-    Uses a DISTINCT categorical palette so each slice is easy to tell apart."""
+    Uses a DISTINCT categorical palette so each slice is easy to tell apart.
+
+    TWO DIFFERENT TOTALS, deliberately:
+
+    * The slice arithmetic uses the SUM of the slices, because each arc has to be
+      a share of the drawn whole — the wedges must add up to 360°.
+    * `center_value`, when given, is what gets PRINTED in the middle. Pass the
+      period's real total here.
+
+    Why they differ: GA4 user metrics are not additive across a dimension. One
+    person who arrives via Organic Search and later via Direct is counted in
+    BOTH channel rows but only ONCE in the period total, so the channel column
+    always sums to >= the true total. Printing the slice sum and labelling it
+    "total users" therefore contradicted the Audience Overview page (e.g. the
+    donut said 164 while the overview said 162). Falls back to the slice sum
+    when no center_value is supplied, preserving old behaviour for other callers.
+    """
     palette = _PIE_COLORS
     C = 2 * 3.141592653589793 * 79
     total = sum(max(0, _num(s.get("value")) or 0) for s in slices) or 1
@@ -126,7 +142,8 @@ def donut(slices, total_label="") -> str:
                     f'stroke-dasharray="{length:.2f} {C-length:.2f}" stroke-dashoffset="{-offset:.2f}" '
                     f'transform="rotate(-90 95 95)"/>')
         offset += length
-    center = esc(int(total)) if total_label else ""
+    shown = total if center_value is None else max(0, _num(center_value) or 0)
+    center = esc(int(shown)) if total_label else ""
     return (f'<svg viewBox="0 0 190 190" width="190" height="190" role="img" aria-label="Traffic by channel">'
             + "".join(segs)
             + f'<text x="95" y="93" text-anchor="middle" font-size="26" font-family="\'Barlow Condensed\',sans-serif" font-weight="600" fill="#1d1f20">{center}</text>'
@@ -630,6 +647,18 @@ def render_document(version, blobs=None, part="all") -> str:
             cells = r.get("cells") or {}
             slices.append({"label": cells.get("dim0"), "value": _num(cells.get(tu_key)) or 0})
         total = sum(s["value"] for s in slices) or 1
+        # The number PRINTED in the donut's middle must be the period's real
+        # total users (the same figure the Audience Overview page shows), NOT the
+        # sum of the channel rows. GA4 counts a multi-channel visitor once in the
+        # total but once per channel in this table, so the two disagree by the
+        # number of people who used more than one channel. Read it from the
+        # ga4-overview metric grid; fall back to the slice sum if absent.
+        _ov = g("ga4-overview") or {}
+        _center = next(
+            (m.get("currentValue") for m in (_ov.get("metrics") or [])
+             if m.get("key") == "totalUsers" and m.get("currentValue") is not None),
+            None,
+        )
         legend = "".join(
             f'<div style="display:flex;align-items:center;gap:8px;font-size:13px"><i style="width:10px;height:10px;flex:none;background:{c}"></i>'
             f'<span style="flex:1">{esc(s["label"])}</span><span class="text-muted">{round(s["value"]/total*100)}%</span></div>'
@@ -647,9 +676,20 @@ def render_document(version, blobs=None, part="all") -> str:
             + f'<div style="display:flex;flex-direction:column;gap:9px">{legend}</div>'
             + '<div class="card blueprint"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>'
             + '<div class="card-kicker">Share of total users</div>'
-            + f'<div style="display:flex;justify-content:center;padding:var(--space-2) 0">{donut(slices, "total users")}</div></div>'
+            + f'<div style="display:flex;justify-content:center;padding:var(--space-2) 0">{donut(slices, "total users", center_value=_center)}</div></div>'
             + '</div>')
         body.append(f'<div style="margin-top:var(--space-4)">{_table_block(ch)}</div>')
+        # The per-channel user counts legitimately add up to MORE than the period
+        # total, because GA4 counts a visitor once per channel they used but only
+        # once overall. Without this note the table looks like an arithmetic error
+        # against the Audience Overview page, which is exactly how it was read.
+        if _center is not None and total > (_num(_center) or 0):
+            body.append(
+                '<div class="text-muted" style="font-size:11.5px;margin-top:var(--space-2);max-width:46em">'
+                'Note: channel rows add up to more than the period total because a visitor who '
+                'arrives through more than one channel is counted in each channel, but only once '
+                'in the overall total.</div>'
+            )
 
     # 04 Geographic Overview & Top Landing Pages
     geo, land = g("ga4-by_country_city"), g("ga4-by_landing_page")
