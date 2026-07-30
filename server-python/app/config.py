@@ -40,6 +40,13 @@ if not JWT_SECRET:
 
 APP_URL = os.environ.get("APP_URL", "http://localhost:5173")  # link in invite emails
 
+# The agency name printed on reports — the cover's "Prepared by", the running
+# footer, and the page-footer script. ONE constant because it was previously
+# hardcoded as "InfyApp" in five separate places across report_pdf.py and
+# report_industry.py, so a rename meant hunting them all down and missing some.
+# Override with AGENCY_NAME in the environment if it ever changes again.
+AGENCY_NAME = os.environ.get("AGENCY_NAME", "InfyApp Development")
+
 # Interactive API docs (/docs, /redoc, /openapi.json) expose the full API
 # surface, so they are OFF unless DEBUG is explicitly enabled. Keep DEBUG
 # false in production.

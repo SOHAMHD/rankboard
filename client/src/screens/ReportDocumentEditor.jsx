@@ -45,7 +45,6 @@ import { api } from "../api";
 import { ErrorNote, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { createBlobNode } from "../lib/blobNode";
 import DownloadPdfButton from "../lib/DownloadPdfButton";
-import SendReportButton from "../lib/SendReportButton";
 import {
   makeSuggestion,
   SuggestionMenu,
@@ -517,7 +516,8 @@ function EditableDoc({ version, blobs, canSend = false }) {
             beforeDownload={save}
             onError={setSaveError}
           />
-          {canSend && <SendReportButton versionId={version.id} periodKey={version.periodKey} label beforeSend={save} />}
+          {/* Send deliberately NOT offered while editing — see ReportEditor.jsx.
+              Send from the versions list once the report is finished. */}
           <button onClick={() => save().catch(() => {})} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
             {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft
           </button>

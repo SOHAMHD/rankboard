@@ -13,6 +13,8 @@ import os
 import re
 from html import escape as _e
 
+from ..config import AGENCY_NAME
+
 _ASSETS = os.path.join(os.path.dirname(__file__), "..", "assets", "report_design")
 
 
@@ -505,7 +507,7 @@ def _cover(project, domain, period_label, period_range, client_logo, agency_logo
           <div style="height:1px;background:#e4e4e6"></div>
           {_info_row("calendar","Reporting period", esc(period_range))}
           <div style="height:1px;background:#e4e4e6"></div>
-          {_info_row("user","Prepared by", "InfyApp")}
+          {_info_row("user","Prepared by", AGENCY_NAME)}
         </div>
       </div>
     </div>'''
@@ -523,7 +525,7 @@ def footer_html(project):
     return ('<div style="width:100%;box-sizing:border-box;padding:2px 14mm 6px;display:flex;align-items:center;'
             'font-family:sans-serif;font-size:8px;color:#7a7a7d">'
             '<span style="flex:1"></span>'
-            '<span style="flex:1;text-align:center">Prepared by InfyApp</span>'
+            f'<span style="flex:1;text-align:center">Prepared by {esc(AGENCY_NAME)}</span>'
             '<span style="flex:1;text-align:right"><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>')
 
 
@@ -880,7 +882,7 @@ def render_document(version, blobs=None, part="all") -> str:
         '</div></div>'
     )
     hdr_title = _js_str(f"{project} · MONTHLY SEO REPORT")
-    ft_left = _js_str(f"Reporting period: {period_range} · Prepared by InfyApp for {project}")
+    ft_left = _js_str(f"Reporting period: {period_range} · Prepared by {AGENCY_NAME} for {project}")
     # Ink colour for headings, section labels and card kickers — the brand blue
     # (the design system's --color-accent). This was previously hard-coded to
     # charcoal (#424242), which is why every heading rendered black even though

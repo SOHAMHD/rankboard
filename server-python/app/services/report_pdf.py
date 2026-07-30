@@ -36,6 +36,8 @@ for this period" panel — never a blank page or a broken layout.
 import base64
 import html
 import re
+
+from ..config import AGENCY_NAME
 from functools import lru_cache
 from pathlib import Path
 
@@ -746,7 +748,7 @@ def _cover_html(header: dict, period_label: str, period_range: str) -> str:
       </div>
       <div class="cv-prep">
         <div class="cv-label">Prepared by</div>
-        <div class="cv-prep-name">InfyApp</div>
+        <div class="cv-prep-name">{_esc(AGENCY_NAME)}</div>
       </div>
       {_arrow_svg()}
     </section>"""
@@ -801,7 +803,7 @@ def _toc_html(entries: list, period_range: str, page_no=None, total=None) -> str
 # ── page wrapper ──────────────────────────────────────────────────────────────
 def _wrap_content_page(inner: str, period_range: str, page_no=None, total=None,
                        *, project_name: str = "", domain: str = "", client_logo: str = "",
-                       prepared_by: str = "InfyApp", left_logo: str = "", right_logo: str = "") -> str:
+                       prepared_by: str = AGENCY_NAME, left_logo: str = "", right_logo: str = "") -> str:
     """A content page in the new house style: a top header with two logo slots
     and a centered "PROJECT · MONTHLY SEO REPORT" title, and a two-tier footer —
     the reporting line (period + prepared-by + domain) and a faint report/page

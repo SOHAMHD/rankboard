@@ -567,7 +567,10 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
             <span className="text-xs text-emerald-600">Saved {savedAt.toLocaleTimeString()}</span>
           )}
           <DownloadPdfButton versionId={version.id} periodKey={version.periodKey} label onError={setSaveError} />
-          {canSend && <SendReportButton versionId={version.id} periodKey={version.periodKey} label beforeSend={isDraft ? save : undefined} />}
+          {/* Send deliberately NOT offered while editing — emailing a client from
+              a half-finished draft is irreversible. Send from the versions list
+              instead, once the report is done. `canSend` is still threaded in;
+              the list's own SendReportButton uses it. */}
           {isDraft ? (
             <button onClick={save} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
               {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft
