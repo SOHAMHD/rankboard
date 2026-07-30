@@ -48,6 +48,21 @@ def list_backlinks(project_id: int, month: str | None = None, db: sqlite3.Connec
     return {"months": backlink_service.list_backlinks(db, project_id, month)}
 
 
+# NOTE ON ROUTE ORDER: this MUST stay above the /{backlink_id} route below.
+# "month" would otherwise be matched as a backlink_id and fail int validation
+# with a confusing 422. The literal "month" segment keeps the two unambiguous.
+@router.delete(
+    "/{project_id}/backlinks/month/{month}",
+    dependencies=[Depends(require_project_access), Depends(require_roles(*AUTHOR_ROLES))],
+)
+def delete_month_backlinks(project_id: int, month: str, db: sqlite3.Connection = Depends(get_db)):
+    """Clear a whole month in one call — deletes every backlink this project has
+    for `month` ("YYYY-MM"). Returns {month, deleted}. Idempotent: an empty month
+    returns deleted: 0 rather than 404. 400 on a malformed month, 404 if the
+    project is gone. AUTHOR-only, same as the other writes."""
+    return backlink_service.delete_month_backlinks(db, project_id, month)
+
+
 @router.delete(
     "/{project_id}/backlinks/{backlink_id}",
     dependencies=[Depends(require_project_access), Depends(require_roles(*AUTHOR_ROLES))],

@@ -141,6 +141,31 @@ def delete_backlink(db, project_id: int, backlink_id: int) -> dict:
     return {"ok": True}
 
 
+def delete_month_backlinks(db, project_id: int, month: str) -> dict:
+    """Delete EVERY backlink a project has for ONE month, in a single statement.
+
+    The month-wise sibling of delete_backlink: the team re-pastes a month's batch
+    often enough that removing it link-by-link is busywork.
+
+    - Validates `month` is "YYYY-MM" (400 otherwise) and the project exists (404).
+    - Scoped to project_id AND month, so no other month is ever touched.
+    - IDEMPOTENT: an already-empty month is NOT a 404 (unlike delete_backlink) —
+      it returns deleted: 0. "Delete all" on nothing is a no-op, not an error, and
+      a double-click must not surface a scary message.
+
+    Returns {month, deleted} so the client can say how many links went.
+    """
+    if not _valid_month(month):
+        raise HTTPException(400, "Month must be in YYYY-MM format, e.g. 2026-06.")
+    _require_project(db, project_id)
+
+    cur = db.execute(
+        "DELETE FROM backlinks WHERE project_id = ? AND month = ?",
+        (project_id, month),
+    )
+    return {"month": month, "deleted": cur.rowcount or 0}
+
+
 def backlinks_for_month(db, project_id: int, month: str) -> dict:
     """REPORT READ-PATH (additive, standalone): a project's backlinks for ONE
     month (= a report's period_key) plus the COUNT. The report's "new backlinks"

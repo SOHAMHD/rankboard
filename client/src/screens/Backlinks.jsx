@@ -11,9 +11,10 @@
    backlinks section can later filter by it.
    ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from "react";
-import { ExternalLink, Link2, LoaderCircle, Plus, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ExternalLink, Link2, LoaderCircle, Plus, Trash2, Upload } from "lucide-react";
 import { api } from "../api";
 import { Modal, ErrorNote, isAuthor, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
+import { useToast } from "../toast.jsx";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -46,8 +47,12 @@ export function BacklinksView({ user, project }) {
   const [error, setError] = useState(null);
   const [monthFilter, setMonthFilter] = useState("all");
   const [showImport, setShowImport] = useState(false);
+  // The month group awaiting "delete all" confirmation ({month,label,count}), or null.
+  const [confirmClear, setConfirmClear] = useState(null);
+  const [clearing, setClearing] = useState(false);
 
   const author = isAuthor(user);
+  const toast = useToast();
 
   const load = async () => {
     setError(null);
@@ -68,8 +73,35 @@ export function BacklinksView({ user, project }) {
     try {
       await api(`/projects/${project.id}/backlinks/${id}`, { method: "DELETE" });
       await load();
+      toast.success("Backlink removed.");
     } catch (err) {
       setError(err.message);
+      toast.error(err.message);
+    }
+  };
+
+  /* DELETE ALL for one month. Confirmed via the modal below — this wipes a whole
+     batch and there's no undo, so it never fires straight off the button. */
+  const clearMonth = async (group) => {
+    setClearing(true);
+    setError(null);
+    try {
+      const d = await api(`/projects/${project.id}/backlinks/month/${group.month}`, {
+        method: "DELETE",
+      });
+      // If the month we were filtered to is now gone, fall back to "all" —
+      // otherwise the page would sit on an empty, unselectable filter.
+      if (monthFilter === group.month) setMonthFilter("all");
+      await load();
+      setConfirmClear(null);
+      toast.success(
+        `Deleted ${d.deleted} backlink${d.deleted === 1 ? "" : "s"} from ${group.label}.`
+      );
+    } catch (err) {
+      setError(err.message);
+      toast.error(err.message);
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -148,11 +180,22 @@ export function BacklinksView({ user, project }) {
         <div className="space-y-5">
           {visible.map((g) => (
             <div key={g.month} className="bg-white rounded-xl border border-stone-200 overflow-hidden">
-              <div className="flex items-center justify-between px-5 py-3 border-b border-stone-100">
+              <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-stone-100">
                 <h2 className="text-sm font-semibold text-stone-800 font-display">{g.label}</h2>
-                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-stone-100 text-stone-500">
-                  {g.count} link{g.count === 1 ? "" : "s"}
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-stone-100 text-stone-500">
+                    {g.count} link{g.count === 1 ? "" : "s"}
+                  </span>
+                  {author && g.count > 0 && (
+                    <button
+                      onClick={() => setConfirmClear(g)}
+                      title={`Delete all ${g.count} backlinks in ${g.label}`}
+                      className="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2.5 py-1 text-xs font-semibold text-stone-500 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                    >
+                      <Trash2 size={13} /> Delete all
+                    </button>
+                  )}
+                </div>
               </div>
               <ul className="divide-y divide-stone-100">
                 {g.backlinks.map((b) => (
@@ -193,6 +236,38 @@ export function BacklinksView({ user, project }) {
           onImported={load}
         />
       )}
+
+      {/* DELETE ALL confirmation — destructive and irreversible, so the count and
+          month are spelled out and the confirm button is the red one. */}
+      {confirmClear && (
+        <Modal title={`Delete all backlinks in ${confirmClear.label}?`} onClose={() => setConfirmClear(null)}>
+          <div className="flex items-start gap-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-red-500" />
+            <p className="text-sm text-red-800">
+              This permanently removes all{" "}
+              <span className="font-semibold">{confirmClear.count}</span> backlink
+              {confirmClear.count === 1 ? "" : "s"} saved for{" "}
+              <span className="font-semibold">{confirmClear.label}</span>. It cannot be undone.
+            </p>
+          </div>
+          <p className="mt-3 text-sm text-stone-500">
+            Other months are not affected. You can re-import this month&apos;s batch at any time.
+          </p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button onClick={() => setConfirmClear(null)} className={`${BTN_GHOST} px-4 py-2`}>
+              Cancel
+            </button>
+            <button
+              onClick={() => clearMonth(confirmClear)}
+              disabled={clearing}
+              className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-40"
+            >
+              {clearing ? <LoaderCircle size={15} className="animate-spin" /> : <Trash2 size={15} />}
+              Yes, delete all
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -209,6 +284,7 @@ function BacklinkImportModal({ projectId, onClose, onImported }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
+  const toast = useToast();
 
   // Count non-blank pasted lines for the button hint.
   const lineCount = text.split(/\r?\n/).filter((l) => l.trim()).length;
@@ -225,8 +301,12 @@ function BacklinkImportModal({ projectId, onClose, onImported }) {
       });
       setResult(d);
       onImported(); // refresh the list behind the modal
+      toast.success(
+        `Added ${d.added} backlink${d.added === 1 ? "" : "s"} to ${monthLabel(d.month)}.`
+      );
     } catch (err) {
       setError(err.message);
+      toast.error(err.message);
     } finally {
       setBusy(false);
     }
