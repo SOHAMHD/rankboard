@@ -267,6 +267,7 @@ export function ChangePasswordModal({ onClose }) {
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">New password</label>
       <input
         type="password"
+          autoComplete="new-password"
         value={pw1}
         onChange={(e) => setPw1(e.target.value)}
         placeholder="At least 8 characters"
@@ -276,6 +277,7 @@ export function ChangePasswordModal({ onClose }) {
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Confirm new password</label>
       <input
         type="password"
+          autoComplete="new-password"
         value={pw2}
         onChange={(e) => setPw2(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}

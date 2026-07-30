@@ -36,32 +36,56 @@ export function LoginView({ onLogin }) {
         <h1 className="text-xl font-bold text-stone-900 font-display">Sign in</h1>
         <p className="text-sm text-stone-500 mt-1 mb-5">Use the credentials from your invite email.</p>
 
-        <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Email</label>
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@company.com"
-          autoFocus
-          className={`${INPUT_CLS} mb-4`}
-        />
+        {/* A REAL <form>. Chrome logs "[DOM] Password field is not contained in a
+            form" without one, and that warning is a symptom: outside a form,
+            password managers can't reliably detect the credential pair to offer
+            saving or autofill, and Enter has to be hand-wired per input.
+            onSubmit + preventDefault keeps this a SPA (no page navigation) while
+            restoring the semantics browsers expect. */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!email || !password || busy) return;
+            submit();
+          }}
+        >
+          <label htmlFor="signin-email" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Email</label>
+          <input
+            id="signin-email"
+            name="email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@company.com"
+            autoFocus
+            // "username" is the token password managers look for to pair with
+            // current-password below; "email" alone doesn't establish the pair.
+            autoComplete="username"
+            className={`${INPUT_CLS} mb-4`}
+          />
 
-        <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Password</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="••••••••"
-          className={INPUT_CLS}
-        />
+          <label htmlFor="signin-password" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Password</label>
+          <input
+            id="signin-password"
+            name="password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
+            autoComplete="current-password"
+            className={INPUT_CLS}
+          />
 
-        <ErrorNote>{error}</ErrorNote>
+          <ErrorNote>{error}</ErrorNote>
 
-        <button onClick={submit} disabled={!email || !password || busy} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
-          {busy ? <LoaderCircle size={16} className="animate-spin" /> : "Sign in"}
-        </button>
+          {/* type="submit" so Enter works from either field — the manual
+              onKeyDown handler on the password input is no longer needed. */}
+          <button type="submit" disabled={!email || !password || busy} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
+            {busy ? <LoaderCircle size={16} className="animate-spin" /> : "Sign in"}
+          </button>
+        </form>
         <button
+          type="button"
           onClick={() => { setError(null); setForgot(true); }}
           className="w-full text-xs text-stone-400 hover:text-stone-600 mt-3 transition-colors"
         >
@@ -108,6 +132,7 @@ export function SetPasswordView({ user, onDone, onLogout }) {
         </label>
         <input
           type="password"
+          autoComplete="new-password"
           value={pw1}
           onChange={(e) => setPw1(e.target.value)}
           placeholder="At least 8 characters"
@@ -120,6 +145,7 @@ export function SetPasswordView({ user, onDone, onLogout }) {
         </label>
         <input
           type="password"
+          autoComplete="new-password"
           value={pw2}
           onChange={(e) => setPw2(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -510,6 +536,7 @@ export function ForgotPasswordView({ initialEmail = "", onBack }) {
             <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">New password</label>
             <input
               type="password"
+          autoComplete="new-password"
               value={pw1}
               onChange={(e) => setPw1(e.target.value)}
               placeholder="At least 8 characters"
@@ -518,6 +545,7 @@ export function ForgotPasswordView({ initialEmail = "", onBack }) {
             <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Confirm new password</label>
             <input
               type="password"
+          autoComplete="new-password"
               value={pw2}
               onChange={(e) => setPw2(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && reset()}
