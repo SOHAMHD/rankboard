@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { TabIndent } from "../lib/tabIndent";
 import {
   AlertTriangle,
   Bold,
@@ -518,7 +519,7 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
     {
       editable: isDraft,
       immediatelyRender: false,
-      extensions: [StarterKit, BlobNode.configure({ suggestion })],
+      extensions: [StarterKit, TabIndent, BlobNode.configure({ suggestion })],
       content: doc,
       editorProps: {
         attributes: {

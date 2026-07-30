@@ -30,6 +30,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { TabIndent } from "../lib/tabIndent";
 import {
   ChevronUp,
   ChevronDown,
@@ -153,7 +154,7 @@ function NarrativeEditor({ block, BlobNode, suggestion, onDocChange, onFocusEdit
     {
       editable: true,
       immediatelyRender: false,
-      extensions: [StarterKit, BlobNode.configure({ suggestion })],
+      extensions: [StarterKit, TabIndent, BlobNode.configure({ suggestion })],
       content: initialDoc,
       editorProps: {
         attributes: { class: "report-prose focus:outline-none min-h-[64px] px-3 py-2" },
