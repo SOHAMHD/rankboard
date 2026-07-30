@@ -397,12 +397,15 @@ function RankLedger({ user, project, onChanged }) {
   }, [kws, query, statFilter]);
 
   const mayAdd = can(user, "addKeyword");
+  // recordRank = "supply the numbers" (change a rank, bulk-import, snapshot).
+  // Team has this but NOT addKeyword, so the two must be gated separately.
+  const mayRecord = can(user, "recordRank");
   const mayDelete = can(user, "deleteKeyword");
   // Only Super Admin / Admin (Manager) can run a rank check — mirrors the
   // server's require_roles gate on /check-ranks. Hiding the button is just a
   // convenience; the backend enforces it regardless.
   const mayCheck = isAdmin(user) || isManager(user);
-  const readOnly = !mayAdd && !mayDelete;
+  const readOnly = !mayAdd && !mayDelete && !mayRecord;
 
   // Derived stats — memoized so typing in the filter does not re-scan the full
   // keyword list on every keystroke (recomputes only when the keywords change).
@@ -455,9 +458,11 @@ function RankLedger({ user, project, onChanged }) {
     }
   };
 
-  // Action buttons shared between the toolbar (next to the search bar) and
-  // the empty state. Gated by the same write permission as before.
-  const actions = mayAdd && (
+  // Action buttons shared between the toolbar (next to the search bar) and the
+  // empty state. Each button carries its OWN gate — Team may Import but not
+  // Add keyword, and may not Check rankings at all — so the wrapper shows
+  // whenever the user can do at least one of them.
+  const actions = (mayAdd || mayRecord) && (
     <div className="flex flex-wrap gap-2">
       {mayCheck && (
         <button
@@ -469,16 +474,20 @@ function RankLedger({ user, project, onChanged }) {
           {checking ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />} Check rankings
         </button>
       )}
-      <button
-        onClick={() => setShowImport(true)}
-        title="Bulk import keywords from an Excel file"
-        className={`${BTN_GHOST} px-4 py-2`}
-      >
-        <Upload size={15} /> Import
-      </button>
-      <button onClick={() => setShowAdd(true)} className={`${BTN_PRIMARY} px-4 py-2`}>
-        <Plus size={16} /> Add keyword
-      </button>
+      {mayRecord && (
+        <button
+          onClick={() => setShowImport(true)}
+          title="Bulk import keywords from an Excel file"
+          className={`${BTN_GHOST} px-4 py-2`}
+        >
+          <Upload size={15} /> Import
+        </button>
+      )}
+      {mayAdd && (
+        <button onClick={() => setShowAdd(true)} className={`${BTN_PRIMARY} px-4 py-2`}>
+          <Plus size={16} /> Add keyword
+        </button>
+      )}
     </div>
   );
 
@@ -542,7 +551,7 @@ function RankLedger({ user, project, onChanged }) {
         />
       </div>
 
-      {(mayAdd || kws.length > 0) && (
+      {(mayAdd || mayRecord || kws.length > 0) && (
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           {kws.length > 0 ? (
             <div className="relative w-full sm:w-auto sm:flex-1 sm:max-w-xs">
@@ -620,7 +629,7 @@ function RankLedger({ user, project, onChanged }) {
                 <th className="px-5 py-3 font-medium">Current</th>
                 <th className="px-5 py-3 font-medium">Change</th>
                 <th className="px-5 py-3 font-medium">Last checked</th>
-                {(mayAdd || mayDelete) && <th className="px-2 py-3" />}
+                {(mayRecord || mayDelete) && <th className="px-2 py-3" />}
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
@@ -666,10 +675,10 @@ function RankLedger({ user, project, onChanged }) {
                   <td className="px-5 py-3 text-stone-400 text-xs whitespace-nowrap">
                     {checking ? <span className="skeleton inline-block h-3 w-20 align-middle" /> : k.lastChecked}
                   </td>
-                  {(mayAdd || mayDelete) && (
+                  {(mayRecord || mayDelete) && (
                     <td className="px-2 py-3">
                       <span className="flex items-center justify-end gap-0.5">
-                        {mayAdd && (
+                        {mayRecord && (
                           <button
                             onClick={() => setRecordFor(k)}
                             aria-label={`Record new rank for ${k.term}`}
@@ -945,8 +954,7 @@ function SnapshotMenu({ groups, selectedId, onSelect, onDownload }) {
    month; picking one fetches its rows and renders a plain table that
    REUSES the Live Ledger's table styling, trimmed to the three frozen
    columns. Each snapshot can be downloaded as CSV. The save button is
-   gated by the same write permission the rest of the ledger uses
-   (addKeyword).
+   gated by recordRank, the "supply the numbers" permission Team also has.
    ════════════════════════════════════════════════════════════════════ */
 function SnapshotsView({ user, project }) {
   const [snapshots, setSnapshots] = useState(null); // null = still loading
@@ -955,7 +963,7 @@ function SnapshotsView({ user, project }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
-  const maySave = can(user, "addKeyword");
+  const maySave = can(user, "recordRank");
 
   const loadList = async (selectId) => {
     try {

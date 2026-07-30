@@ -19,12 +19,21 @@ require_roles(*AUTHOR_ROLES) on the report endpoints (later slices), NOT by
 this matrix. READ_ONLY_ROLES is now empty (see below).
 """
 
+# recordRank is DELIBERATELY separate from addKeyword. It covers "supply the
+# numbers" — manually changing a keyword's rank, bulk-importing ranks from the
+# .xlsx, and freezing a snapshot — which Team needs to do its reporting job.
+# addKeyword stays the narrower "change the tracked keyword set / spend API
+# credits" right (add a keyword, refresh Moz) and remains Admin+ only.
+#
+# NOTE: bulk-import also CREATES keywords for rows that don't exist yet, so
+# recordRank lets Team add keywords by upload even though the single "add
+# keyword" form stays closed to them. That was an explicit choice.
 PERMISSIONS = {
-    #                manageUsers  addProject  toggleProject  deleteProject  addKeyword  deleteKeyword
-    "Super Admin": {"manageUsers": True,  "addProject": True,  "toggleProject": True,  "deleteProject": True,  "addKeyword": True,  "deleteKeyword": True,  "assignProjects": True},
-    "Admin":       {"manageUsers": False, "addProject": True,  "toggleProject": True,  "deleteProject": True,  "addKeyword": True,  "deleteKeyword": True,  "assignProjects": True},   # a.k.a. Manager
-    "Team":        {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": False, "deleteKeyword": False, "assignProjects": False},  # team member: authors reports (write-capable via require_roles), but no project/keyword writes
-    "Client":      {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": False, "deleteKeyword": False, "assignProjects": False},  # ← provisional: read-only
+    #                manageUsers  addProject  toggleProject  deleteProject  addKeyword  recordRank  deleteKeyword
+    "Super Admin": {"manageUsers": True,  "addProject": True,  "toggleProject": True,  "deleteProject": True,  "addKeyword": True,  "recordRank": True,  "deleteKeyword": True,  "assignProjects": True},
+    "Admin":       {"manageUsers": False, "addProject": True,  "toggleProject": True,  "deleteProject": True,  "addKeyword": True,  "recordRank": True,  "deleteKeyword": True,  "assignProjects": True},   # a.k.a. Manager
+    "Team":        {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": False, "recordRank": True,  "deleteKeyword": False, "assignProjects": False},  # authors reports; may record/import ranks + snapshot, but not change the keyword set or run a live rank check
+    "Client":      {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": False, "recordRank": False, "deleteKeyword": False, "assignProjects": False},  # ← provisional: read-only
 }
 
 ROLES = list(PERMISSIONS.keys())

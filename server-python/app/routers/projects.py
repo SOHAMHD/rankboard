@@ -692,7 +692,7 @@ def download_sample_template(user=Depends(require_active_user)):
 
 @router.post(
     "/{project_id}/keywords/bulk-import",
-    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
 )
 async def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Connection = Depends(get_db)):
     """Accept an uploaded .xlsx, validate every row, insert the good
@@ -778,7 +778,7 @@ class NewRankIn(BaseModel):
 
 @router.patch(
     "/{project_id}/keywords/{keyword_id}",
-    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
 )
 def record_lookup(project_id: int, keyword_id: int, body: NewRankIn, db: sqlite3.Connection = Depends(get_db)):
     """Record a NEW LOOKUP: current -> previous, new number -> current,
@@ -820,11 +820,11 @@ def delete_keyword(project_id: int, keyword_id: int, db: sqlite3.Connection = De
 
 @router.post(
     "/{project_id}/snapshots", status_code=201,
-    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
 )
 def save_snapshot(project_id: int, db: sqlite3.Connection = Depends(get_db)):
-    """Freeze the current month's ranks for this project. Gated by the
-    same write permission as adding a keyword. The capture itself lives
+    """Freeze the current month's ranks for this project. Gated by recordRank
+    (so Team can freeze the month it just recorded). The capture itself lives
     in snapshot_service.create_snapshot (404 unknown project, 409 if the
     month is locked)."""
     summary = create_snapshot(db, project_id)
