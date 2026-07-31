@@ -19,6 +19,13 @@ require_roles(*AUTHOR_ROLES) on the report endpoints (later slices), NOT by
 this matrix. READ_ONLY_ROLES is now empty (see below).
 """
 
+# addKeyword was False for Team because adding a keyword used to mean enlarging
+# the set a LIVE rank check would spend DataForSEO credits on. There is no live
+# rank check any more — ranks are typed in by hand on the Keywords page — so that
+# rationale is gone and Team now adds keywords as part of its normal job.
+# deleteKeyword stays False: deleting a keyword removes EVERY month's rank
+# recorded for it, which is the one destructive action on that page.
+#
 # recordRank is DELIBERATELY separate from addKeyword. It covers "supply the
 # numbers" — manually changing a keyword's rank, bulk-importing ranks from the
 # .xlsx, and freezing a snapshot — which Team needs to do its reporting job.
@@ -32,7 +39,7 @@ PERMISSIONS = {
     #                manageUsers  addProject  toggleProject  deleteProject  addKeyword  recordRank  deleteKeyword
     "Super Admin": {"manageUsers": True,  "addProject": True,  "toggleProject": True,  "deleteProject": True,  "addKeyword": True,  "recordRank": True,  "deleteKeyword": True,  "assignProjects": True},
     "Admin":       {"manageUsers": False, "addProject": True,  "toggleProject": True,  "deleteProject": True,  "addKeyword": True,  "recordRank": True,  "deleteKeyword": True,  "assignProjects": True},   # a.k.a. Manager
-    "Team":        {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": False, "recordRank": True,  "deleteKeyword": False, "assignProjects": False},  # authors reports; may record/import ranks + snapshot, but not change the keyword set or run a live rank check
+    "Team":        {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": True,  "recordRank": True,  "deleteKeyword": False, "assignProjects": False},  # authors reports; adds keywords and records their monthly ranks; CANNOT delete a keyword (that wipes every month's history)
     "Client":      {"manageUsers": False, "addProject": False, "toggleProject": False, "deleteProject": False, "addKeyword": False, "recordRank": False, "deleteKeyword": False, "assignProjects": False},  # ← provisional: read-only
 }
 
