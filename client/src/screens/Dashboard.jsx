@@ -6,7 +6,7 @@
    <main>. The Rank Ledger fetches its data from the API, derives its
    stats at render time, and refetches after every mutation.
    ════════════════════════════════════════════════════════════════════ */
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   Camera,
@@ -62,6 +62,7 @@ import { Modal, ErrorNote, ChangePasswordModal, can, isAuthor, isAdmin, isManage
 import { useToast } from "../toast.jsx";
 import { MozOverview } from "./MozOverview";
 import { BacklinksView } from "./Backlinks";
+import { KeywordsView } from "./Keywords";
 import { PostsView } from "./Posts";
 
 /* CODE-SPLIT: the Reports panel drags in the whole rich-text editor stack
@@ -93,14 +94,13 @@ const NAV_GROUPS = [
       { id: "traffic-pages", label: "Pages" },
     ],
   },
+  // ONE page, no children. Rankings are entered by hand month by month, so there
+  // is no "Live rankings" (nothing is checked automatically) and no "Snapshots"
+  // (a hand-typed month IS the frozen record — there was nothing left to freeze).
   {
-    id: "rank-ledger",
+    id: "keywords",
     label: "Keyword Rankings",
     icon: ListOrdered,
-    children: [
-      { id: "rank-live", label: "Live rankings" },
-      { id: "rank-snapshots", label: "Snapshots" },
-    ],
   },
   {
     id: "posts",
@@ -146,8 +146,6 @@ function groupOf(navId) {
 // Heavy tool panels wrapped in memo so parent re-renders (expanding a nav
 // group, a project refresh, etc.) do not re-render the visible panel unless
 // its own props actually change. Each alias is used exactly once, below.
-const RankLedgerMemo = memo(RankLedger);
-const SnapshotsViewMemo = memo(SnapshotsView);
 const TrafficToolMemo = memo(TrafficTool);
 const SearchConsoleToolMemo = memo(SearchConsoleTool);
 
@@ -373,8 +371,11 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} />}
       <main className="px-6 py-6">
-        {activeNav === "rank-live" && <RankLedgerMemo user={user} project={project} onChanged={refresh} />}
-        {activeNav === "rank-snapshots" && <SnapshotsViewMemo user={user} project={project} />}
+        {/* ONE keywords page: the keywords x months grid. The old Live rankings
+            (automated check) and Snapshots (frozen copies) views are gone —
+            rankings are typed in by hand, so there is nothing to check and the
+            month itself is the frozen record. */}
+        {activeNav === "keywords" && <KeywordsView user={user} project={project} />}
         {activeNav === "backlinks" && <BacklinksView user={user} project={project} />}
         {activeNav === "posts-blogs" && <PostsView user={user} project={project} kind="blog" />}
         {activeNav === "posts-linkedin" && <PostsView user={user} project={project} kind="linkedin" />}
@@ -405,416 +406,11 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
    is previous − current: +5 means "moved up 5 spots".
    ════════════════════════════════════════════════════════════════════ */
 
-function RankLedger({ user, project, onChanged }) {
-  const toast = useToast();
-  const [showAdd, setShowAdd] = useState(false);
-  const [recordFor, setRecordFor] = useState(null); // keyword being re-checked
-  const [checking, setChecking] = useState(false);
-  const [checkResult, setCheckResult] = useState(null);
-  const [confirmCheck, setConfirmCheck] = useState(false); // "Are you sure?" gate before a rank check
-  const [showImport, setShowImport] = useState(false);
-  const [error, setError] = useState(null);
-  const [filter, setFilter] = useState("");
-  // Stat-box filter: null (all) | "improved" | "declined" | "unranked". Clicking
-  // a stat box narrows the table to that subset; clicking it again (or the
-  // "Tracked" box) clears it. Combines with the text filter (both narrow).
-  const [statFilter, setStatFilter] = useState(null);
-  const toggleStat = (key) => setStatFilter((cur) => (cur === key ? null : key));
-  const kws = project.keywords;
-
-  // Filter the rows by the active stat box (if any) AND the typed query.
-  const query = filter.trim().toLowerCase();
-  const visibleKws = useMemo(() => {
-    let list = kws;
-    if (statFilter === "improved")
-      list = list.filter((k) => k.previousRank != null && k.currentRank < k.previousRank);
-    else if (statFilter === "declined")
-      list = list.filter((k) => k.previousRank != null && k.currentRank > k.previousRank);
-    else if (statFilter === "unranked") list = list.filter((k) => k.currentRank == null);
-    if (query) list = list.filter((k) => k.term.toLowerCase().includes(query));
-    return list;
-  }, [kws, query, statFilter]);
-
-  const mayAdd = can(user, "addKeyword");
-  // recordRank = "supply the numbers" (change a rank, bulk-import, snapshot).
-  // Team has this but NOT addKeyword, so the two must be gated separately.
-  const mayRecord = can(user, "recordRank");
-  const mayDelete = can(user, "deleteKeyword");
-  // Only Super Admin / Admin (Manager) can run a rank check — mirrors the
-  // server's require_roles gate on /check-ranks. Hiding the button is just a
-  // convenience; the backend enforces it regardless.
-  const mayCheck = isAdmin(user) || isManager(user);
-  const readOnly = !mayAdd && !mayDelete && !mayRecord;
-
-  // Derived stats — memoized so typing in the filter does not re-scan the full
-  // keyword list on every keystroke (recomputes only when the keywords change).
-  const { improved, declined, unranked } = useMemo(() => {
-    const improved = kws.filter((k) => k.previousRank != null && k.currentRank < k.previousRank).length;
-    const declined = kws.filter((k) => k.previousRank != null && k.currentRank > k.previousRank).length;
-    const unranked = kws.filter((k) => k.currentRank == null).length;
-    return { improved, declined, unranked };
-  }, [kws]);
-
-  // The actual rank check — only called after the user confirms the dialog.
-  const runCheck = async () => {
-    setConfirmCheck(false);
-    setChecking(true);
-    setError(null);
-    setCheckResult(null);
-    try {
-      const d = await api(`/projects/${project.id}/check-ranks`, { method: "POST" });
-      setCheckResult(d);
-      const remaining =
-        typeof d.checksRemaining === "number"
-          ? ` ${d.checksRemaining} of ${d.checksLimit} check${d.checksLimit === 1 ? "" : "s"} left for this project.`
-          : "";
-      toast.success(
-        `Updated ${d.updated} of ${d.checked} keyword${d.checked === 1 ? "" : "s"}.${remaining}`,
-        { title: "Rankings checked" }
-      );
-      await onChanged();
-} catch (err) {
-  setError(err.message);
-  if (err.status === 402) {
-    toast.error(
-      "Rank checks are out of credit. Top up the DataForSEO balance to run more checks.",
-      { title: "Payment required" }
-    );
-  } else {
-    toast.error(err.message, { title: "Rank check failed" });
-  }
-}
-  };
-
-  const deleteKeyword = async (kwId) => {
-    try {
-      await api(`/projects/${project.id}/keywords/${kwId}`, { method: "DELETE" });
-      toast.success("Keyword deleted.");
-      await onChanged();
-    } catch (err) {
-      setError(err.message);
-      toast.error(err.message, { title: "Couldn't delete keyword" });
-    }
-  };
-
-  // Action buttons shared between the toolbar (next to the search bar) and the
-  // empty state. Each button carries its OWN gate — Team may Import but not
-  // Add keyword, and may not Check rankings at all — so the wrapper shows
-  // whenever the user can do at least one of them.
-  const actions = (mayAdd || mayRecord) && (
-    <div className="flex flex-wrap gap-2">
-      {mayCheck && (
-        <button
-          onClick={() => setConfirmCheck(true)}
-          disabled={checking || kws.length === 0}
-          title="Look up every keyword's current Google position and record it"
-          className={`${BTN_GHOST} px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed`}
-        >
-          {checking ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />} Check rankings
-        </button>
-      )}
-      {mayRecord && (
-        <button
-          onClick={() => setShowImport(true)}
-          title="Bulk import keywords from an Excel file"
-          className={`${BTN_GHOST} px-4 py-2`}
-        >
-          <Upload size={15} /> Import
-        </button>
-      )}
-      {mayAdd && (
-        <button onClick={() => setShowAdd(true)} className={`${BTN_PRIMARY} px-4 py-2`}>
-          <Plus size={16} /> Add keyword
-        </button>
-      )}
-    </div>
-  );
-
-  return (
-    <div className="w-full">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-stone-900 tracking-tight font-display">
-          Rank Ledger
-          {readOnly && (
-            <span className="ml-2 align-middle text-xs font-medium px-2 py-0.5 rounded-full bg-stone-200 text-stone-600">
-              View only
-            </span>
-          )}
-        </h1>
-        <p className="text-sm text-stone-500 mt-1">Where each keyword stands now vs. the previous lookup.</p>
-      </div>
+/* RankLedger() removed with the automated rank check and snapshots.
+   Keyword rankings are now entered by hand — see screens/Keywords.jsx.
+   `git log` has the original if any of it is ever wanted back. */
 
 
-      {checkResult && (
-        <div className="text-sm rounded-lg px-3 py-2 mb-4 bg-sky-50 border border-sky-100 text-sky-800">
-          {checkResult.source === "simulated"
-            ? "Simulated lookup (no DataForSEO credentials configured) — "
-            : "Live DataForSEO lookup — "}
-          updated {checkResult.updated} of {checkResult.checked} keyword{checkResult.checked === 1 ? "" : "s"}.
-          {checkResult.notFound.length > 0 && (
-            <> Not found in checked depth: {checkResult.notFound.join(", ")} — those rows were left unchanged.</>
-          )}
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6 mt-2">
-        <Stat
-          label="Tracked"
-          value={kws.length}
-          onClick={() => setStatFilter(null)}
-          active={statFilter === null}
-          title="Show all keywords"
-        />
-        <Stat
-          label="Improved"
-          value={improved}
-          tone="up"
-          onClick={() => toggleStat("improved")}
-          active={statFilter === "improved"}
-          title="Show only keywords that moved up"
-        />
-        <Stat
-          label="Declined"
-          value={declined}
-          tone="down"
-          onClick={() => toggleStat("declined")}
-          active={statFilter === "declined"}
-          title="Show only keywords that moved down"
-        />
-        <Stat
-          label="Not ranked"
-          value={unranked}
-          onClick={() => toggleStat("unranked")}
-          active={statFilter === "unranked"}
-          title="Show only keywords that aren't ranking yet"
-        />
-      </div>
-
-      {(mayAdd || mayRecord || kws.length > 0) && (
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          {kws.length > 0 ? (
-            <div className="relative w-full sm:w-auto sm:flex-1 sm:max-w-xs">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 pointer-events-none" />
-              <input
-                type="text"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter keywords…"
-                aria-label="Filter keywords"
-                className="w-full pl-9 pr-9 py-2 text-sm rounded-lg border border-stone-200 bg-white text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-orange-500/40 focus:border-orange-400"
-              />
-              {filter && (
-                <button
-                  onClick={() => setFilter("")}
-                  aria-label="Clear filter"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-stone-300 hover:text-stone-600 transition-colors"
-                >
-                  <X size={15} />
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="hidden sm:block" />
-          )}
-          {actions}
-        </div>
-      )}
-
-      {kws.length === 0 ? (
-        <div className="bg-white.
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        rounded-xl border border-dashed border-stone-300 py-16 flex flex-col items-center text-center px-6">
-          <div className="h-12 w-12 rounded-full bg-stone-100 flex items-center justify-center mb-4">
-            <Search size={20} className="text-stone-400" />
-          </div>
-          <h3 className="font-semibold text-stone-800 font-display">No keywords yet</h3>
-          {mayAdd ? (
-            <>
-              <p className="text-sm text-stone-500 mt-1 mb-5 max-w-xs">
-                Add the search terms you want to track and the ledger fills in from there.
-              </p>
-              <button onClick={() => setShowAdd(true)} className={`${BTN_PRIMARY} px-4 py-2`}>
-                <Plus size={15} /> Add your first keyword
-              </button>
-            </>
-          ) : (
-            <p className="text-sm text-stone-500 mt-1 max-w-xs">The team hasn't started tracking keywords here yet.</p>
-          )}
-        </div>
-      ) : (
-        <div className="bg-white-100 rounded-xl border border-stone-200 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wider text-stone-900 border-b border-stone-200">
-                <th className="px-5 py-3 font-medium">Keyword</th>
-                <th className="px-5 py-3 font-medium">Previous</th>
-                <th className="px-5 py-3 font-medium">Current</th>
-                <th className="px-5 py-3 font-medium">Change</th>
-                <th className="px-5 py-3 font-medium">Last checked</th>
-                {(mayRecord || mayDelete) && <th className="px-2 py-3" />}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-stone-100">
-              {visibleKws.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-5 py-8 text-center text-sm text-stone-400">
-                    {query ? (
-                      <>No keywords match &ldquo;{filter.trim()}&rdquo;.</>
-                    ) : (
-                      "No keywords match this filter."
-                    )}
-                  </td>
-                </tr>
-              )}
-              {visibleKws.map((k) => (
-                <tr key={k.id} className="hover:bg-stone-50">
-                  <td className="px-5 py-3 font-medium text-stone-800">{k.term}</td>
-                  <td className="px-5 py-3 text-stone-400 font-data">
-                    {checking ? (
-                      <span className="skeleton inline-block h-4 w-8 align-middle" />
-                    ) : k.previousRank == null ? (
-                      "—"
-                    ) : (
-                      `#${k.previousRank}`
-                    )}
-                  </td>
-                  <td className="px-5 py-3 font-data font-semibold text-stone-900">
-                    {checking ? (
-                      <span className="skeleton inline-block h-4 w-8 align-middle" />
-                    ) : k.currentRank == null ? (
-                      <span className="text-stone-300">—</span>
-                    ) : (
-                      `#${k.currentRank}`
-                    )}
-                  </td>
-                  <td className="px-5 py-3">
-                    {checking ? (
-                      <span className="skeleton inline-block h-4 w-12 align-middle" />
-                    ) : (
-                      <RankChange current={k.currentRank} previous={k.previousRank} />
-                    )}
-                  </td>
-                  <td className="px-5 py-3 text-stone-400 text-xs whitespace-nowrap">
-                    {checking ? <span className="skeleton inline-block h-3 w-20 align-middle" /> : k.lastChecked}
-                  </td>
-                  {(mayRecord || mayDelete) && (
-                    <td className="px-2 py-3">
-                      <span className="flex items-center justify-end gap-0.5">
-                        {mayRecord && (
-                          <button
-                            onClick={() => setRecordFor(k)}
-                            aria-label={`Record new rank for ${k.term}`}
-                            title="Record new rank (current becomes previous)"
-                            className="p-1 rounded text-stone-300 hover:text-orange-600 transition-colors"
-                          >
-                            <RefreshCw size={14} />
-                          </button>
-                        )}
-                        {mayDelete && (
-                          <button
-                            onClick={() => deleteKeyword(k.id)}
-                            aria-label={`Remove ${k.term}`}
-                            title="Remove keyword"
-                            className="p-1 rounded text-stone-300 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        )}
-                      </span>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-
-      {recordFor && (
-        <RecordRankModal
-          projectId={project.id}
-          keyword={recordFor}
-          onClose={() => setRecordFor(null)}
-          onSaved={() => {
-            setRecordFor(null);
-            onChanged();
-          }}
-        />
-      )}
-
-      {showAdd && (
-        <AddKeywordModal
-          projectId={project.id}
-          onClose={() => setShowAdd(false)}
-          onAdded={() => {
-            setShowAdd(false);
-            onChanged();
-          }}
-        />
-      )}
-
-      {showImport && (
-        <BulkImportModal
-          projectId={project.id}
-          onClose={() => setShowImport(false)}
-          onImported={onChanged}
-        />
-      )}
-
-      {confirmCheck && (
-        <Modal title="Check rankings?" onClose={() => setConfirmCheck(false)}>
-          <p className="text-sm text-stone-600">
-            This looks up the current Google position for all{" "}
-            <span className="font-semibold text-stone-800">{kws.length}</span> keyword
-            {kws.length === 1 ? "" : "s"} in{" "}
-            <span className="font-semibold text-stone-800">{project.name}</span> and records the result.
-          </p>
-          <p className="mt-3 text-sm text-stone-500">
-            Rank checks are limited to <span className="font-semibold text-stone-700">3 per project every 2 weeks</span>. Are you sure you want to continue?
-          </p>
-          <div className="mt-5 flex justify-end gap-2">
-            <button
-              onClick={() => setConfirmCheck(false)}
-              className={`${BTN_GHOST} px-4 py-2`}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={runCheck}
-              disabled={checking}
-              className={`${BTN_PRIMARY} px-4 py-2 disabled:opacity-40`}
-            >
-              {checking ? <LoaderCircle size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-              Yes, check rankings
-            </button>
-          </div>
-        </Modal>
-      )}
-    </div>
-  );
-}
-
-/* Group a flat, newest-first snapshot list into per-month buckets, keeping
-   both the months and the snapshots within each in their incoming order
-   (so newest month first, newest save first). */
 function groupByMonth(snapshots) {
   const order = [];
   const map = new Map();
@@ -995,179 +591,10 @@ function SnapshotMenu({ groups, selectedId, onSelect, onDownload }) {
    columns. Each snapshot can be downloaded as CSV. The save button is
    gated by recordRank, the "supply the numbers" permission Team also has.
    ════════════════════════════════════════════════════════════════════ */
-function SnapshotsView({ user, project }) {
-  const [snapshots, setSnapshots] = useState(null); // null = still loading
-  const [selectedId, setSelectedId] = useState(null);
-  const [detail, setDetail] = useState(null); // selected snapshot + its rows
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
+/* SnapshotsView() removed with the automated rank check and snapshots.
+   Keyword rankings are now entered by hand — see screens/Keywords.jsx.
+   `git log` has the original if any of it is ever wanted back. */
 
-  const maySave = can(user, "recordRank");
-
-  const loadList = async (selectId) => {
-    try {
-      const d = await api(`/projects/${project.id}/snapshots`);
-      setSnapshots(d.snapshots);
-      setError(null);
-      if (selectId != null) setSelectedId(selectId);
-      else if (d.snapshots.length) setSelectedId((prev) => prev ?? d.snapshots[0].id);
-      return d.snapshots;
-    } catch (err) {
-      setError(err.message);
-      setSnapshots([]);
-    }
-  };
-
-  // Load the list once per project.
-  useEffect(() => {
-    loadList();
-  }, [project.id]);
-
-  // Fetch the selected snapshot's rows whenever the selection changes.
-  useEffect(() => {
-    if (selectedId == null) {
-      setDetail(null);
-      return;
-    }
-    let cancelled = false;
-    setDetail(null);
-    api(`/projects/${project.id}/snapshots/${selectedId}`)
-      .then((d) => !cancelled && setDetail(d.snapshot))
-      .catch((err) => !cancelled && setError(err.message));
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId, project.id]);
-
-  const save = async () => {
-    // Always creates a NEW snapshot — no overwrite, no confirm. The server
-    // picks the month authoritatively and stamps created_at.
-    setSaving(true);
-    setError(null);
-    try {
-      const d = await api(`/projects/${project.id}/snapshots`, { method: "POST" });
-      await loadList(d.snapshot.id);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const downloadSnapshot = async (s) => {
-    // Fetch with the auth header (can't put headers on a plain <a href>),
-    // then trigger a browser download from the returned CSV blob.
-    try {
-      const res = await fetch(`${BASE}/api/snapshots/${s.id}/download`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (!res.ok) throw new Error("Couldn't download that snapshot.");
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `snapshot-${s.periodKey}-${s.id}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setError(err.message);
-    }
-  };
-
-  return (
-    <div className="w-full">
-      <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
-        <div>
-          <h2 className="text-xl font-bold text-stone-900 tracking-tight font-display">Snapshots</h2>
-          <p className="text-sm text-stone-500 mt-1">A frozen copy of every keyword&apos;s rank, saved per month.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {snapshots && snapshots.length > 0 && (
-            <SnapshotMenu
-              groups={groupByMonth(snapshots)}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-              onDownload={downloadSnapshot}
-            />
-          )}
-          {maySave && (
-            <button
-              onClick={save}
-              disabled={saving}
-              title="Freeze the current ranks for this month"
-              className={`${BTN_PRIMARY} px-4 py-2`}
-            >
-              {saving ? <LoaderCircle size={15} className="animate-spin" /> : <Camera size={15} />} Save this month
-            </button>
-          )}
-        </div>
-      </div>
-
-      <ErrorNote>{error}</ErrorNote>
-
-      {snapshots === null ? (
-        <div className="flex justify-center py-16">
-          <LoaderCircle size={22} className="text-orange-600 animate-spin" />
-        </div>
-      ) : snapshots.length === 0 ? (
-        <div className="bg-white rounded-xl border border-dashed border-stone-300 py-16 flex flex-col items-center text-center px-6">
-          <div className="h-12 w-12 rounded-full bg-stone-100 flex items-center justify-center mb-4">
-            <Camera size={20} className="text-stone-400" />
-          </div>
-          <h3 className="font-semibold text-stone-800 font-display">No snapshots yet</h3>
-          <p className="text-sm text-stone-500 mt-1 max-w-xs">
-            {maySave ? "Save this month to create your first." : "No months have been saved here yet."}
-          </p>
-        </div>
-      ) : (
-        <>
-          {detail && (
-            <p className="text-xs text-stone-400 mb-3">
-              {detail.label} · captured {detail.capturedAt} · {detail.keywordCount} keyword
-              {detail.keywordCount === 1 ? "" : "s"}
-            </p>
-          )}
-          <div className="bg-white rounded-xl border border-stone-200 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wider text-stone-400 border-b border-stone-200">
-                  <th className="px-5 py-3 font-medium">Keyword</th>
-                  <th className="px-5 py-3 font-medium">Rank</th>
-                  <th className="px-5 py-3 font-medium">Last checked</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-stone-100">
-                {!detail ? (
-                  <tr>
-                    <td colSpan={3} className="px-5 py-10 text-center">
-                      <LoaderCircle size={18} className="text-orange-600 animate-spin inline" />
-                    </td>
-                  </tr>
-                ) : detail.ranks.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="px-5 py-10 text-center text-sm text-stone-400">
-                      No keywords were tracked when this snapshot was saved.
-                    </td>
-                  </tr>
-                ) : (
-                  detail.ranks.map((r, i) => (
-                    <tr key={i} className="hover:bg-stone-50">
-                      <td className="px-5 py-3 font-medium text-stone-800">{r.term}</td>
-                      <td className="px-5 py-3 font-data font-semibold text-stone-900">
-                        {r.rank == null ? <span className="text-stone-300">—</span> : `#${r.rank}`}
-                      </td>
-                      <td className="px-5 py-3 text-stone-400 text-xs whitespace-nowrap">{r.lastChecked ?? "—"}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
 
 /* ════════════════════════════════════════════════════════════════════
    TRAFFIC (GA4) — per-project Google Analytics 4 traffic for a chosen
@@ -1787,9 +1214,234 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
             {usesDemographics && " Demographics require Google Signals to be enabled on the property."}
           </p>
         </div>
+      ) : dimensions.includes(EVENT_DIMENSION) ? (
+        /* Event Name gets its OWN table. The generic report crosses every
+           selected dimension, so channel x event produced a row per PAIR —
+           7 events x 5 channels = 35 rows to read one number, which is what made
+           it unreadable. EventsReport shows one row per event with the channel
+           split tucked into an expandable sub-row. */
+        <EventsReport projectId={projectId} range={range} runNonce={runNonce} />
       ) : (
         <ReportResult report={result} />
       )}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   EVENTS TABLE — the dedicated Event Name view.
+
+   Runs its OWN pair of requests rather than reshaping the generic report,
+   because the numbers have to be right:
+
+   • MAIN ROWS use eventName as the ONLY dimension. GA4 user metrics are not
+     additive across a dimension — one visitor who fires page_view from both
+     Direct and Organic Search is ONE active user but appears in BOTH rows of a
+     crossed report. Summing the crossed table would inflate every user count
+     (the same trap that made the report's channel donut read 164 against a real
+     total of 162). Asking GA4 for eventName alone returns de-duplicated counts.
+
+   • THE CHANNEL SPLIT uses [eventName, channel] but only reads eventCount.
+     Event counts ARE additive, so splitting them per channel is safe.
+
+   Columns are deliberately fewer than the generic table: "Key events" is 0 on
+   every row for most properties, and averageEngagementTime is 0s for everything
+   except engagement events (GA4 only attributes duration to those), so both are
+   noise here. New users shows an em dash rather than 0 where GA4 attributes none
+   — a column of zeros reads like missing data.
+   ════════════════════════════════════════════════════════════════════ */
+const EVENT_DIMENSION = "eventName";
+const EVENT_METRICS = ["eventCount", "activeUsers", "newUsers", "sessions"];
+const EVENT_CHANNEL_DIMENSION = "sessionDefaultChannelGroup";
+
+function EventsReport({ projectId, range, runNonce }) {
+  const [rows, setRows] = useState(null); // null = loading
+  const [byChannel, setByChannel] = useState({}); // eventName -> [{channel, count}]
+  const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(null); // the event name whose split is open
+
+  useEffect(() => {
+    let cancelled = false;
+    setRows(null);
+    setError(null);
+    setExpanded(null);
+
+    const post = (dimensions, metrics) =>
+      api(`/projects/${projectId}/analytics/report`, {
+        method: "POST",
+        body: { start: range.start, end: range.end, dimensions, metrics, filters: [], match: "AND", limit: 250 },
+      });
+
+    Promise.all([
+      post([EVENT_DIMENSION], EVENT_METRICS),
+      // Best-effort: the split is a nicety, so a failure here must not take the
+      // main table down with it.
+      post([EVENT_DIMENSION, EVENT_CHANNEL_DIMENSION], ["eventCount"]).catch(() => null),
+    ])
+      .then(([main, split]) => {
+        if (cancelled) return;
+        if (main?.report?.error) return setError(main.report.error);
+
+        const list = (main?.report?.rows || []).map((r) => ({
+          name: (r.dims || [])[0] || "(not set)",
+          eventCount: Number(r.metrics?.eventCount) || 0,
+          activeUsers: Number(r.metrics?.activeUsers) || 0,
+          newUsers: Number(r.metrics?.newUsers) || 0,
+          sessions: Number(r.metrics?.sessions) || 0,
+        }));
+        list.sort((a, b) => b.eventCount - a.eventCount);
+        setRows(list);
+
+        const grouped = {};
+        for (const r of split?.report?.rows || []) {
+          const [ev, ch] = r.dims || [];
+          if (!ev) continue;
+          (grouped[ev] ||= []).push({ channel: cleanDimValue(ch), count: Number(r.metrics?.eventCount) || 0 });
+        }
+        for (const k of Object.keys(grouped)) grouped[k].sort((a, b) => b.count - a.count);
+        setByChannel(grouped);
+      })
+      .catch((err) => !cancelled && setError(err.message));
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, range.start, range.end, runNonce]);
+
+  const totalEvents = useMemo(() => (rows || []).reduce((s, r) => s + r.eventCount, 0), [rows]);
+
+  if (error) {
+    return (
+      <div className="bg-white rounded-xl border border-stone-200 p-6">
+        <p className="text-sm text-stone-400">{error}</p>
+      </div>
+    );
+  }
+  if (rows === null) {
+    return (
+      <div className="flex justify-center py-16">
+        <LoaderCircle size={22} className="text-orange-600 animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Headline counts */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+        <div className="bg-white rounded-xl border border-stone-200 px-4 py-3">
+          <p className="text-xs text-stone-400">Total events</p>
+          <p className="text-xl font-semibold text-stone-900 font-data mt-0.5">{totalEvents.toLocaleString()}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-stone-200 px-4 py-3">
+          <p className="text-xs text-stone-400">Event names</p>
+          <p className="text-xl font-semibold text-stone-900 font-data mt-0.5">{rows.length.toLocaleString()}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-stone-200 px-4 py-3">
+          <p className="text-xs text-stone-400">Most frequent</p>
+          <p className="text-sm font-semibold text-stone-800 font-data mt-1.5 truncate" title={rows[0]?.name}>
+            {rows[0]?.name || "—"}
+          </p>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
+        <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-stone-200">
+          <h3 className="text-sm font-semibold text-stone-800 font-display">Events</h3>
+          <span className="text-xs text-stone-400">{formatRangeLabel(range.start, range.end)}</span>
+        </div>
+
+        <table className="w-full text-sm table-fixed">
+          <thead>
+            <tr className="text-xs uppercase tracking-wider text-stone-400 border-b border-stone-200">
+              <th className="px-5 py-3 font-medium text-left w-[38%]">Event name</th>
+              <th className="px-3 py-3 font-medium text-right w-[17%]">Event count</th>
+              <th className="px-3 py-3 font-medium text-right w-[15%]">Active</th>
+              <th className="px-3 py-3 font-medium text-right w-[15%]">New</th>
+              <th className="px-5 py-3 font-medium text-right w-[15%]">Sessions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-100">
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-5 py-8 text-center text-sm text-stone-400">
+                  No events for this range.
+                </td>
+              </tr>
+            ) : (
+              rows.map((r) => {
+                const split = byChannel[r.name] || [];
+                const open = expanded === r.name;
+                return (
+                  <Fragment key={r.name}>
+                    <tr className="hover:bg-stone-50">
+                      <td className="px-5 py-3">
+                        <button
+                          onClick={() => setExpanded(open ? null : r.name)}
+                          disabled={split.length === 0}
+                          title={split.length ? `${open ? "Hide" : "Show"} channel split for ${r.name}` : r.name}
+                          className="flex w-full items-center gap-1.5 text-left font-data text-stone-800 disabled:cursor-default"
+                        >
+                          <ChevronDown
+                            size={14}
+                            className={`shrink-0 text-stone-300 transition-transform ${open ? "" : "-rotate-90"} ${
+                              split.length === 0 ? "invisible" : ""
+                            }`}
+                          />
+                          <span className="truncate">{r.name}</span>
+                        </button>
+                      </td>
+                      <td className="px-3 py-3 text-right font-data font-medium text-stone-900">
+                        {r.eventCount.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-3 text-right font-data text-stone-700">{r.activeUsers.toLocaleString()}</td>
+                      <td className="px-3 py-3 text-right font-data text-stone-700">
+                        {/* GA4 attributes new users only to first_visit; a zero
+                            here means "not applicable", not "no data". */}
+                        {r.newUsers > 0 ? r.newUsers.toLocaleString() : <span className="text-stone-300">—</span>}
+                      </td>
+                      <td className="px-5 py-3 text-right font-data text-stone-700">{r.sessions.toLocaleString()}</td>
+                    </tr>
+                    {open && (
+                      <tr className="bg-stone-50">
+                        <td colSpan={5} className="px-5 py-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-2">
+                            Event count by channel
+                          </p>
+                          <div className="space-y-1">
+                            {split.map((s) => (
+                              <div key={s.channel} className="flex items-center gap-3 text-xs">
+                                <span className="w-40 shrink-0 truncate text-stone-500" title={s.channel}>
+                                  {s.channel}
+                                </span>
+                                <span className="font-data text-stone-700">{s.count.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })
+            )}
+          </tbody>
+          {rows.length > 0 && (
+            <tfoot>
+              <tr className="border-t-2 border-stone-200 bg-stone-50 font-semibold text-stone-900">
+                <td className="px-5 py-3 text-xs uppercase tracking-wider text-stone-500">Total</td>
+                <td className="px-3 py-3 text-right font-data">{totalEvents.toLocaleString()}</td>
+                {/* No user/session totals: summing them across events would
+                    double-count anyone who fired more than one event. */}
+                <td colSpan={3} className="px-5 py-3 text-right text-xs font-normal text-stone-400">
+                  User and session totals aren&apos;t additive across events
+                </td>
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
     </div>
   );
 }

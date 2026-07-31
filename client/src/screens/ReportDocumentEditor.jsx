@@ -4,9 +4,16 @@
    PRODUCT BOUNDARY (enforced here): apart from the DATA VALUES, everything is
    editable. Editable = document STRUCTURE (reorder / delete / add free-text /
    re-add a removed template section) and all NARRATIVE TEXT (with blob-chips).
-   IMMUTABLE = the data values — data_table cells, metric_grid metrics, chart
-   series, backlinks list, header. Those blocks are MOVE / DELETE / RE-ADD only;
-   their inner values are rendered exactly as read-only and never edited.
+   IMMUTABLE = the data values — metric_grid metrics, chart series, backlinks
+   list, header. Those blocks are MOVE / DELETE / RE-ADD only; their inner values
+   are rendered exactly as read-only and never edited.
+
+   ONE EXCEPTION: the KEYWORD TABLE (block id "keywords", see EDITABLE_TABLE_ID).
+   Its ranks are typed in by hand on the Keywords page rather than pulled from an
+   API, so a typo has to be fixable at report time. It stays inside the boundary
+   above in the way that matters — the edit is written to content_json, so
+   data_json stays frozen and the Keywords page is untouched. Fixing a rank here
+   fixes THIS report only.
 
    REUSE (no rebuilding):
      • Narrative blocks host the EXISTING TipTap chip editor — createBlobNode
@@ -103,6 +110,12 @@ function docFromNarrative(block) {
   if (!content.length) content.push({ type: "paragraph" });
   return { type: "doc", content };
 }
+
+/* The keyword table is the one data_table whose CELLS are editable: its ranks are
+   entered by hand on the Keywords page rather than pulled from an API, so a typo
+   has to be fixable at report time. The id is set by
+   report_document.py _keyword_table(). */
+const EDITABLE_TABLE_ID = "keywords";
 
 const DATA_BLOCK_TYPES = new Set([
   "report_header",
@@ -431,6 +444,47 @@ function EditableDoc({ version, blobs, canSend = false }) {
     setBlocks((bs) => bs.map((b) => (b.id === blockId ? { ...b, title: value } : b)));
   }, []);
 
+  /* Keyword table: edit a cell in place. The ONLY data_table whose values are
+     writable, because its numbers are typed in by hand rather than pulled from
+     an API.
+
+     Writes into `blocks`, which is saved to content_json — data_json stays
+     frozen and the Keywords page is untouched. Correcting a rank here corrects
+     THIS report only, which is how every other report edit already behaves.
+
+     rank_delta is recomputed on every edit. It isn't a displayed column, but
+     report_pdf reads it to tint the row green/red and _achievements reads it to
+     name the biggest movers — so leaving the original value behind would show a
+     row tinted for a change the printed numbers no longer support. */
+  const setCellValue = useCallback((blockId, rowIndex, colKey, value) => {
+    setBlocks((bs) =>
+      bs.map((b) => {
+        if (b.id !== blockId) return b;
+        const col = (b.columns || []).find((c) => c.key === colKey);
+        const isMetric = col && col.kind !== "dim";
+        let next = value;
+        if (isMetric) {
+          const digits = String(value).replace(/[^0-9]/g, "");
+          next = digits === "" ? null : Number(digits);
+        }
+        const rows = (b.rows || []).map((r, i) => {
+          if (i !== rowIndex) return r;
+          const cells = { ...(r.cells || {}), [colKey]: next };
+          if (colKey === "current_rank" || colKey === "previous_rank") {
+            const cur = cells.current_rank;
+            const prev = cells.previous_rank;
+            cells.rank_delta =
+              cur === null || cur === undefined || prev === null || prev === undefined
+                ? null
+                : cur - prev;
+          }
+          return { ...r, cells };
+        });
+        return { ...b, rows };
+      })
+    );
+  }, []);
+
   // Targets grid: manual value + notes edits (the one editable non-narrative block).
   const setTargetValue = useCallback((blockId, colKey, fieldKey, value) => {
     setBlocks((bs) =>
@@ -528,7 +582,7 @@ function EditableDoc({ version, blobs, canSend = false }) {
       <ErrorNote>{saveError}</ErrorNote>
 
       <p className="mb-3 text-sm text-stone-500">
-        Reorder, delete, and add blocks; edit any text block (type <kbd className="px-1 rounded bg-stone-100 border border-stone-200">/</kbd> to insert data). Data values are fixed and can't be edited.
+        Reorder, delete, and add blocks; edit any text block (type <kbd className="px-1 rounded bg-stone-100 border border-stone-200">/</kbd> to insert data). Keyword ranks are editable here; every other data value is fixed. Edits apply to this report only.
       </p>
 
       {/* ── 2-pane: document · insert-data palette ── */}
@@ -578,6 +632,12 @@ function EditableDoc({ version, blobs, canSend = false }) {
                     block={block}
                     selectable
                     hideTitle
+                    /* Only the keyword table is editable — its ranks are typed in
+                       by hand. Every other data_table is a frozen API pull. */
+                    editable={block.id === EDITABLE_TABLE_ID}
+                    onCellChange={(rowIndex, colKey, value) =>
+                      setCellValue(block.id, rowIndex, colKey, value)
+                    }
                     onToggleRow={(rowIndex, inc) => setRowIncluded(block.id, rowIndex, inc)}
                     onBulk={(mode) => setRowsBulk(block.id, mode)}
                   />

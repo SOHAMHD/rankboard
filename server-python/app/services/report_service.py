@@ -1,9 +1,9 @@
 """REPORT SERVICE — the gather → validate → freeze pipeline plus generate/fork.
 
 This is the DATA FOUNDATION for reports. Ranks/Moz/keywords come from data ALREADY
-IN THE DB (a saved snapshot's snapshot_ranks; the period's moz_metrics row; the
-keyword comparison from those frozen ranks) — generation NEVER makes a live rank
-call. GA4 + GSC are the exception: they are fetched LIVE from Google at generate
+IN THE DB (the manually-entered keyword_ranks rows for the report month and the
+two before it; the period's moz_metrics row) — generation NEVER makes a live rank
+call, and there is no automated rank checking anywhere in the product. GA4 + GSC are the exception: they are fetched LIVE from Google at generate
 time (see report_google.py) and then FROZEN into the blob, identical in treatment
 to ranks/Moz once gathered. Forking reuses the frozen blob and never re-fetches.
 
@@ -26,6 +26,7 @@ from . import report_blobs
 from . import report_document
 from . import report_google
 from . import report_registry as registry
+from . import keyword_rank_service
 
 # Blob schema version — bump if the frozen structure changes so a later reader
 # can branch on it.
@@ -66,31 +67,9 @@ def _period_upper_bound(period_key: str) -> str | None:
 
 
 # ── source pickers (all read-only) ────────────────────────────────────────────
-def _pick_snapshot(db, project_id: int, period_key: str):
-    """The usable rank snapshot for this project+period: the LATEST one saved for
-    the month (snapshots are not one-per-month). None if the month was never
-    saved. `locked` is intentionally NOT required — nothing in the codebase ever
-    sets it to 1, so it's an informational flag; a snapshot is usable by virtue
-    of existing with its frozen snapshot_ranks rows."""
-    return db.execute(
-        "SELECT * FROM snapshots WHERE project_id = ? AND period_key = ?"
-        " ORDER BY created_at DESC, id DESC LIMIT 1",
-        (project_id, period_key),
-    ).fetchone()
+# _pick_snapshot() removed: snapshots are gone, ranks come from keyword_ranks.
 
-
-def _pick_prev_snapshot(db, project_id: int, snap):
-    """The snapshot immediately BEFORE `snap` chronologically (any period) — the
-    month-over-month baseline for rank deltas. None if `snap` is the first."""
-    if snap is None:
-        return None
-    return db.execute(
-        "SELECT * FROM snapshots WHERE project_id = ?"
-        " AND (created_at < ? OR (created_at = ? AND id < ?))"
-        " ORDER BY created_at DESC, id DESC LIMIT 1",
-        (project_id, snap["created_at"], snap["created_at"], snap["id"]),
-    ).fetchone()
-
+# _pick_prev_snapshot() removed: snapshots are gone, ranks come from keyword_ranks.
 
 def _pick_moz(db, project_id: int, period_key: str):
     """The Moz row for the period: the latest refresh captured AT OR BEFORE the
@@ -160,91 +139,80 @@ def gather(
     if not period_key:
         (period_key,) = db.execute("SELECT strftime('%Y-%m','now')").fetchone()
 
-    snap = _pick_snapshot(db, project_id, period_key)
-    # The previous-rank column is LABELLED with the previous CALENDAR month
-    # (e.g. "Rank · May 2026" for a June report), so its data must come from that
-    # month's snapshot — not merely the chronologically-previous save. Using the
-    # latter meant a second save in the SAME month (or another month's snapshot)
-    # became the baseline, so every keyword read "no change". Pick by the prior
-    # month's period_key; None when that month was never snapshotted (no deltas).
+    # The rank columns are LABELLED with specific calendar months ("Rank · May
+    # 2026"), so each one's data must come from THAT month — never from "the most
+    # recent entry", which would silently put one month's numbers under another
+    # month's heading.
     prev_period = report_google.previous_period(period_key)
-    prev_snap = _pick_snapshot(db, project_id, prev_period)
-    # THIRD month back (e.g. May 2026 for a July report). Same calendar-month
-    # rule as prev_snap: labelled with a specific month, so it must come from
-    # that month's snapshot. None when never snapshotted — the column then
-    # renders empty rather than the section failing.
     prev2_period = report_google.previous_period(prev_period)
-    prev2_snap = _pick_snapshot(db, project_id, prev2_period)
     moz = _pick_moz(db, project_id, period_key)
     prev_moz = _pick_prev_moz(db, project_id, moz)
 
-    # ── ranks + keywords (both from the chosen snapshot's frozen rows) ─────────
+    # ── ranks + keywords: THREE MONTHS of manually-entered positions ───────────
+    # Read straight from keyword_ranks (the Keywords grid), one lookup per month.
+    # This replaced the snapshots/snapshot_ranks pair: a snapshot existed to
+    # freeze the output of an automated check, and with the numbers typed in by
+    # hand the month itself is the freeze.
+    #
+    # The section is present whenever the project has keywords at all — NOT only
+    # when the current month has data. Under snapshots, a month that was never
+    # snapshotted made the whole keyword section unavailable; now an unfilled
+    # month renders as blank cells under the right heading, which is the honest
+    # representation and keeps the three-month layout intact.
+    kw_rows = db.execute(
+        "SELECT id, term FROM keywords WHERE project_id = ? ORDER BY created_at, id",
+        (project_id,),
+    ).fetchall()
+
     ranks_section = None
     keywords_section = None
-    if snap is not None:
-        rank_rows = db.execute(
-            "SELECT keyword_id, term, rank, last_checked FROM snapshot_ranks"
-            " WHERE snapshot_id = ? ORDER BY rank IS NULL, rank ASC, term",
-            (snap["id"],),
-        ).fetchall()
+    if kw_rows:
+        cur_m = keyword_rank_service.ranks_for_month(db, project_id, period_key)
+        prev_m = keyword_rank_service.ranks_for_month(db, project_id, prev_period)
+        prev2_m = keyword_rank_service.ranks_for_month(db, project_id, prev2_period)
 
-        # Previous-period ranks, keyed by keyword_id (preferred) then term, so a
-        # keyword still matches across months even if its id changed.
-        def _rank_maps(s):
-            """(by_keyword_id, by_term) rank lookups for one snapshot. Empty dicts
-            when the snapshot is missing, so callers need no None-guard."""
-            by_kw, by_term = {}, {}
-            if s is not None:
-                for r in db.execute(
-                    "SELECT keyword_id, term, rank FROM snapshot_ranks WHERE snapshot_id = ?",
-                    (s["id"],),
-                ).fetchall():
-                    if r["keyword_id"] is not None:
-                        by_kw[r["keyword_id"]] = r["rank"]
-                    by_term[r["term"]] = r["rank"]
-            return by_kw, by_term
+        def _rank_of(maps, kw_id, term):
+            """This keyword's rank in one month, or None when not recorded.
 
-        prev_by_kw, prev_by_term = _rank_maps(prev_snap)
-        prev2_by_kw, prev2_by_term = _rank_maps(prev2_snap)
+            Matches on keyword_id FIRST so a keyword survives being renamed, then
+            falls back to the term so it survives being deleted and re-added under
+            a new id. Same belt-and-braces the snapshot reader used.
+            """
+            if kw_id in maps["by_keyword_id"]:
+                return maps["by_keyword_id"][kw_id]
+            return maps["by_term"].get(term)
 
         rank_items, keyword_items = [], []
-        for r in rank_rows:
-            cur = r["rank"]
-            # Match on keyword_id first so a keyword survives a term rename, then
-            # fall back to the term so it survives an id change.
-            if r["keyword_id"] is not None and r["keyword_id"] in prev_by_kw:
-                prev = prev_by_kw[r["keyword_id"]]
-            else:
-                prev = prev_by_term.get(r["term"])
-            if r["keyword_id"] is not None and r["keyword_id"] in prev2_by_kw:
-                prev2 = prev2_by_kw[r["keyword_id"]]
-            else:
-                prev2 = prev2_by_term.get(r["term"])
-            rank_items.append({
-                "term": r["term"],
-                "rank": cur,                       # None = never checked when frozen
-                "last_checked": r["last_checked"],
-            })
+        for k in kw_rows:
+            kw_id, term = k["id"], k["term"]
+            cur = _rank_of(cur_m, kw_id, term)
+            prev = _rank_of(prev_m, kw_id, term)
+            prev2 = _rank_of(prev2_m, kw_id, term)
+            rank_items.append({"term": term, "rank": cur, "last_checked": None})
             keyword_items.append({
-                "term": r["term"],
+                "term": term,
                 "current_rank": cur,
-                "previous_rank": prev,             # None = no prior snapshot / new keyword
-                "previous2_rank": prev2,           # None = that month was never snapshotted
+                "previous_rank": prev,             # None = that month not recorded
+                "previous2_rank": prev2,
                 "rank_delta": _delta(cur, prev),   # current - previous (negative = improved)
             })
 
+        # Ranked keywords first (best first), then the unrecorded ones — the same
+        # order the snapshot query produced with "ORDER BY rank IS NULL, rank, term".
+        order = lambda it: (it["current_rank"] is None, it["current_rank"] or 0, it["term"])
+        rank_items.sort(key=lambda it: (it["rank"] is None, it["rank"] or 0, it["term"]))
+        keyword_items.sort(key=order)
+
         ranks_section = {
             "source": registry.SOURCE_SNAPSHOT_RANKS,
-            "snapshot_id": snap["id"],
-            "snapshot_label": snap["label"],
-            "captured_at": snap["captured_at"],
+            "month": period_key,
             "items": rank_items,
         }
         keywords_section = {
             "source": registry.SOURCE_KEYWORDS,
-            "snapshot_id": snap["id"],
-            "prev_snapshot_id": prev_snap["id"] if prev_snap is not None else None,
-            "prev2_snapshot_id": prev2_snap["id"] if prev2_snap is not None else None,
+            "month": period_key,
+            "prev_month": prev_period,
+            "prev2_month": prev2_period,
             "items": keyword_items,
         }
 
@@ -356,7 +324,10 @@ def gather(
             "domain": project["domain"],
             "location_code": project["location_code"],
         },
-        "rank_snapshot_id": snap["id"] if snap is not None else None,
+        # Kept as NULL: the column still exists on report_version (it pointed at
+        # the snapshot whose ranks were frozen in), but there are no snapshots any
+        # more — the ranks come from keyword_ranks.
+        "rank_snapshot_id": None,
         "period_complete": period_complete,
         # True for the current, in-progress month: data is partial and still
         # maturing. The block document surfaces this as a header notice.
@@ -365,10 +336,13 @@ def gather(
         # generation a `present: False` source is NOT fatal — the reason is shown
         # as a "not available for this period" flag on the rendered block.
         "sources": {
-            "ranks":     {"present": snap is not None,
-                          "reason": None if snap is not None else f"no rank snapshot saved for {period_key}"},
-            "keywords":  {"present": snap is not None,
-                          "reason": None if snap is not None else f"no rank snapshot saved for {period_key}"},
+            # Present whenever the project HAS keywords. A month with no ranks
+            # entered yet is not "unavailable" — it renders as blank cells under
+            # the right month heading, which is what the team then fills in.
+            "ranks":     {"present": ranks_section is not None,
+                          "reason": None if ranks_section is not None else "no keywords added for this project yet"},
+            "keywords":  {"present": keywords_section is not None,
+                          "reason": None if keywords_section is not None else "no keywords added for this project yet"},
             "moz":       {"present": moz is not None,
                           "reason": None if moz is not None else f"no Moz metrics captured for {period_key}"},
             "ga4":       {"present": ga4_outcome["ok"],
@@ -393,8 +367,8 @@ def gather(
     return {
         "project_id": project_id,
         "period_key": period_key,
-        "rank_snapshot_id": snap["id"] if snap is not None else None,
-        "snapshot_present": snap is not None,
+        "rank_snapshot_id": None,
+        "snapshot_present": keywords_section is not None,
         "moz_present": moz is not None,
         "period_complete": period_complete,
         "period_in_progress": period_in_progress,

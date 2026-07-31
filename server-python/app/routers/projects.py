@@ -26,6 +26,7 @@ from ..services.analytics_provider import (
 from ..services.rank_provider import check_ranks
 from ..services.search_console_provider import get_search_console, query_performance
 from ..services.excel_service import build_sample_workbook, parse_keyword_workbook
+from ..services import keyword_rank_service
 from ..services.snapshot_service import create_snapshot
 
 router = APIRouter(dependencies=[Depends(require_active_user)])
@@ -819,6 +820,52 @@ def delete_keyword(project_id: int, keyword_id: int, db: sqlite3.Connection = De
     if cur.rowcount == 0:
         raise HTTPException(404, "Keyword not found.")
     return {"ok": True}
+
+
+# ── Manual monthly ranks — the Keywords grid (keywords x months) ──────────────
+# There is no automated rank check: the team types each keyword's position per
+# month here, and the report's three-month table is three reads of this data.
+
+
+class RankCellIn(BaseModel):
+    keywordId: int
+    month: str          # "YYYY-MM"
+    rank: int | None = None   # None / 0 clears the cell
+
+
+class RankCellsIn(BaseModel):
+    cells: list[RankCellIn] = []
+
+
+@router.get("/{project_id}/keyword-ranks", dependencies=[Depends(require_project_access)])
+def get_keyword_ranks(
+    project_id: int,
+    months: str = "",
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """The grid for one project: every keyword with its rank in each requested
+    month. `months` is a comma-separated list of "YYYY-MM" (newest last), so the
+    client controls exactly which columns it wants.
+
+    A month with no stored row is ABSENT from a keyword's `ranks` map rather than
+    present-as-null — that's how the grid tells "never recorded" from "recorded as
+    not ranking". Read-only, so any user who can see the project can read it."""
+    wanted = [m.strip() for m in (months or "").split(",") if m.strip()]
+    if not wanted:
+        raise HTTPException(400, "Pass ?months=YYYY-MM,YYYY-MM,... — at least one month.")
+    return keyword_rank_service.get_grid(db, project_id, wanted)
+
+
+@router.put(
+    "/{project_id}/keyword-ranks",
+    dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
+)
+def save_keyword_ranks(project_id: int, body: RankCellsIn, db: sqlite3.Connection = Depends(get_db)):
+    """Bulk-upsert grid cells — only the cells sent are touched, so editing one
+    column can't blank the rest of the row and two people on different months
+    can't clobber each other. A null/0 rank DELETES that cell. Gated on the same
+    `recordRank` permission the old rank-recording endpoint used."""
+    return keyword_rank_service.save_cells(db, project_id, [c.model_dump() for c in body.cells])
 
 
 # ── Snapshots — frozen monthly copies of the ledger (read-only views) ─

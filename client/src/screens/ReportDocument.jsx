@@ -309,7 +309,23 @@ function cell(col, cells) {
 // control bar, and report toggles via onToggleRow(rowIndexIntoAllRows, checked)
 // / onBulk("all"|"none"|N). Read-only (default, incl. locked/sent + PDF parity):
 // no checkboxes, only the selected rows are shown.
-export function DataTableBlock({ block, selectable = false, onToggleRow, onBulk, hideTitle }) {
+/* `editable` turns the cells into inputs. Used ONLY for the keyword table, whose
+   ranks are entered by hand — everything else on a report is derived from a
+   frozen data pull and must not be typed over.
+
+   Edits land in content_json (the editable layer), never in data_json (the
+   frozen one), so the numbers on the Keywords page are unaffected: fixing a rank
+   here fixes THIS report and nothing else. The columns, headings and three-month
+   order are untouched — only the cells become writable. */
+export function DataTableBlock({
+  block,
+  selectable = false,
+  onToggleRow,
+  onBulk,
+  hideTitle,
+  editable = false,
+  onCellChange,
+}) {
   const columns = block.columns || [];
   const allRows = block.rows || [];
   const rows = selectable ? allRows : allRows.filter(rowIncluded);
@@ -366,14 +382,37 @@ export function DataTableBlock({ block, selectable = false, onToggleRow, onBulk,
                           />
                         </td>
                       )}
-                      {columns.map((c) => (
-                        <td
-                          key={c.key}
-                          className={`py-1.5 px-2 ${c.kind === "dim" ? "text-left max-w-[18rem] truncate" : "text-right"}`}
-                        >
-                          {cell(c, r.cells)}
-                        </td>
-                      ))}
+                      {columns.map((c) => {
+                        if (editable) {
+                          const raw = (r.cells || {})[c.key];
+                          const isDim = c.kind === "dim";
+                          return (
+                            <td key={c.key} className="py-1 px-2">
+                              <input
+                                value={raw === null || raw === undefined ? "" : String(raw)}
+                                onChange={(e) => onCellChange?.(i, c.key, e.target.value)}
+                                // A rank is a position, so metric cells accept
+                                // digits only — a stray "-" would be written
+                                // straight into content_json otherwise.
+                                inputMode={isDim ? "text" : "numeric"}
+                                placeholder={isDim ? "" : "—"}
+                                aria-label={`${c.label}${isDim ? "" : ` for row ${i + 1}`}`}
+                                className={`rounded-md border border-stone-200 px-2 py-1 text-sm text-stone-900
+                                  focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-colors
+                                  ${isDim ? "w-full text-left" : "w-16 text-center font-data"}`}
+                              />
+                            </td>
+                          );
+                        }
+                        return (
+                          <td
+                            key={c.key}
+                            className={`py-1.5 px-2 ${c.kind === "dim" ? "text-left max-w-[18rem] truncate" : "text-right"}`}
+                          >
+                            {cell(c, r.cells)}
+                          </td>
+                        );
+                      })}
                     </tr>
                   );
                 })}
