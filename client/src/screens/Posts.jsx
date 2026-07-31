@@ -168,13 +168,13 @@ const [month, setMonth] = useState(currentMonth);
             placeholder="Title (optional)"
             className={`${INPUT_CLS} sm:w-56`}
           />
-         <input
-  type="month"
-  value={month}
-  onChange={(e) => setMonth(e.target.value)}
-  className={`${INPUT_CLS} sm:w-44`}
-  aria-label="Month"
-/>
+                     <input
+              type="month"
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+              className={`${INPUT_CLS} sm:w-44`}
+              aria-label="Month"
+            />
           <button onClick={add} disabled={busy || !url.trim()} className={`${BTN_PRIMARY} px-4 py-2 shrink-0`}>
             {busy ? <LoaderCircle size={15} className="animate-spin" /> : (<><Plus size={16} /> Add</>)}
           </button>
