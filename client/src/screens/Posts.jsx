@@ -28,26 +28,19 @@ function monthLabel(key) {
   return m.length === 2 && idx >= 0 && idx < 12 ? `${MONTH_NAMES[idx]} ${m[0]}` : String(key);
 }
 
-/** The last `count` months as "YYYY-MM", newest first — the add-form month
- *  picker. Built from the browser clock; same helper as Backlinks. */
-function recentMonths(count = 24) {
-  const out = [];
-  const d = new Date();
-  d.setDate(1);
-  for (let i = 0; i < count; i++) {
-    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-    d.setMonth(d.getMonth() - 1);
-  }
-  return out;
-}
+
 
 export function PostsView({ user, project, kind }) {
   const meta = KIND_META[kind] || KIND_META.blog;
-  const months = recentMonths();
+  const currentMonth = `${new Date().getFullYear()}-${String(
+  new Date().getMonth() + 1
+).padStart(2, "0")}`;
+
+const [month, setMonth] = useState(currentMonth);
   const [posts, setPosts] = useState(null); // null = loading
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
-  const [month, setMonth] = useState(months[0]); // default: current month
+ 
   const [monthFilter, setMonthFilter] = useState("all");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -175,18 +168,13 @@ export function PostsView({ user, project, kind }) {
             placeholder="Title (optional)"
             className={`${INPUT_CLS} sm:w-56`}
           />
-          <select
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-            aria-label="Month"
-            className={`${INPUT_CLS} sm:w-44`}
-          >
-            {months.map((m) => (
-              <option key={m} value={m}>
-                {monthLabel(m)}
-              </option>
-            ))}
-          </select>
+         <input
+  type="month"
+  value={month}
+  onChange={(e) => setMonth(e.target.value)}
+  className={`${INPUT_CLS} sm:w-44`}
+  aria-label="Month"
+/>
           <button onClick={add} disabled={busy || !url.trim()} className={`${BTN_PRIMARY} px-4 py-2 shrink-0`}>
             {busy ? <LoaderCircle size={15} className="animate-spin" /> : (<><Plus size={16} /> Add</>)}
           </button>
