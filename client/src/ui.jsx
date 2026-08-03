@@ -252,6 +252,7 @@ export function SmartSearch({
   disabledHint,
   emptyText = "No matches.",
   autoFocus,
+  debounceMs = 160,
 }) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
@@ -285,12 +286,15 @@ export function SmartSearch({
   };
 
   // Debounce the typing, but not the first open (that should feel instant).
+  // debounceMs={0} skips the wait entirely — used where the list is already in
+  // memory, so filtering is synchronous and there's nothing to spare the network.
   useEffect(() => {
     if (!open) return;
     if (text === query.current) return;
-    const t = setTimeout(() => run(text), 180);
+    if (!debounceMs) return run(text);
+    const t = setTimeout(() => run(text), debounceMs);
     return () => clearTimeout(t);
-  }, [text, open]);
+  }, [text, open, debounceMs]);
 
   // Click outside closes and restores the selected label.
   useEffect(() => {

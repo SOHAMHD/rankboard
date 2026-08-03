@@ -51,10 +51,25 @@ VALID_LOCATION_CODES = {c["locationCode"] for c in LOCATIONS["countries"]} | {
 _CODE_BY_ISO = {c["iso"]: c["locationCode"] for c in COUNTRY_SEED}
 
 
+def search_keys(name: str, full_name: str, alt: str) -> tuple[str, str]:
+    """The two derived columns the type-ahead actually queries:
+
+      name_key    lower(name), so the indexed prefix match needs no LOWER().
+      search_key  " perth western australia australia " — full_name with commas
+                  turned into spaces, plus alt, lowercased, padded with a space
+                  at each end. One column to LIKE against instead of three ORs,
+                  and the padding makes '% perth%' mean "a word starts with
+                  perth". db.py's _backfill_location_keys() builds the identical
+                  strings in SQL for rows imported before these existed.
+    """
+    words = f"{full_name} {alt}".replace(",", " ").lower().split()
+    return name.lower(), " " + " ".join(words) + " "
+
+
 def seed_rows() -> list[tuple]:
     """Every seed row as a `locations` tuple:
         (location_code, name, full_name, kind, country_code, region_code,
-         country_iso, location_type, alt)
+         country_iso, location_type, alt, name_key, search_key)
 
     Countries from countries.json, cities from locations.json. No regions —
     region codes are not derivable offline, so the Region search stays empty
@@ -64,9 +79,11 @@ def seed_rows() -> list[tuple]:
     rows: dict[int, tuple] = {}
 
     for c in COUNTRY_SEED:
+        alt = c.get("alt", "")
         rows[c["locationCode"]] = (
             c["locationCode"], c["name"], c["name"], "country",
-            c["locationCode"], None, c["iso"], "Country", c.get("alt", ""),
+            c["locationCode"], None, c["iso"], "Country", alt,
+            *search_keys(c["name"], c["name"], alt),
         )
 
     for c in LOCATIONS["countries"]:
@@ -79,9 +96,11 @@ def seed_rows() -> list[tuple]:
             code = city["locationCode"]
             if code in rows:
                 continue  # never shadow a country row
+            full = f"{city['name']}, {country_name}"
             rows[code] = (
-                code, city["name"], f"{city['name']}, {country_name}", "city",
+                code, city["name"], full, "city",
                 country_code, None, iso, "City", "",
+                *search_keys(city["name"], full, ""),
             )
 
     return list(rows.values())

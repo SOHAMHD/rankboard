@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
-import { locationsStatus, resolveLocation, searchLocations } from "../locations";
+import { filterLocal, listCountries, listRegions, locationsStatus, resolveLocation, searchCities } from "../locations";
 import { TopBar, Modal, ErrorNote, SmartSearch, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
 
 /* ── GEO PICKER ───────────────────────────────────────────────────────────────
@@ -43,23 +43,29 @@ function countryFromDomain(domain) {
 // Three cascading SmartSearch inputs. State lives in the parent as three items
 // ({ code, name } or null) so the form can submit the codes and show the names.
 function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) {
-  const [status, setStatus] = useState(null); // { regions, imported } — see below
+  const [status, setStatus] = useState(null);
+
+  // Countries and the chosen country's regions are small enough to hold in
+  // memory, so they are fetched ONCE and filtered in the browser: those two
+  // inputs cost zero requests per keystroke. Cities stay server-side (116k rows).
+  useEffect(() => {
+    listCountries().catch(() => {});
+    locationsStatus().then(setStatus).catch(() => setStatus(null));
+  }, []);
 
   useEffect(() => {
-    // Only to explain an EMPTY region list: a database that hasn't had
-    // `python -m scripts.import_locations` run yet holds countries and verified
-    // metros, but no regions at all. Without this the input looks broken.
-    locationsStatus()
-      .then(setStatus)
-      .catch(() => setStatus(null));
-  }, []);
+    if (country) listRegions(country.code).catch(() => {});
+  }, [country?.code]);
 
   // Suggestions carry the parent chain as the dimmed right-hand hint, so two
   // cities called Springfield are told apart at a glance.
-  const decorate = (rows, self) =>
+  const decorate = (rows) =>
     rows.map((r) => ({
       ...r,
-      hint: r.fullName && r.fullName !== self(r) ? r.fullName.split(",").slice(1).join(", ").trim() : null,
+      hint:
+        r.fullName && r.fullName !== r.name
+          ? r.fullName.split(",").slice(1).join(", ").trim()
+          : null,
     }));
 
   return (
@@ -68,10 +74,11 @@ function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) 
         label="Country"
         value={country}
         onChange={onCountry}
-        onSearch={(q) => searchLocations("country", q).then((rows) => decorate(rows, (r) => r.name))}
+        debounceMs={0}
+        onSearch={(q) => listCountries().then((rows) => decorate(filterLocal(rows, q)))}
         placeholder="Type a country — e.g. Aus…"
         emptyText="No country matches that."
-        hint='Which Google to check in. Leave all three empty to use the server default.'
+        hint="Which Google to check in. Leave all three empty to use the server default."
       />
 
       <SmartSearch
@@ -79,7 +86,8 @@ function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) 
         optional
         value={region}
         onChange={onRegion}
-        onSearch={(q) => searchLocations("region", q, { country: country?.code }).then((rows) => decorate(rows, (r) => r.name))}
+        debounceMs={0}
+        onSearch={(q) => listRegions(country?.code).then((rows) => decorate(filterLocal(rows, q)))}
         disabled={!country}
         disabledHint="Pick a country first"
         placeholder={`Type a region${country ? ` in ${country.name}` : ""}…`}
@@ -97,9 +105,7 @@ function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) 
         value={city}
         onChange={onCity}
         onSearch={(q) =>
-          searchLocations("city", q, { country: country?.code, region: region?.code }).then((rows) =>
-            decorate(rows, (r) => r.name),
-          )
+          searchCities(q, { country: country?.code, region: region?.code }).then(decorate)
         }
         disabled={!country}
         disabledHint="Pick a country first"

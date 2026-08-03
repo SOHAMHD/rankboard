@@ -149,6 +149,10 @@ def classify(items: list[dict], keep_all: bool = False) -> list[tuple]:
         rows.append((
             code, name, full_name, kind, country_code, region_code,
             (item.get("country_iso_code") or "").strip() or None, ltype or None, "",
+            # The indexed prefix key and the one-column word-match key the
+            # type-ahead queries. Built here so the import needs no follow-up
+            # UPDATE pass over 119k rows.
+            *search_keys(name, full_name, ""),
         ))
 
     if skipped:
