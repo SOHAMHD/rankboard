@@ -43,11 +43,21 @@ export default function App() {
       .finally(() => setBooting(false));
   }, []);
 
+  // Warm the Dashboard chunk, but only once the browser is actually idle and not
+  // on a connection where the extra download would hurt. A fixed 1200ms timer
+  // fired while the projects list was still loading, so the prefetch competed
+  // for bandwidth with the data the user was waiting to see.
   useEffect(() => {
     if (!user) return;
-    const t = setTimeout(() => {
-      import("./screens/Dashboard.jsx");
-    }, 1200);
+    const conn = navigator.connection;
+    if (conn && (conn.saveData || /(^|-)2g$/.test(conn.effectiveType || ""))) return;
+
+    const prefetch = () => import("./screens/Dashboard.jsx");
+    if (typeof requestIdleCallback === "function") {
+      const handle = requestIdleCallback(prefetch, { timeout: 4000 });
+      return () => cancelIdleCallback(handle);
+    }
+    const t = setTimeout(prefetch, 2500);
     return () => clearTimeout(t);
   }, [user]);
 

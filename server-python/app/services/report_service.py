@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import sqlite3
 
@@ -34,16 +35,21 @@ def _period_upper_bound(period_key: str) -> str | None:
     return f"{y:04d}-{m:02d}"
 
 
+#: moz_metrics.raw_json holds the whole Moz API response. Nothing downstream
+#: reads it, so it stays out of these queries.
+_MOZ_COLS = "id, domain, domain_authority, linking_domains, inbound_links, fetched_at"
+
+
 def _pick_moz(db, project_id: int, period_key: str):
     bound = _period_upper_bound(period_key)
     if bound is None:
         return db.execute(
-            "SELECT * FROM moz_metrics WHERE project_id = ?"
+            f"SELECT {_MOZ_COLS} FROM moz_metrics WHERE project_id = ?"
             " ORDER BY fetched_at DESC, id DESC LIMIT 1",
             (project_id,),
         ).fetchone()
     return db.execute(
-        "SELECT * FROM moz_metrics WHERE project_id = ? AND fetched_at < ?"
+        f"SELECT {_MOZ_COLS} FROM moz_metrics WHERE project_id = ? AND fetched_at < ?"
         " ORDER BY fetched_at DESC, id DESC LIMIT 1",
         (project_id, bound),
     ).fetchone()
@@ -53,7 +59,7 @@ def _pick_prev_moz(db, project_id: int, moz):
     if moz is None:
         return None
     return db.execute(
-        "SELECT * FROM moz_metrics WHERE project_id = ?"
+        f"SELECT {_MOZ_COLS} FROM moz_metrics WHERE project_id = ?"
         " AND (fetched_at < ? OR (fetched_at = ? AND id < ?))"
         " ORDER BY fetched_at DESC, id DESC LIMIT 1",
         (project_id, moz["fetched_at"], moz["fetched_at"], moz["id"]),
@@ -171,12 +177,21 @@ def gather(
         ga4_outcome = {"ok": False, "reason": future_reason, "status": 422}
         gsc_outcome = {"ok": False, "reason": future_reason, "status": 422}
     else:
-        ga4_section, ga4_outcome = _fetch_section(
-            ga4_fetch, project["ga_property_id"], cur_range, prev_range, registry.SOURCE_GA4
-        )
-        gsc_section, gsc_outcome = _fetch_section(
-            gsc_fetch, project["gsc_site_url"], cur_range, prev_range, registry.SOURCE_GSC
-        )
+        # GA4 and Search Console are unrelated APIs, so wait on them together
+        # rather than one after the other. Each provider caches its client in
+        # thread-local storage, so running them on separate threads gives each
+        # its own client — no shared, non-thread-safe state.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            ga4_future = pool.submit(
+                _fetch_section, ga4_fetch, project["ga_property_id"],
+                cur_range, prev_range, registry.SOURCE_GA4,
+            )
+            gsc_future = pool.submit(
+                _fetch_section, gsc_fetch, project["gsc_site_url"],
+                cur_range, prev_range, registry.SOURCE_GSC,
+            )
+            ga4_section, ga4_outcome = ga4_future.result()
+            gsc_section, gsc_outcome = gsc_future.result()
 
     backlinks_data = backlink_service.backlinks_for_month(db, project_id, period_key)
     backlinks_section = {
@@ -372,9 +387,19 @@ def get_version(db, version_id: int, include_data: bool = False) -> dict:
     return version_to_dict(row, include_data=include_data)
 
 
+#: Every column version_to_dict() reads when include_data is False. Listing used
+#: to be SELECT *, which dragged data_json and content_json — the entire GA4 +
+#: GSC payload, hundreds of kilobytes per version — over the wire only for
+#: version_to_dict to ignore them.
+_VERSION_COLS = (
+    "id, project_id, period_key, status, parent_version_id,"
+    " rank_snapshot_id, created_by, created_at, frozen_at"
+)
+
+
 def list_versions(db, project_id: int) -> list[dict]:
     rows = db.execute(
-        "SELECT * FROM report_version WHERE project_id = ?"
+        f"SELECT {_VERSION_COLS} FROM report_version WHERE project_id = ?"
         " ORDER BY created_at DESC, id DESC",
         (project_id,),
     ).fetchall()

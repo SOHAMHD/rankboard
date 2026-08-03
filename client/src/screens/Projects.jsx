@@ -1,7 +1,15 @@
-import { useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
-import { filterLocal, listCountries, listRegions, locationsStatus, resolveLocation, searchCities } from "../locations";
+import {
+  filterLocal,
+  listCountries,
+  listRegions,
+  locationsStatus,
+  resolveLocation,
+  searchCities,
+  searchRegions,
+} from "../locations";
 import { TopBar, Modal, ErrorNote, SmartSearch, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
 
 const TLD_COUNTRIES = {
@@ -33,14 +41,34 @@ function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) 
     if (country) listRegions(country.code).catch(() => {});
   }, [country?.code]);
 
-  const decorate = (rows) =>
-    rows.map((r) => ({
-      ...r,
-      hint:
-        r.fullName && r.fullName !== r.name
-          ? r.fullName.split(",").slice(1).join(", ").trim()
-          : null,
-    }));
+  const decorate = useCallback(
+    (rows) =>
+      rows.map((r) => ({
+        ...r,
+        hint:
+          r.fullName && r.fullName !== r.name
+            ? r.fullName.split(",").slice(1).join(", ").trim()
+            : null,
+      })),
+    []
+  );
+
+  // These are stable so SmartSearch's debounce effect never holds a stale
+  // closure. Previously a new function identity on every render meant that
+  // changing the country while the region box was open kept filtering against
+  // the old country until the next keystroke.
+  const searchCountry = useCallback(
+    (q) => listCountries().then((rows) => decorate(filterLocal(rows, q))),
+    [decorate]
+  );
+  const searchRegion = useCallback(
+    (q) => searchRegions(q, { country: country?.code }).then(decorate),
+    [country?.code, decorate]
+  );
+  const searchCity = useCallback(
+    (q) => searchCities(q, { country: country?.code, region: region?.code }).then(decorate),
+    [country?.code, region?.code, decorate]
+  );
 
   return (
     <div className="space-y-4">
@@ -49,7 +77,7 @@ function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) 
         value={country}
         onChange={onCountry}
         debounceMs={0}
-        onSearch={(q) => listCountries().then((rows) => decorate(filterLocal(rows, q)))}
+        onSearch={searchCountry}
         placeholder="Type a country — e.g. Aus…"
         emptyText="No country matches that."
         hint="Which Google to check in. Leave all three empty to use the server default."
@@ -60,8 +88,7 @@ function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) 
         optional
         value={region}
         onChange={onRegion}
-        debounceMs={0}
-        onSearch={(q) => listRegions(country?.code).then((rows) => decorate(filterLocal(rows, q)))}
+        onSearch={searchRegion}
         disabled={!country}
         disabledHint="Pick a country first"
         placeholder={`Type a region${country ? ` in ${country.name}` : ""}…`}
@@ -78,9 +105,7 @@ function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) 
         optional
         value={city}
         onChange={onCity}
-        onSearch={(q) =>
-          searchCities(q, { country: country?.code, region: region?.code }).then(decorate)
-        }
+        onSearch={searchCity}
         disabled={!country}
         disabledHint="Pick a country first"
         placeholder={`Type a city${region ? ` in ${region.name}` : country ? ` in ${country.name}` : ""}…`}

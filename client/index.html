@@ -3,11 +3,72 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SEO Dashboard</title>
-   <link rel="icon" href="/infapp-logo.png" />
+    <title>SEO Dashboard</title>
+    <link rel="icon" href="/infapp-logo.png" />
+
+    <!--
+      Fonts are loaded here rather than with @import inside index.css. A CSS
+      @import is strictly serialised: the browser must fetch and parse the
+      stylesheet before it even discovers the import, then pay a fresh DNS + TLS
+      handshake to fonts.googleapis.com, and only then fetch the woff2 files.
+      Declaring them in the document — with preconnect so the connection is
+      already warm — starts that work immediately and in parallel.
+
+      The media="print" / onload swap is the standard trick for loading a
+      stylesheet without blocking first paint: the browser fetches it at low
+      priority, then onload promotes it to all media. display=swap means text
+      renders in the fallback face straight away rather than staying invisible.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      />
+    </noscript>
+
+    <style>
+      /* Visible from the moment the HTML arrives, so the page is never a blank
+         white rectangle while the JS bundle downloads and React mounts. React
+         replaces the contents of #root on mount, which clears this. */
+      #boot {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f5f5f4;
+      }
+      #boot i {
+        width: 24px;
+        height: 24px;
+        border: 2.5px solid #e7e5e4;
+        border-top-color: #ea580c;
+        border-radius: 50%;
+        animation: boot-spin 0.7s linear infinite;
+      }
+      @keyframes boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot i {
+          animation-duration: 2s;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="boot"><i></i></div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

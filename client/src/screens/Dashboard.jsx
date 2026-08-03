@@ -52,11 +52,21 @@ import {
 import { api, getToken, BASE } from "../api";
 import { Modal, ErrorNote, ChangePasswordModal, can, isAuthor, isAdmin, isManager, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { useToast } from "../toast.jsx";
-import { MozOverview } from "./MozOverview";
-import { BacklinksView } from "./Backlinks";
-import { KeywordsView } from "./Keywords";
-import { PostsView } from "./Posts";
-
+// Only one of these is ever mounted at a time (see the activeNav switch below),
+// so they don't belong in the Dashboard's own chunk. Importing them eagerly meant
+// every user downloaded all four regardless of which tab they opened.
+const MozOverview = lazy(() =>
+  import("./MozOverview").then((m) => ({ default: m.MozOverview }))
+);
+const BacklinksView = lazy(() =>
+  import("./Backlinks").then((m) => ({ default: m.BacklinksView }))
+);
+const KeywordsView = lazy(() =>
+  import("./Keywords").then((m) => ({ default: m.KeywordsView }))
+);
+const PostsView = lazy(() =>
+  import("./Posts").then((m) => ({ default: m.PostsView }))
+);
 const ReportsPanel = lazy(() =>
   import("./ReportEditor").then((m) => ({ default: m.ReportsPanel }))
 );
@@ -325,26 +335,28 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} />}
       <main className="px-6 py-6">
-        {activeNav === "keywords" && <KeywordsView user={user} project={project} />}
-        {activeNav === "backlinks" && <BacklinksView user={user} project={project} />}
-        {activeNav === "posts-blogs" && <PostsView user={user} project={project} kind="blog" />}
-        {activeNav === "posts-linkedin" && <PostsView user={user} project={project} kind="linkedin" />}
-        {activeNav.startsWith("traffic-") && (
-          <TrafficToolMemo project={project} view={activeNav.slice("traffic-".length)} />
-        )}
-        {activeNav === "search-console" && <SearchConsoleToolMemo project={project} />}
-        {activeNav === "authority" && <MozOverview project={project} user={user} />}
-        {activeNav === "reports" && isAuthor(user) && (
-          <Suspense
-            fallback={
-              <div className="flex justify-center py-16">
-                <LoaderCircle size={22} className="text-orange-600 animate-spin" />
-              </div>
-            }
-          >
+        {/* One Suspense boundary around the whole switch: every lazy screen below
+            shares it, so each tab shows the same spinner while its chunk loads. */}
+        <Suspense
+          fallback={
+            <div className="flex justify-center py-16">
+              <LoaderCircle size={22} className="text-orange-600 animate-spin" />
+            </div>
+          }
+        >
+          {activeNav === "keywords" && <KeywordsView user={user} project={project} />}
+          {activeNav === "backlinks" && <BacklinksView user={user} project={project} />}
+          {activeNav === "posts-blogs" && <PostsView user={user} project={project} kind="blog" />}
+          {activeNav === "posts-linkedin" && <PostsView user={user} project={project} kind="linkedin" />}
+          {activeNav.startsWith("traffic-") && (
+            <TrafficToolMemo project={project} view={activeNav.slice("traffic-".length)} />
+          )}
+          {activeNav === "search-console" && <SearchConsoleToolMemo project={project} />}
+          {activeNav === "authority" && <MozOverview project={project} user={user} />}
+          {activeNav === "reports" && isAuthor(user) && (
             <ReportsPanel user={user} project={project} />
-          </Suspense>
-        )}
+          )}
+        </Suspense>
       </main>
     </div>
   );
@@ -692,12 +704,33 @@ function TrafficTool({ project, view }) {
     };
   }, [project.id, range.start, range.end]);
 
+  // NOTE: the dependency array belongs to useEffect, not to toast.error. Passing
+  // it as a third argument left this effect with no deps, so it re-ran after every
+  // render — and because toast.error sets state, that was an infinite loop for any
+  // project whose GA4 property was misconfigured.
   useEffect(() => {
-    if (data?.error) toast.error("We couldn't load traffic for this project. Check that the GA4 property ID is correct and that the SEO Dashboard service account has access to it.",
-      { title: "Traffic" },[data?.error] );
-  });
+    if (data?.error) {
+      toast.error(
+        "We couldn't load traffic for this project. Check that the GA4 property ID is correct and that the SEO Dashboard service account has access to it.",
+        { title: "Traffic" }
+      );
+    }
+  }, [data?.error, toast]);
 
   const notConfigured = !project.gaPropertyId || (data && data.configured === false);
+
+  // The three sparkline series, derived once per data change instead of on every
+  // render of this component (which re-renders on every range/preset/busy tick).
+  const sparkSeries = useMemo(() => {
+    const rows = data?.byDate?.rows || [];
+    const active = rows.map((r) => Number(r.activeUsers) || 0);
+    const fresh = rows.map((r) => Number(r.newUsers) || 0);
+    return {
+      active,
+      fresh,
+      returning: rows.map((_, i) => Math.max(0, active[i] - fresh[i])),
+    };
+  }, [data]);
 
   const applyPreset = (days) => {
     setActivePreset(days);
@@ -826,10 +859,11 @@ function TrafficTool({ project, view }) {
               </div>
             ) : (
               (() => {
-                const rows = data.byDate?.rows || [];
-                const active = rows.map((r) => Number(r.activeUsers) || 0);
-                const fresh = rows.map((r) => Number(r.newUsers) || 0);
-                const returning = rows.map((_, i) => Math.max(0, active[i] - fresh[i]));
+                // sparkSeries is memoised above on [data]; building these three
+                // arrays in the render body handed <Stat> a new `spark` array
+                // every render, which forced all three Sparklines to recompute
+                // their min/max and rebuild their SVG paths on any state change.
+                const { active, fresh, returning } = sparkSeries;
                 return (
                   <div className="space-y-6 mb-6">
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
@@ -1629,11 +1663,20 @@ function SearchConsoleTool({ project }) {
     return () => {
       cancelled = true;
     };
-    useEffect(() => {
-  if (data?.error) toast.error("Google search console isn't configured for this project. Please check the project domain.", { title: "Search Console" });
-}, [error.data?.error]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, range.start, range.end, searchType, dimension, structuralKey, debouncedExprKey, notConfigured]);
+
+  // Was previously written after the `return` above, inside the effect body, so it
+  // never ran — and it referenced `error.data`, which would have thrown (`error`
+  // is null until a request fails).
+  useEffect(() => {
+    if (data?.error) {
+      toast.error(
+        "Google Search Console isn't configured for this project. Please check the project domain.",
+        { title: "Search Console" }
+      );
+    }
+  }, [data?.error, toast]);
 
   const applyPreset = (days) => {
     setActivePreset(days);
@@ -1910,15 +1953,23 @@ function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
         : { col, dir: col === "key" ? "asc" : "desc" }
     );
 
-  const sorted = [...rows].sort((a, b) => {
-    const av = a[sort.col];
-    const bv = b[sort.col];
-    const cmp =
-      sort.col === "key"
-        ? String(av ?? "").localeCompare(String(bv ?? ""))
-        : (Number(av) || 0) - (Number(bv) || 0);
-    return sort.dir === "asc" ? cmp : -cmp;
-  });
+  // Search Console commonly returns 1000+ query rows. Sorting in the render body
+  // re-sorted the whole array on every parent state change — the busy flag, the
+  // pending pick, the 500ms filter debounce — not just when the data or the sort
+  // column actually changed.
+  const sorted = useMemo(() => {
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const av = a[sort.col];
+      const bv = b[sort.col];
+      const cmp =
+        sort.col === "key"
+          ? String(av ?? "").localeCompare(String(bv ?? ""))
+          : (Number(av) || 0) - (Number(bv) || 0);
+      return sort.dir === "asc" ? cmp : -cmp;
+    });
+    return copy;
+  }, [rows, sort.col, sort.dir]);
 
   const cols = [
     { col: "key", head: label, metric: false },
@@ -2010,7 +2061,9 @@ function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
   );
 }
 
-function Stat({ label, value, tone, icon: Icon, delta, deltaDown, spark, onClick, active, title }) {
+// memo'd because the overview re-renders on every range tweak while these props
+// are unchanged; without it each Stat rebuilt its Sparkline's SVG path.
+const Stat = memo(function Stat({ label, value, tone, icon: Icon, delta, deltaDown, spark, onClick, active, title }) {
   const valueClass = tone === "up" ? "text-emerald-600" : tone === "down" ? "text-red-500" : "text-stone-900";
   const clickable = typeof onClick === "function";
   const Tag = clickable ? "button" : "div";
@@ -2050,13 +2103,19 @@ function Stat({ label, value, tone, icon: Icon, delta, deltaDown, spark, onClick
       {spark && spark.length > 1 && <Sparkline data={spark} down={deltaDown} />}
     </Tag>
   );
-}
+});
 
-function Sparkline({ data, down }) {
+const Sparkline = memo(function Sparkline({ data, down }) {
   const w = 120;
   const h = 32;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  // reduce rather than Math.min(...data): spreading an array as arguments is
+  // fine at 90 points but throws on very large ranges.
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of data) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
   const span = max - min || 1;
   const pts = data.map((v, i) => {
     const x = data.length === 1 ? w : (i / (data.length - 1)) * w;
@@ -2073,7 +2132,7 @@ function Sparkline({ data, down }) {
       <path d={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
-}
+});
 
 function RankChange({ current, previous }) {
   if (current == null) return <span className="text-stone-300 font-data">—</span>;

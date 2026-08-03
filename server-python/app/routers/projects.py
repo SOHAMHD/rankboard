@@ -544,7 +544,12 @@ def download_sample_template(user=Depends(require_active_user)):
     "/{project_id}/keywords/bulk-import",
     dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
 )
-async def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Connection = Depends(get_db)):
+def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Connection = Depends(get_db)):
+    # Deliberately a plain `def`. This was the only `async def` handler in the
+    # app, but its body is synchronous psycopg plus CPU-bound openpyxl parsing —
+    # so it ran that work directly on the event loop and stalled every other
+    # request in the process for the duration of the import. As a sync handler
+    # FastAPI runs it in the threadpool instead.
     project = db.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(404, "Project not found.")
@@ -552,7 +557,7 @@ async def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Co
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Please upload an .xlsx file (the sample template format).")
 
-    raw = await file.read()
+    raw = file.file.read()
     if len(raw) > 5 * 1024 * 1024:
         raise HTTPException(400, "That file is too large (limit 5 MB).")
 
@@ -568,10 +573,12 @@ async def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Co
     to_insert = [v for v in valid if v["term"] not in existing]
     skipped_existing = len(valid) - len(to_insert)
 
-    for v in to_insert:
-        db.execute(
+    # One round trip instead of one per keyword. A 500-row import was previously
+    # 500 separate statements against the database.
+    if to_insert:
+        db.executemany(
             "INSERT INTO keywords (project_id, term) VALUES (?, ?)",
-            (project_id, v["term"]),
+            [(project_id, v["term"]) for v in to_insert],
         )
 
     return {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ListOrdered, LoaderCircle, Plus, Save, Trash2 } from "lucide-react";
 import { api } from "../api";
 import { Modal, ErrorNote, can, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
@@ -27,6 +27,68 @@ function recentMonths(count) {
 }
 
 const MONTH_WINDOWS = [3, 6, 12];
+
+/**
+ * One table row. memo'd on its own slice of the dirty map, so typing in one cell
+ * re-renders only that row instead of every controlled input in the grid.
+ */
+const KeywordRow = memo(function KeywordRow({
+  row,
+  months,
+  rowDirty,
+  canEdit,
+  canDelete,
+  onCell,
+  onDelete,
+}) {
+  const valueFor = (month) => {
+    if (rowDirty && month in rowDirty) return rowDirty[month];
+    const v = row.ranks?.[month];
+    return v === undefined || v === null ? "" : String(v);
+  };
+
+  return (
+    <tr className="hover:bg-stone-50">
+      <td
+        className="px-5 py-2 font-medium text-stone-800 max-w-[22rem] truncate sticky left-0 bg-white"
+        title={row.term}
+      >
+        {row.term}
+      </td>
+      {months.map((m) => {
+        const isDirty = Boolean(rowDirty && m in rowDirty);
+        return (
+          <td key={m} className="px-2 py-1.5 text-center">
+            <input
+              value={valueFor(m)}
+              onChange={(e) => onCell(row, m, e.target.value)}
+              disabled={!canEdit}
+              inputMode="numeric"
+              placeholder="—"
+              aria-label={`${row.term} rank for ${shortMonthLabel(m)}`}
+              className={`w-16 rounded-md border px-2 py-1 text-center text-sm font-data text-stone-900
+                focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500
+                disabled:bg-stone-50 disabled:text-stone-400 transition-colors
+                ${isDirty ? "border-orange-400 bg-orange-50" : "border-stone-200"}`}
+            />
+          </td>
+        );
+      })}
+      {canDelete && (
+        <td className="px-4 py-2 text-right">
+          <button
+            onClick={() => onDelete(row)}
+            aria-label={`Remove ${row.term}`}
+            title="Remove keyword"
+            className="p-1 rounded text-stone-300 hover:text-red-500 transition-colors"
+          >
+            <Trash2 size={14} />
+          </button>
+        </td>
+      )}
+    </tr>
+  );
+});
 
 export function KeywordsView({ user, project }) {
   const [monthCount, setMonthCount] = useState(3);
@@ -63,19 +125,26 @@ export function KeywordsView({ user, project }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, monthCount]);
 
-  const cellKey = (id, month) => `${id}:${month}`;
+  // `dirty` is a flat "<id>:<month>" map, which every cell had to consult — so a
+  // single keystroke changed a value every row depended on and React reconciled
+  // all of them (12 months x 150 keywords = 1800 controlled inputs). Regrouping
+  // it per row means only the edited row's prop identity changes, and the memo on
+  // KeywordRow stops the rest from re-rendering at all.
+  const dirtyByRow = useMemo(() => {
+    const out = {};
+    for (const [k, v] of Object.entries(dirty)) {
+      const sep = k.indexOf(":");
+      const id = k.slice(0, sep);
+      (out[id] || (out[id] = {}))[k.slice(sep + 1)] = v;
+    }
+    return out;
+  }, [dirty]);
 
-  const cellValue = (row, month) => {
-    const k = cellKey(row.id, month);
-    if (k in dirty) return dirty[k];
-    const v = row.ranks?.[month];
-    return v === undefined || v === null ? "" : String(v);
-  };
-
-  const setCell = (row, month, raw) => {
+  // Stable identity so KeywordRow's memo isn't defeated by a new handler each render.
+  const setCell = useCallback((row, month, raw) => {
     const clean = raw.replace(/[^0-9]/g, "");
-    setDirty((d) => ({ ...d, [cellKey(row.id, month)]: clean }));
-  };
+    setDirty((d) => ({ ...d, [`${row.id}:${month}`]: clean }));
+  }, []);
 
   const save = async () => {
     if (!dirtyCount || saving) return;
@@ -205,46 +274,16 @@ export function KeywordsView({ user, project }) {
             </thead>
             <tbody className="divide-y divide-stone-100">
               {rows.map((row) => (
-                <tr key={row.id} className="hover:bg-stone-50">
-                  <td
-                    className="px-5 py-2 font-medium text-stone-800 max-w-[22rem] truncate sticky left-0 bg-white"
-                    title={row.term}
-                  >
-                    {row.term}
-                  </td>
-                  {months.map((m) => {
-                    const k = cellKey(row.id, m);
-                    const isDirty = k in dirty;
-                    return (
-                      <td key={m} className="px-2 py-1.5 text-center">
-                        <input
-                          value={cellValue(row, m)}
-                          onChange={(e) => setCell(row, m, e.target.value)}
-                          disabled={!canEdit}
-                          inputMode="numeric"
-                          placeholder="—"
-                          aria-label={`${row.term} rank for ${shortMonthLabel(m)}`}
-                          className={`w-16 rounded-md border px-2 py-1 text-center text-sm font-data text-stone-900
-                            focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500
-                            disabled:bg-stone-50 disabled:text-stone-400 transition-colors
-                            ${isDirty ? "border-orange-400 bg-orange-50" : "border-stone-200"}`}
-                        />
-                      </td>
-                    );
-                  })}
-                  {canDelete && (
-                    <td className="px-4 py-2 text-right">
-                      <button
-                        onClick={() => setConfirmDelete(row)}
-                        aria-label={`Remove ${row.term}`}
-                        title="Remove keyword"
-                        className="p-1 rounded text-stone-300 hover:text-red-500 transition-colors"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
-                  )}
-                </tr>
+                <KeywordRow
+                  key={row.id}
+                  row={row}
+                  months={months}
+                  rowDirty={dirtyByRow[row.id]}
+                  canEdit={canEdit}
+                  canDelete={canDelete}
+                  onCell={setCell}
+                  onDelete={setConfirmDelete}
+                />
               ))}
             </tbody>
           </table>
@@ -307,14 +346,27 @@ function AddKeywordsModal({ projectId, onClose, onAdded }) {
     setError(null);
     let added = 0;
     const failed = [];
-    for (const term of terms) {
-      try {
-        await api(`/projects/${projectId}/keywords`, { method: "POST", body: { term } });
-        added += 1;
-      } catch {
-        failed.push(term);
+
+    // Was one awaited request per term, strictly serial — pasting 80 keywords
+    // meant 80 sequential round trips. Runs a few at a time now; the cap keeps a
+    // large paste from opening a hundred parallel connections.
+    const CONCURRENCY = 6;
+    const queue = [...terms];
+    const worker = async () => {
+      while (queue.length) {
+        const term = queue.shift();
+        try {
+          await api(`/projects/${projectId}/keywords`, { method: "POST", body: { term } });
+          added += 1;
+        } catch {
+          failed.push(term);
+        }
       }
-    }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, terms.length) }, worker)
+    );
+
     setBusy(false);
     await onAdded();
     if (added) toast.success(`Added ${added} keyword${added === 1 ? "" : "s"}.`);

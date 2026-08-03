@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import CORS_ORIGINS, DEBUG, JWT_SECRET
-from .db import get_connection, init_db
+from .db import close_pool, get_db, init_db
 from .permissions import READ_ONLY_ROLES
 from .routers import auth, backlinks, locations, moz, posts, projects, reports, snapshots, users
 
@@ -47,11 +47,14 @@ def _role_for_request(request: Request) -> str | None:
         user_id = int(payload["sub"])
     except (jwt.PyJWTError, KeyError, ValueError):
         return None
-    conn = get_connection()
+    # Borrow from the pool rather than opening a dedicated connection — this runs
+    # on every write request once READ_ONLY_ROLES is non-empty.
+    gen = get_db()
+    conn = next(gen)
     try:
         row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
     finally:
-        conn.close()
+        gen.close()
     return row[0] if row else None
 
 
@@ -83,6 +86,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("shutdown")
+def _release_resources() -> None:
+    close_pool()
+    try:
+        from .services.report_pdf import shutdown_renderer
+        shutdown_renderer()
+    except Exception:
+        pass
 
 
 @app.exception_handler(HTTPException)

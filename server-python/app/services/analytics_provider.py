@@ -1,3 +1,5 @@
+import threading
+
 from ..config import GOOGLE_SERVICE_ACCOUNT_JSON
 from .response_cache import cached
 
@@ -54,14 +56,38 @@ REPORT_METRICS = ALLOWED_METRICS | set(DERIVED_METRICS)
 ALLOWED_MATCH_TYPES = {"EXACT", "CONTAINS", "BEGINS_WITH", "ENDS_WITH", "FULL_REGEXP"}
 
 
+_local = threading.local()
+
+
 def _analytics_client():
+    """One GA4 client per thread, built once and reused.
+
+    Previously a new client was constructed on every call: re-read the service
+    account key from disk, re-parse the RSA private key, and — the expensive part
+    — perform a fresh OAuth token exchange with Google. A single report makes
+    twenty-odd GA4 calls, so that was twenty-odd needless token round trips.
+
+    Cached in thread-local storage rather than a single shared instance, matching
+    search_console_provider._build_service. The underlying transport wraps a
+    requests.Session, which isn't guaranteed thread-safe, so each worker thread
+    gets its own client instead of sharing one.
+    """
+    cached = getattr(_local, "ga_client", None)
+    if cached is not None:
+        return cached
+
     from google.analytics.data_v1beta import BetaAnalyticsDataClient
 
     raw = GOOGLE_SERVICE_ACCOUNT_JSON
     if raw.lstrip().startswith("{"):
         import json
-        return BetaAnalyticsDataClient.from_service_account_info(json.loads(raw), transport="rest")
-    return BetaAnalyticsDataClient.from_service_account_json(raw, transport="rest")
+        client = BetaAnalyticsDataClient.from_service_account_info(
+            json.loads(raw), transport="rest"
+        )
+    else:
+        client = BetaAnalyticsDataClient.from_service_account_json(raw, transport="rest")
+    _local.ga_client = client
+    return client
 
 
 def build_dimension_filter(filters: list[dict] | None, match: str = "AND"):

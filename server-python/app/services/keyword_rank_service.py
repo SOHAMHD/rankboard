@@ -39,18 +39,20 @@ def get_grid(db, project_id: int, months: list[str]) -> dict:
         (project_id,),
     ).fetchall()
 
+    # The month filter used to be applied in Python after fetching the project's
+    # entire rank history. Pushing it into SQL keeps the payload proportional to
+    # what was asked for and lets idx_keyword_ranks_month do some work.
+    placeholders = ", ".join("?" for _ in months) or "NULL"
     rows = db.execute(
         "SELECT r.keyword_id, r.month, r.rank FROM keyword_ranks r"
         " JOIN keywords k ON k.id = r.keyword_id"
-        " WHERE k.project_id = ?",
-        (project_id,),
+        f" WHERE k.project_id = ? AND r.month IN ({placeholders})",
+        (project_id, *months),
     ).fetchall()
 
-    wanted = set(months)
     by_kw: dict[int, dict] = {}
     for r in rows:
-        if r["month"] in wanted:
-            by_kw.setdefault(r["keyword_id"], {})[r["month"]] = r["rank"]
+        by_kw.setdefault(r["keyword_id"], {})[r["month"]] = r["rank"]
 
     return {
         "months": months,

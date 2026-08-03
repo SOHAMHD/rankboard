@@ -1,10 +1,25 @@
 import calendar
+import concurrent.futures
 from datetime import date, datetime, timedelta, timezone
 
 from . import analytics_provider as ga
 from . import search_console_provider as scp
+from .response_cache import cached
 
 MATURATION_DAYS = 2
+
+#: Concurrency for the per-section GA4 fan-out. Kept modest so a report can't
+#: exhaust Google's per-property quota in one burst.
+_GA4_FANOUT = 6
+
+#: A long-lived pool, deliberately NOT created per call. Both Google clients are
+#: cached in thread-local storage (analytics_provider._analytics_client,
+#: search_console_provider._build_service), so reusing the same worker threads
+#: means each one builds its client — and does its OAuth token exchange — once
+#: for the life of the process. A fresh pool per call would pay that every time.
+_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_GA4_FANOUT, thread_name_prefix="google-fanout"
+)
 
 GA4_MAX_METRICS = 10
 GA4_MAX_DIMENSIONS = 9
@@ -216,16 +231,51 @@ def _ga4_returning(client, resource, date_range, property_id) -> int:
     return 0
 
 
-def _ga4_collect(client, resource, date_range, property_id) -> dict:
-    sections = {}
-    for sec in GA4_SECTIONS:
-        result = _ga4_run_section(client, resource, sec, date_range, property_id)
-        if sec.get("returning"):
-            result["totals"]["returningUsers"] = _ga4_returning(client, resource, date_range, property_id)
-        sections[sec["key"]] = result
-    return {"range": list(date_range), "sections": sections}
+def _ga4_section_task(resource, sec, date_range, property_id):
+    """Runs on a worker thread; grabs that thread's own GA4 client."""
+    return _ga4_run_section(ga._analytics_client(), resource, sec, date_range, property_id)
 
 
+def _ga4_returning_task(resource, date_range, property_id):
+    return _ga4_returning(ga._analytics_client(), resource, date_range, property_id)
+
+
+def _ga4_collect(resource, date_range, property_id) -> dict:
+    """Fetch every GA4 section for one date range, concurrently.
+
+    The sections are independent queries against the same property, and each is a
+    blocking HTTPS round trip of a few hundred milliseconds. Running them one
+    after another meant a report waited on eleven serialised requests per date
+    range — and fetch_ga4 covers two ranges, so twenty-two. Fanning them out
+    reduces that to roughly the cost of the slowest single call.
+    """
+    sections: dict = {}
+    future_to_key = {
+        _pool.submit(_ga4_section_task, resource, sec, date_range, property_id): sec["key"]
+        for sec in GA4_SECTIONS
+    }
+    needs_returning = [sec for sec in GA4_SECTIONS if sec.get("returning")]
+    returning_future = (
+        _pool.submit(_ga4_returning_task, resource, date_range, property_id)
+        if needs_returning
+        else None
+    )
+
+    # .result() re-raises worker exceptions here, so failures propagate exactly
+    # as they did when this ran sequentially.
+    for future, key in future_to_key.items():
+        sections[key] = future.result()
+
+    if returning_future is not None:
+        returning = returning_future.result()
+        for sec in needs_returning:
+            sections[sec["key"]]["totals"]["returningUsers"] = returning
+
+    ordered = {sec["key"]: sections[sec["key"]] for sec in GA4_SECTIONS}
+    return {"range": list(date_range), "sections": ordered}
+
+
+@cached("report_fetch_ga4")
 def fetch_ga4(property_id, cur_range: tuple[str, str], prev_range: tuple[str, str]) -> dict:
     if not property_id or not str(property_id).strip():
         raise GoogleAccessError("GA4 not configured: this project has no GA4 property id set")
@@ -233,12 +283,14 @@ def fetch_ga4(property_id, cur_range: tuple[str, str], prev_range: tuple[str, st
     resource = pid if pid.startswith("properties/") else f"properties/{pid}"
 
     try:
-        client = ga._analytics_client()
+        # Validate credentials up front so a bad key still produces the same
+        # GoogleAccessError it always did, rather than surfacing from a worker.
+        ga._analytics_client()
     except Exception as exc:
         raise GoogleAccessError(f"GA4 credentials could not be loaded for property {pid}: {exc}")
 
-    report = _ga4_collect(client, resource, cur_range, pid)
-    prior = _ga4_collect(client, resource, prev_range, pid)
+    report = _ga4_collect(resource, cur_range, pid)
+    prior = _ga4_collect(resource, prev_range, pid)
 
     cur_tot = report["sections"]["users_overview"]["totals"]
     prev_tot = prior["sections"]["users_overview"]["totals"]
@@ -284,11 +336,14 @@ def _gsc_query(service, site_url: str, body: dict) -> list[dict]:
 def _gsc_collect(service, site_url: str, date_range: tuple[str, str]) -> dict:
     body = {"startDate": date_range[0], "endDate": date_range[1]}
 
+    # Left sequential on purpose: `service` is a googleapiclient resource, which
+    # is not thread-safe (hence the threading.local cache in _build_service), so
+    # it must not be shared across workers. GSC is only four calls per report
+    # against GA4's twenty-two, so there is little to win here anyway.
     totals_rows = _gsc_query(service, site_url, dict(body))
     totals = scp._metrics(totals_rows[0]) if totals_rows else {
         "clicks": 0, "impressions": 0, "ctr": 0, "position": 0,
     }
-    trend_rows = _gsc_query(service, site_url, {**body, "dimensions": ["date"], "rowLimit": 1000})
     trend = sorted(
         ({"date": (r.get("keys") or [""])[0], **scp._metrics(r)} for r in trend_rows),
         key=lambda d: d["date"],
@@ -296,6 +351,7 @@ def _gsc_collect(service, site_url: str, date_range: tuple[str, str]) -> dict:
     return {"range": list(date_range), "totals": totals, "trend": trend}
 
 
+@cached("report_fetch_gsc")
 def fetch_gsc(site_url, cur_range: tuple[str, str], prev_range: tuple[str, str]) -> dict:
     if not site_url or not str(site_url).strip():
         raise GoogleAccessError("GSC not configured: this project has no gsc_site_url set")

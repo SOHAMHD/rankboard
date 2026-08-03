@@ -1,6 +1,12 @@
 import base64
+import concurrent.futures
+import hashlib
 import html
+import json
+import os
 import re
+import threading
+from collections import OrderedDict
 
 from ..config import AGENCY_NAME
 from functools import lru_cache
@@ -1250,9 +1256,110 @@ def render_html(version: dict, blobs: list | None = None) -> str:
             f'<style>{_css()}</style></head><body>{"".join(parts)}</body></html>')
 
 
-def render_pdf(version: dict, blobs: list | None = None) -> bytes:
+#: All Playwright work runs on this single dedicated thread.
+#:
+#: Playwright's sync API is bound to the thread that created it, and FastAPI runs
+#: sync handlers on an arbitrary threadpool thread — so a browser can't simply be
+#: shared as a module global. Funnelling every render through one worker thread
+#: means exactly one Chromium process for the whole app, launched once and reused,
+#: instead of a fresh ~1-2s cold start per download. It also serialises rendering,
+#: which is what we want: three concurrent Chromium instances would thrash.
+_pdf_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="pdf-render"
+)
+_pw_state = threading.local()
+
+
+def _shared_browser():
+    """The long-lived Chromium owned by the render thread."""
+    browser = getattr(_pw_state, "browser", None)
+    if browser is not None:
+        try:
+            if browser.is_connected():
+                return browser
+        except Exception:
+            pass
     from playwright.sync_api import sync_playwright
 
+    pw = getattr(_pw_state, "pw", None)
+    if pw is None:
+        pw = sync_playwright().start()
+        _pw_state.pw = pw
+    _pw_state.browser = pw.chromium.launch()
+    return _pw_state.browser
+
+
+def shutdown_renderer() -> None:
+    """Tear down the render thread's browser. Safe to call on shutdown."""
+    def _stop():
+        browser = getattr(_pw_state, "browser", None)
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
+            _pw_state.browser = None
+        pw = getattr(_pw_state, "pw", None)
+        if pw is not None:
+            try:
+                pw.stop()
+            except Exception:
+                pass
+            _pw_state.pw = None
+
+    try:
+        _pdf_executor.submit(_stop).result(timeout=20)
+    except Exception:
+        pass
+
+
+#: Re-rendering the same report unchanged is pure waste, so completed renders are
+#: kept keyed on the content that actually produced them.
+#:
+#: Deliberately NOT keyed on frozen_at: report_service.freeze() stamps frozen_at
+#: at creation time even for drafts, and save_content() then updates content_json
+#: in place without touching it — so frozen_at is not a version marker and using
+#: it would serve a stale PDF after any edit. Hashing the content is a few
+#: milliseconds against a multi-second render, and is correct by construction.
+#: data_json is never mutated after creation, so the version id covers it.
+_PDF_CACHE_MAX = int(os.environ.get("REPORT_PDF_CACHE_MAX", "16"))
+_pdf_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+_pdf_cache_lock = threading.Lock()
+
+
+def _pdf_cache_key(version: dict, blobs: list | None):
+    vid = version.get("id")
+    if vid is None:
+        return None
+    try:
+        payload = json.dumps(
+            [version.get("content"), blobs], sort_keys=True, default=str
+        ).encode("utf-8")
+    except Exception:
+        return None
+    return (vid, hashlib.sha256(payload).hexdigest())
+
+
+def render_pdf(version: dict, blobs: list | None = None) -> bytes:
+    key = _pdf_cache_key(version, blobs)
+    if key is not None:
+        with _pdf_cache_lock:
+            hit = _pdf_cache.get(key)
+            if hit is not None:
+                _pdf_cache.move_to_end(key)
+                return hit
+
+    data = _pdf_executor.submit(_render_pdf_on_worker, version, blobs).result()
+
+    if key is not None:
+        with _pdf_cache_lock:
+            _pdf_cache[key] = data
+            while len(_pdf_cache) > _PDF_CACHE_MAX:
+                _pdf_cache.popitem(last=False)
+    return data
+
+
+def _render_pdf_on_worker(version: dict, blobs: list | None = None) -> bytes:
     parts = None
     agency = ""
     try:
@@ -1288,36 +1395,36 @@ def render_pdf(version: dict, blobs: list | None = None) -> bytes:
         f'<span>{_esc(_footer_title)}</span>'
         '<span><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>')
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        try:
-            def _to_pdf(html, **kw):
-                page = browser.new_page()
-                page.set_content(html, wait_until="networkidle")
-                try:
-                    page.evaluate("() => document.fonts && document.fonts.ready")
-                except Exception:
-                    pass
-                page.emulate_media(media="print")
-                data = page.pdf(**kw)
-                page.close()
-                return data
+    browser = _shared_browser()
 
-            full_bleed = dict(format="A4", print_background=True, prefer_css_page_size=True,
-                              margin={"top": "0", "bottom": "0", "left": "0", "right": "0"})
-            if parts is not None:
-                pdfs = [
-                    _to_pdf(parts["cover"], **full_bleed),
-                    _to_pdf(parts["content"], format="A4", print_background=True,
-                            display_header_footer=True, header_template=header_tpl,
-                            footer_template=footer_tpl,
-                            margin={"top": "24mm", "bottom": "14mm", "left": "14mm", "right": "14mm"}),
-                    _to_pdf(parts["thankyou"], **full_bleed),
-                ]
-            else:
-                pdfs = [_to_pdf(html_str, **full_bleed)]
+    def _to_pdf(html, **kw):
+        page = browser.new_page()
+        try:
+            page.set_content(html, wait_until="networkidle")
+            try:
+                page.evaluate("() => document.fonts && document.fonts.ready")
+            except Exception:
+                pass
+            page.emulate_media(media="print")
+            return page.pdf(**kw)
         finally:
-            browser.close()
+            page.close()
+
+    full_bleed = dict(format="A4", print_background=True, prefer_css_page_size=True,
+                      margin={"top": "0", "bottom": "0", "left": "0", "right": "0"})
+    if parts is not None:
+        # All three pages share the reused browser's HTTP cache, so the webfont
+        # CSS and woff2 files are fetched once rather than once per page.
+        pdfs = [
+            _to_pdf(parts["cover"], **full_bleed),
+            _to_pdf(parts["content"], format="A4", print_background=True,
+                    display_header_footer=True, header_template=header_tpl,
+                    footer_template=footer_tpl,
+                    margin={"top": "24mm", "bottom": "14mm", "left": "14mm", "right": "14mm"}),
+            _to_pdf(parts["thankyou"], **full_bleed),
+        ]
+    else:
+        pdfs = [_to_pdf(html_str, **full_bleed)]
 
     if len(pdfs) == 1:
         return pdfs[0]
@@ -1347,7 +1454,12 @@ def pdf_filename(version: dict) -> str:
     return f"{slug(project)}-{slug(period)}-seo-report.pdf"
 
 def render_cover_png(version: dict, blobs: list | None = None, width: int = 440) -> bytes:
-    from playwright.sync_api import sync_playwright
+    # Runs on the same single render thread, reusing the same Chromium. This used
+    # to launch a second browser — so sending a report paid two cold starts.
+    return _pdf_executor.submit(_render_cover_on_worker, version, blobs, width).result()
+
+
+def _render_cover_on_worker(version: dict, blobs: list | None, width: int) -> bytes:
     from . import report_industry
 
     html = report_industry.render_document(version, blobs, part="cover")
@@ -1355,14 +1467,13 @@ def render_cover_png(version: dict, blobs: list | None = None, width: int = 440)
     A4_W, A4_H = 794, 1123
     scale = width / A4_W
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        try:
-            page = browser.new_page(
-                viewport={"width": A4_W, "height": A4_H},
-                device_scale_factor=scale,
-            )
-            page.set_content(html, wait_until="networkidle")
-            return page.screenshot(type="png")
-        finally:
-            browser.close()
+    browser = _shared_browser()
+    page = browser.new_page(
+        viewport={"width": A4_W, "height": A4_H},
+        device_scale_factor=scale,
+    )
+    try:
+        page.set_content(html, wait_until="networkidle")
+        return page.screenshot(type="png")
+    finally:
+        page.close()

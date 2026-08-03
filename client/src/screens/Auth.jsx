@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import QRCode from "qrcode";
 import { KeyRound, LoaderCircle, Lock, Mail, ShieldCheck } from "lucide-react";
 import { api, setToken } from "../api";
 import { DarkShell, ErrorNote, INPUT_CLS, BTN_PRIMARY } from "../ui";
@@ -173,6 +172,11 @@ export function TwoFactorView({ user, enrolled, onVerified, onLogout }) {
       .then(async (d) => {
         setSetup(d);
         try {
+          // Imported on demand. Auth.jsx has to be in the entry chunk because it
+          // renders the login screen, so a static import put the whole qrcode
+          // library in every user's initial download for the sake of one
+          // optional 2FA enrolment step.
+          const { default: QRCode } = await import("qrcode");
           setQr(await QRCode.toDataURL(d.otpauthUri, { margin: 1, width: 208 }));
         } catch {
           setQr(null);

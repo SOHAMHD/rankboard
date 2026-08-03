@@ -226,13 +226,18 @@ export function SmartSearch({
       });
   };
 
+  // onSearch belongs in the deps: it closes over the parent's current scope (the
+  // selected country, for instance), so leaving it out meant that changing that
+  // scope while the box was open kept querying with the previous value until the
+  // next keystroke. Callers pass a useCallback'd function so this doesn't loop.
   useEffect(() => {
     if (!open) return;
     if (text === query.current) return;
     if (!debounceMs) return run(text);
     const t = setTimeout(() => run(text), debounceMs);
     return () => clearTimeout(t);
-  }, [text, open, debounceMs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, open, debounceMs, onSearch]);
 
   useEffect(() => {
     if (!open) return;

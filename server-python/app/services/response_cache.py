@@ -24,7 +24,18 @@ def _looks_like_error(value) -> bool:
     return isinstance(value, dict) and value.get("error")
 
 
-def _prune(now: float) -> None:
+#: How often the expiry sweep may run, in seconds. _prune used to walk the whole
+#: store — and sort it — on every single cache write.
+_PRUNE_INTERVAL = 60
+_last_prune = 0.0
+
+
+def _prune(now: float, force: bool = False) -> None:
+    global _last_prune
+    over_capacity = len(_store) > MAX_ENTRIES
+    if not force and not over_capacity and now - _last_prune < _PRUNE_INTERVAL:
+        return
+    _last_prune = now
     for k in [k for k, (exp, _) in _store.items() if exp <= now]:
         _store.pop(k, None)
     if len(_store) > MAX_ENTRIES:
