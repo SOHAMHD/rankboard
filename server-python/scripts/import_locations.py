@@ -2,9 +2,10 @@
 
 Run it once (and again whenever you want to refresh), from server-python/:
 
-    python -m scripts.import_locations                 # live: needs DataForSEO creds
-    python -m scripts.import_locations --file geo.json # from a saved API response
-    python -m scripts.import_locations --dry-run       # fetch + classify, write nothing
+    python -m scripts.import_locations                  # live: needs DataForSEO creds
+    python -m scripts.import_locations --country in     # one country only (ISO code)
+    python -m scripts.import_locations --file geo.json  # from a saved API response
+    python -m scripts.import_locations --dry-run        # fetch + classify, write nothing
 
 WHY: the project picker's three inputs (Country / Region / City) type-ahead
 against our own `locations` table, so a keystroke is a local indexed query —
@@ -12,8 +13,11 @@ never a DataForSEO call. DataForSEO stays the source of the `location_code`
 values, because that integer is exactly what the rank checker sends back to them.
 
 WHAT IT DOES
-  1. GET {DATAFORSEO_BASE}/v3/serp/google/organic/locations  (Basic auth,
-     ~100k rows, one request, free — it's a reference endpoint, not a task).
+  1. GET {DATAFORSEO_BASE}/v3/serp/google/locations  (Basic auth, ~100k rows,
+     one request. Free: DataForSEO doesn't charge for this reference endpoint.)
+     NOTE the path — it is NOT under /organic/. The locations list belongs to
+     the SERP API as a whole, so /v3/serp/google/organic/locations returns
+     task error 40402 "Invalid Path".
   2. Classifies every row into country / region / city and resolves each one's
      country + region ancestor by walking `location_code_parent`.
   3. Replaces the `locations` table contents in a single transaction, so the API
@@ -35,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import db  # noqa: E402  (path set up above)
 from app.config import DATAFORSEO_BASE, DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD  # noqa: E402
 
-ENDPOINT = "/v3/serp/google/organic/locations"
+ENDPOINT = "/v3/serp/google/locations"  # append /{iso} to filter to one country
 
 # Anything below a city — useful to nobody in a project picker, and it triples
 # the row count. Dropped unless --keep-all is passed.
@@ -50,9 +54,13 @@ CITY_TYPES = {
 }
 
 
-def fetch_live() -> list[dict]:
+def fetch_live(country: str | None = None) -> list[dict]:
     """One authenticated GET. DataForSEO returns every location it supports for
-    Google organic, each row carrying its own code, name, type and parent."""
+    Google SERPs, each row carrying its own code, name, type and parent.
+
+    `country` is an optional ISO code ("in", "au") that filters the list
+    server-side — handy for a quick run, but the picker is worldwide, so the
+    unfiltered call is the normal one."""
     if not DATAFORSEO_LOGIN or not DATAFORSEO_PASSWORD:
         sys.exit(
             "DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD are not set (server-python/.env).\n"
@@ -60,7 +68,7 @@ def fetch_live() -> list[dict]:
             "Or pass --file with a saved response."
         )
     token = base64.b64encode(f"{DATAFORSEO_LOGIN}:{DATAFORSEO_PASSWORD}".encode()).decode()
-    url = DATAFORSEO_BASE.rstrip("/") + ENDPOINT
+    url = DATAFORSEO_BASE.rstrip("/") + ENDPOINT + (f"/{country.strip().lower()}" if country else "")
     print(f"GET {url} …")
     req = urllib.request.Request(url, headers={"Authorization": f"Basic {token}"})
     with urllib.request.urlopen(req, timeout=180) as resp:  # noqa: S310 (fixed host)
@@ -75,7 +83,13 @@ def _unwrap(payload: dict) -> list[dict]:
         sys.exit(f"DataForSEO error {payload.get('status_code')}: {payload.get('status_message')}")
     for task in payload.get("tasks") or []:
         if task.get("status_code") not in (20000, None):
-            sys.exit(f"DataForSEO task error {task.get('status_code')}: {task.get('status_message')}")
+            hint = ""
+            if task.get("status_code") == 40402:  # Invalid Path
+                hint = (
+                    f"\nThe locations endpoint is {ENDPOINT} — NOT under /organic/."
+                    " Check DATAFORSEO_BASE in .env too."
+                )
+            sys.exit(f"DataForSEO task error {task.get('status_code')}: {task.get('status_message')}{hint}")
         result = task.get("result")
         if result:
             return result
@@ -142,13 +156,20 @@ def classify(items: list[dict], keep_all: bool = False) -> list[tuple]:
     return rows
 
 
-def write(rows: list[tuple]) -> None:
-    """Replace the table contents atomically: one transaction, so a reader either
-    sees the whole old set or the whole new one."""
+def write(rows: list[tuple], merge: bool = False) -> None:
+    """Write the rows in ONE transaction, so a reader sees either the whole old
+    set or the whole new one — never a half-loaded table.
+
+    Default (a full worldwide fetch) replaces everything. `merge=True` — used by
+    --country — deletes only the codes it is about to re-insert, leaving every
+    other country intact."""
     conn = db.get_connection()
     try:
         conn.execute("BEGIN")
-        conn.execute("DELETE FROM locations")
+        if merge:
+            conn.executemany("DELETE FROM locations WHERE location_code = ?", [(r[0],) for r in rows])
+        else:
+            conn.execute("DELETE FROM locations")
         conn.executemany(
             "INSERT INTO locations (location_code, name, full_name, kind,"
             " country_code, region_code, country_iso, location_type, alt)"
@@ -174,6 +195,7 @@ def write(rows: list[tuple]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Import DataForSEO locations into our database.")
     ap.add_argument("--file", help="Read a saved DataForSEO locations response instead of calling the API")
+    ap.add_argument("--country", help="ISO code to limit the fetch to one country, e.g. in, au, us")
     ap.add_argument("--dry-run", action="store_true", help="Report what would be imported; write nothing")
     ap.add_argument("--keep-all", action="store_true", help="Also import airports, universities, postal codes, neighborhoods")
     args = ap.parse_args()
@@ -186,8 +208,12 @@ def main() -> None:
         items = payload if isinstance(payload, list) else _unwrap(payload)
         print(f"Loaded {len(items):,} rows from {args.file}")
     else:
-        items = fetch_live()
+        items = fetch_live(args.country)
         print(f"Fetched {len(items):,} rows")
+
+    # A --country run must NOT wipe the other countries already loaded, so a
+    # filtered import merges instead of replacing.
+    merge = bool(args.country)
 
     rows = classify(items, keep_all=args.keep_all)
     counts = {k: sum(1 for r in rows if r[3] == k) for k in ("country", "region", "city")}
@@ -197,7 +223,7 @@ def main() -> None:
         print("--dry-run: nothing written.")
         return
 
-    write(rows)
+    write(rows, merge=merge)
     print(f"Imported {len(rows):,} locations into {'Postgres' if db.IS_POSTGRES else db.DB_PATH}")
 
 
