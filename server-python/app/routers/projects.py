@@ -130,6 +130,12 @@ class ReportFilterIn(BaseModel):
 class AnalyticsIn(BaseModel):
     start: str | None = None
     end: str | None = None
+    # Number of days for a preset window ("last 28 days" -> 28). When present,
+    # the range is sent to GA4 as relative tokens instead of the explicit dates,
+    # so GA4 resolves the days in the PROPERTY's reporting timezone rather than
+    # trusting dates the browser computed in the viewer's timezone. start/end are
+    # still sent and still used for display; they're ignored for the query.
+    preset: int | None = None
     filters: list[ReportFilterIn] = []
     match: str = "AND"
 
@@ -142,6 +148,31 @@ class ReportIn(AnalyticsIn):
     dimensions: list[str] = []
     metrics: list[str] = []
     limit: int = 250
+
+
+#: Longest preset window we'll turn into a relative token. Guards against a
+#: client sending something absurd that GA4 would reject.
+_MAX_PRESET_DAYS = 730
+
+
+def _ga_range(body) -> tuple[str | None, str | None]:
+    """The start/end to send to GA4.
+
+    For a preset window we hand GA4 relative tokens ("28daysAgo" -> "yesterday")
+    instead of calendar dates. GA4 resolves those against the property's own
+    reporting timezone, which is the only timezone that actually decides which
+    day a session belongs to. The dates the browser computed are in the viewer's
+    timezone, so near midnight — or for anyone not in the property's timezone —
+    they selected a subtly different window than the user asked for, and the
+    figures drifted from what the GA4 UI showed.
+
+    Explicit (custom) ranges are passed through untouched: there the user means
+    specific calendar days.
+    """
+    preset = getattr(body, "preset", None)
+    if isinstance(preset, int) and 1 <= preset <= _MAX_PRESET_DAYS:
+        return f"{preset}daysAgo", "yesterday"
+    return body.start, body.end
 
 
 def _validate_filters(filters: list[ReportFilterIn], match: str) -> str | None:
@@ -168,7 +199,8 @@ def project_analytics(
         return {"analytics": {"error": err}}
 
     filters = [f.model_dump() for f in body.filters]
-    kw = dict(start_date=body.start, end_date=body.end, filters=filters, match=body.match)
+    ga_start, ga_end = _ga_range(body)
+    kw = dict(start_date=ga_start, end_date=ga_end, filters=filters, match=body.match)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         analytics_job = pool.submit(get_analytics, project["ga_property_id"], **kw)
@@ -197,8 +229,8 @@ def project_analytics_breakdown(
     breakdown = get_dimension_breakdown(
         project["ga_property_id"],
         body.dimension,
-        start_date=body.start,
-        end_date=body.end,
+        start_date=_ga_range(body)[0],
+        end_date=_ga_range(body)[1],
         filters=[f.model_dump() for f in body.filters],
         match=body.match,
     )
@@ -229,8 +261,8 @@ def project_analytics_report(
 
     report = run_custom_report(
         project["ga_property_id"],
-        start=body.start,
-        end=body.end,
+        start=_ga_range(body)[0],
+        end=_ga_range(body)[1],
         dimensions=body.dimensions,
         metrics=body.metrics,
         filters=[f.model_dump() for f in body.filters],

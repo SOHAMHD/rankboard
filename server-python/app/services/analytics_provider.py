@@ -6,7 +6,7 @@ from .response_cache import cached
 _METRICS = ["activeUsers", "newUsers", "userEngagementDuration", "sessions"]
 
 _BREAKDOWNS = [
-    ("byChannel", "sessionDefaultChannelGroup", None),
+    ("byChannel", "sessionPrimaryChannelGroup", None),
     ("byCountry", "country", 25),
     ("byCity", "city", 25),
     ("byLandingPage", "landingPagePlusQueryString", 25),
@@ -17,9 +17,16 @@ _BREAKDOWNS = [
 
 ALLOWED_DIMENSIONS = {
     "country", "region", "city", "continent", "language",
-    "sessionDefaultChannelGroup", "sessionSource", "sessionMedium",
+    # GA4 has two channel-grouping models. "Primary" is the current one and is
+    # what the GA4 UI now shows (labelled "Primary channel group"); "Default" is
+    # the legacy model, kept here so older saved reports can still be reproduced.
+    # They classify paid vs organic traffic differently, so their per-channel
+    # numbers genuinely disagree — do not treat them as interchangeable.
+    "sessionPrimaryChannelGroup", "sessionDefaultChannelGroup",
+    "sessionSource", "sessionMedium",
     "sessionSourceMedium", "sessionCampaignName",
-    "firstUserDefaultChannelGroup", "firstUserSource", "firstUserMedium",
+    "firstUserPrimaryChannelGroup", "firstUserDefaultChannelGroup",
+    "firstUserSource", "firstUserMedium",
     "firstUserCampaignName",
     "deviceCategory", "operatingSystem", "operatingSystemWithVersion",
     "browser", "platform", "screenResolution", "mobileDeviceModel",
@@ -40,14 +47,28 @@ ALLOWED_METRICS = {
     "screenPageViews", "eventCount", "bounceRate", "keyEvents", "totalRevenue",
 }
 
+#: Metrics GA4 doesn't expose directly, computed from ones it does.
+#: "op" is how the two helpers combine — "ratio" (default) or "difference".
 DERIVED_METRICS = {
     "engagedSessionsPerUser": {
         "label": "Engaged Sessions / Active User",
         "helpers": ["engagedSessions", "activeUsers"],
+        "op": "ratio",
     },
     "averageEngagementTime": {
         "label": "Avg Engagement Time",
         "helpers": ["userEngagementDuration", "activeUsers"],
+        "op": "ratio",
+    },
+    # GA4 has no returningUsers metric. Its own UI defines returning users as
+    # everyone who isn't new, i.e. totalUsers - newUsers, so that's the
+    # derivation used here. Clamped at zero: the two underlying figures are
+    # de-duplicated independently, so at small volumes newUsers can exceed
+    # totalUsers by a row or two and a negative count would be nonsense.
+    "returningUsers": {
+        "label": "Returning Users",
+        "helpers": ["totalUsers", "newUsers"],
+        "op": "difference",
     },
 }
 
@@ -364,12 +385,16 @@ def run_custom_report(
 def _apply_derived(report: dict, selected: list[str], derived_selected: list[str]) -> dict:
     def compute(values: dict) -> dict:
         for d in derived_selected:
-            num_name, denom_name = DERIVED_METRICS[d]["helpers"]
-            num = values.get(num_name, 0)
-            denom = values.get(denom_name, 0)
+            spec = DERIVED_METRICS[d]
+            left_name, right_name = spec["helpers"]
+            left = values.get(left_name, 0)
+            right = values.get(right_name, 0)
             try:
-                values[d] = round(num / denom, 4) if denom else 0
-            except (TypeError, ZeroDivisionError):
+                if spec.get("op") == "difference":
+                    values[d] = max(0, int(left or 0) - int(right or 0))
+                else:
+                    values[d] = round(left / right, 4) if right else 0
+            except (TypeError, ValueError, ZeroDivisionError):
                 values[d] = 0
         return values
 

@@ -30,7 +30,9 @@ GA4_SECTIONS = (
     {"key": "users_trend", "dimensions": ["date"],
      "metrics": ["activeUsers", "newUsers"],
      "limit": None, "order_by_dim": True},
-    {"key": "by_channel", "dimensions": ["sessionDefaultChannelGroup"],
+    # sessionPrimaryChannelGroup, not sessionDefaultChannelGroup: the "primary"
+    # model is what the GA4 UI reports, so reports now reconcile with it.
+    {"key": "by_channel", "dimensions": ["sessionPrimaryChannelGroup"],
      "metrics": ["totalUsers", "newUsers", "activeUsers", "engagedSessions", "userEngagementDuration"],
      "limit": None},
     {"key": "by_country_city", "dimensions": ["country", "region", "city"],

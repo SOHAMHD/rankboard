@@ -521,7 +521,7 @@ function SnapshotMenu({ groups, selectedId, onSelect, onDownload }) {
 }
 
 const VIEW_DEFAULT_DIMENSION = {
-  overview: "sessionDefaultChannelGroup",
+  overview: "sessionPrimaryChannelGroup",
   audience: "country",
   technology: "deviceCategory",
   pages: "landingPagePlusQueryString",
@@ -533,8 +533,11 @@ const VIEW_DEFAULT_METRICS = {
 
 const DIMENSION_GROUPS = {
   "Geography": [["Country", "country"], ["Region", "region"], ["City", "city"], ["Continent", "continent"], ["Language", "language"]],
-  "Traffic source (session)": [["Default Channel Group", "sessionDefaultChannelGroup"], ["Source", "sessionSource"], ["Medium", "sessionMedium"], ["Source / Medium", "sessionSourceMedium"], ["Campaign", "sessionCampaignName"]],
-  "Traffic source (first user)": [["Default Channel Group", "firstUserDefaultChannelGroup"], ["Source", "firstUserSource"], ["Medium", "firstUserMedium"], ["Campaign", "firstUserCampaignName"]],
+  // "Primary channel group" is GA4's current model and matches its UI; the
+  // legacy "default" grouping stays available for comparison against older
+  // reports, which were generated with it.
+  "Traffic source (session)": [["Primary Channel Group", "sessionPrimaryChannelGroup"], ["Default Channel Group (legacy)", "sessionDefaultChannelGroup"], ["Source", "sessionSource"], ["Medium", "sessionMedium"], ["Source / Medium", "sessionSourceMedium"], ["Campaign", "sessionCampaignName"]],
+  "Traffic source (first user)": [["Primary Channel Group", "firstUserPrimaryChannelGroup"], ["Default Channel Group (legacy)", "firstUserDefaultChannelGroup"], ["Source", "firstUserSource"], ["Medium", "firstUserMedium"], ["Campaign", "firstUserCampaignName"]],
   "Platform / device": [["Device Category", "deviceCategory"], ["Operating System", "operatingSystem"], ["OS + Version", "operatingSystemWithVersion"], ["Browser", "browser"], ["Platform", "platform"], ["Screen Resolution", "screenResolution"], ["Device Model", "mobileDeviceModel"], ["Device Brand", "mobileDeviceBranding"]],
   "Page / screen": [["Landing Page", "landingPagePlusQueryString"], ["Page Path", "pagePath"], ["Page Path + Query", "pagePathPlusQueryString"], ["Page Title", "pageTitle"], ["Full Page URL", "fullPageUrl"], ["Hostname", "hostName"]],
   "Events": [["Event Name", "eventName"]],
@@ -547,6 +550,9 @@ const METRICS = {
   "Active Users": "activeUsers",
   "New Users": "newUsers",
   "Total Users": "totalUsers",
+  // Derived server-side as totalUsers - newUsers; GA4 has no such metric of its
+  // own, and that subtraction is how GA4's own UI defines "returning".
+  "Returning Users": "returningUsers",
   "Sessions": "sessions",
   "Engaged Sessions": "engagedSessions",
   "Engagement Rate": "engagementRate",
@@ -653,11 +659,17 @@ function toYMD(d) {
 }
 
 function presetRange(days) {
+  // start/end are for DISPLAY only and are computed in the viewer's timezone.
+  // `preset` is what actually drives the GA4 query: the server turns it into
+  // relative tokens ("28daysAgo" -> "yesterday") which GA4 resolves in the
+  // property's own reporting timezone. Kept on the range object rather than in
+  // component state because ExploreReport and EventsReport receive `range` as a
+  // prop and need it too.
   const end = new Date();
   end.setDate(end.getDate() - 1);
   const start = new Date(end);
   start.setDate(start.getDate() - (days - 1));
-  return { start: toYMD(start), end: toYMD(end) };
+  return { start: toYMD(start), end: toYMD(end), preset: days };
 }
 
 function parseYMD(s) {
@@ -695,7 +707,7 @@ function TrafficTool({ project, view }) {
     setError(null);
     api(`/projects/${project.id}/analytics`, {
       method: "POST",
-      body: { start: range.start, end: range.end },
+      body: { start: range.start, end: range.end, preset: range.preset ?? null },
     })
       .then((d) => !cancelled && setData(d.analytics))
       .catch((err) => !cancelled && setError(err.message));
@@ -742,13 +754,13 @@ function TrafficTool({ project, view }) {
     const [y, m] = ym.split("-").map(Number);
     const lastDay = new Date(y, m, 0).getDate();
     setActivePreset(null);
-    setRange({ start: `${ym}-01`, end: `${ym}-${String(lastDay).padStart(2, "0")}` });
+    setRange({ start: `${ym}-01`, end: `${ym}-${String(lastDay).padStart(2, "0")}`, preset: null });
   };
 
   const applyCustom = (which, value) => {
     if (!value) return;
     setActivePreset(null);
-    setRange((r) => ({ ...r, [which]: value }));
+    setRange((r) => ({ ...r, [which]: value, preset: null }));
   };
 
   const monthValue = (() => {
@@ -892,7 +904,7 @@ function TrafficTool({ project, view }) {
 }
 
 function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
-  const [dimensions, setDimensions] = useState([defaultDimension || "sessionDefaultChannelGroup"]);
+  const [dimensions, setDimensions] = useState([defaultDimension || "sessionPrimaryChannelGroup"]);
   const [metrics, setMetrics] = useState(defaultMetrics || ["activeUsers", "newUsers"]);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -909,7 +921,7 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
     const reportMetrics = metrics.includes("sessions") ? metrics : [...metrics, "sessions"];
     api(`/projects/${projectId}/analytics/report`, {
       method: "POST",
-      body: { start: range.start, end: range.end, dimensions, metrics: reportMetrics, filters: [], match: "AND", limit: 250 },
+      body: { start: range.start, end: range.end, preset: range.preset ?? null, dimensions, metrics: reportMetrics, filters: [], match: "AND", limit: 250 },
     })
       .then((d) => !cancelled && setResult(d.report))
       .catch((err) => !cancelled && setError(err.message));
@@ -1067,7 +1079,7 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
 
 const EVENT_DIMENSION = "eventName";
 const EVENT_METRICS = ["eventCount", "activeUsers", "newUsers", "sessions"];
-const EVENT_CHANNEL_DIMENSION = "sessionDefaultChannelGroup";
+const EVENT_CHANNEL_DIMENSION = "sessionPrimaryChannelGroup";
 
 function EventsReport({ projectId, range, runNonce }) {
   const [rows, setRows] = useState(null);
@@ -1084,7 +1096,7 @@ function EventsReport({ projectId, range, runNonce }) {
     const post = (dimensions, metrics) =>
       api(`/projects/${projectId}/analytics/report`, {
         method: "POST",
-        body: { start: range.start, end: range.end, dimensions, metrics, filters: [], match: "AND", limit: 250 },
+        body: { start: range.start, end: range.end, preset: range.preset ?? null, dimensions, metrics, filters: [], match: "AND", limit: 250 },
       });
 
     Promise.all([
@@ -1379,7 +1391,8 @@ function WrappedYAxisTick({ x, y, payload }) {
 }
 
 const COMPOSITION_DIMENSIONS = new Set([
-  "sessionDefaultChannelGroup", "firstUserDefaultChannelGroup", "deviceCategory",
+  "sessionPrimaryChannelGroup", "sessionDefaultChannelGroup",
+  "firstUserPrimaryChannelGroup", "firstUserDefaultChannelGroup", "deviceCategory",
   "language", "platform", "operatingSystem", "continent", "newVsReturning", "userGender",
 ]);
 const TIME_DIMENSIONS = new Set(DIMENSION_GROUPS["Time"].map(([, name]) => name));
@@ -1685,7 +1698,7 @@ function SearchConsoleTool({ project }) {
   const applyCustom = (which, value) => {
     if (!value) return;
     setActivePreset(null);
-    setRange((r) => ({ ...r, [which]: value }));
+    setRange((r) => ({ ...r, [which]: value, preset: null }));
   };
 
   const toggleMetric = (key) =>
