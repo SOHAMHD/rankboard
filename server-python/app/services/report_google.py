@@ -4,7 +4,6 @@ from datetime import date, datetime, timedelta, timezone
 
 from . import analytics_provider as ga
 from . import search_console_provider as scp
-from .response_cache import cached
 
 MATURATION_DAYS = 2
 
@@ -275,8 +274,11 @@ def _ga4_collect(resource, date_range, property_id) -> dict:
     return {"range": list(date_range), "sections": ordered}
 
 
-@cached("report_fetch_ga4")
 def fetch_ga4(property_id, cur_range: tuple[str, str], prev_range: tuple[str, str]) -> dict:
+    # Deliberately NOT @cached. report_service._fetch_section mutates the returned
+    # dict (`section["source"] = ...`), and response_cache hands out the stored
+    # object by reference — so caching here writes callers' mutations back into
+    # the cache. The per-section fan-out below is where the real win is anyway.
     if not property_id or not str(property_id).strip():
         raise GoogleAccessError("GA4 not configured: this project has no GA4 property id set")
     pid = str(property_id).strip()
@@ -344,6 +346,9 @@ def _gsc_collect(service, site_url: str, date_range: tuple[str, str]) -> dict:
     totals = scp._metrics(totals_rows[0]) if totals_rows else {
         "clicks": 0, "impressions": 0, "ctr": 0, "position": 0,
     }
+    trend_rows = _gsc_query(
+        service, site_url, {**body, "dimensions": ["date"], "rowLimit": 1000}
+    )
     trend = sorted(
         ({"date": (r.get("keys") or [""])[0], **scp._metrics(r)} for r in trend_rows),
         key=lambda d: d["date"],
@@ -351,8 +356,8 @@ def _gsc_collect(service, site_url: str, date_range: tuple[str, str]) -> dict:
     return {"range": list(date_range), "totals": totals, "trend": trend}
 
 
-@cached("report_fetch_gsc")
 def fetch_gsc(site_url, cur_range: tuple[str, str], prev_range: tuple[str, str]) -> dict:
+    # Not cached, for the same aliasing reason as fetch_ga4 above.
     if not site_url or not str(site_url).strip():
         raise GoogleAccessError("GSC not configured: this project has no gsc_site_url set")
     url = str(site_url).strip()

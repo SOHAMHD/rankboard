@@ -18,11 +18,16 @@ set -euo pipefail
 REPO="/home/infyappseodashbo/rankboard"
 WEB_ROOT="/home/infyappseodashbo/public_html"
 
-# Set this to your process manager command, then uncomment the restart below.
-#   systemd : sudo systemctl restart rankboard
-#   pm2     : pm2 restart rankboard-api
-#   passenger: touch "$REPO/server-python/tmp/restart.txt"
-RESTART_CMD=""
+# How to restart the API. Read from the environment so you never have to edit
+# this tracked file (editing it makes the working tree dirty on every deploy).
+# Put your command in ~/.rankboard-deploy.env, e.g.:
+#
+#   RESTART_CMD="sudo systemctl restart rankboard"     # systemd
+#   RESTART_CMD="pm2 restart rankboard-api"            # pm2
+#   RESTART_CMD="touch $HOME/rankboard/server-python/tmp/restart.txt"  # passenger
+#
+[ -f "$HOME/.rankboard-deploy.env" ] && . "$HOME/.rankboard-deploy.env"
+RESTART_CMD="${RESTART_CMD:-}"
 
 step() { printf "\n\033[1m==> %s\033[0m\n" "$1"; }
 
@@ -31,12 +36,20 @@ step() { printf "\n\033[1m==> %s\033[0m\n" "$1"; }
 
 step "Pulling latest code"
 cd "$REPO"
-if [ -n "$(git status --porcelain)" ]; then
-    echo "Working tree is dirty — commit or stash before deploying:"
-    git status --short
+# Only tracked, modified files matter — untracked stuff sitting in the working
+# directory is none of this script's business, and refusing to deploy over it was
+# just obstructive. If a local edit really does conflict, git pull says so.
+DIRTY="$(git diff --name-only; git diff --cached --name-only)"
+if [ -n "$DIRTY" ]; then
+    echo "Note: locally modified tracked files (the pull will fail if they conflict):"
+    printf '  %s\n' $(echo "$DIRTY" | sort -u)
+fi
+if ! git pull --ff-only; then
+    echo
+    echo "Pull failed. Either a local edit conflicts (git status), or the branch"
+    echo "has diverged and needs a merge. Nothing was built or published."
     exit 1
 fi
-git pull --ff-only
 git log -1 --oneline
 
 step "Installing front-end dependencies"
