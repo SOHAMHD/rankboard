@@ -60,19 +60,72 @@ DERIVED_METRICS = {
         "helpers": ["userEngagementDuration", "activeUsers"],
         "op": "ratio",
     },
-    # GA4 has no returningUsers metric. Its own UI defines returning users as
-    # everyone who isn't new, i.e. totalUsers - newUsers, so that's the
-    # derivation used here. Clamped at zero: the two underlying figures are
-    # de-duplicated independently, so at small volumes newUsers can exceed
-    # totalUsers by a row or two and a negative count would be nonsense.
-    "returningUsers": {
-        "label": "Returning Users",
-        "helpers": ["totalUsers", "newUsers"],
-        "op": "difference",
-    },
 }
 
-REPORT_METRICS = ALLOWED_METRICS | set(DERIVED_METRICS)
+#: GA4 exposes no returningUsers metric, and it CANNOT be derived arithmetically.
+#: A user whose first session falls inside the range and who returns later in that
+#: same range is counted as both new AND returning, so newUsers + returningUsers
+#: exceeds totalUsers and `totalUsers - newUsers` is not the returning count.
+#: (Real example: total 4,817, new 4,774, actual returning 254 — the subtraction
+#: gives 43.) The only correct source is the newVsReturning dimension, so this is
+#: fetched with a second query and merged in. See _returning_by_dims below.
+RETURNING_USERS = "returningUsers"
+RETURNING_USERS_LABEL = "Returning Users"
+
+REPORT_METRICS = ALLOWED_METRICS | set(DERIVED_METRICS) | {RETURNING_USERS}
+
+
+def _returning_by_dims(
+    client,
+    resource: str,
+    start: str,
+    end: str,
+    dimensions: list[str],
+    filters: list[dict] | None,
+    match: str,
+    limit: int,
+) -> tuple[dict, int]:
+    """Returning users, broken down by `dimensions`.
+
+    A second GA4 query that adds the newVsReturning dimension and keeps only the
+    "returning" rows. Returns ({dim_tuple: count}, deduplicated_total).
+
+    The total comes from GA4's own aggregation, not from summing the rows: users
+    are de-duplicated per row, so somebody who returned via two channels appears
+    in both and the rows deliberately add up to more than the total.
+    """
+    from google.analytics.data_v1beta.types import (
+        DateRange,
+        Dimension,
+        Metric,
+        MetricAggregation,
+        RunReportRequest,
+    )
+
+    dims = list(dimensions) + ["newVsReturning"]
+    request = RunReportRequest(
+        property=resource,
+        dimensions=[Dimension(name=d) for d in dims],
+        metrics=[Metric(name="activeUsers")],
+        date_ranges=[DateRange(start_date=start, end_date=end)],
+        dimension_filter=build_dimension_filter(filters, match),
+        metric_aggregations=[MetricAggregation.TOTAL],
+        limit=max(limit * 3, 1000),
+    )
+    response = client.run_report(request)
+
+    by_dims: dict = {}
+    total = 0
+    for row in response.rows:
+        values = [dv.value for dv in row.dimension_values]
+        if not values:
+            continue
+        if str(values[-1]).strip().lower() != "returning":
+            continue
+        count = _as_int(row.metric_values[0].value if row.metric_values else "0")
+        by_dims[tuple(values[:-1])] = count
+        total += count
+    return by_dims, total
 
 ALLOWED_MATCH_TYPES = {"EXACT", "CONTAINS", "BEGINS_WITH", "ENDS_WITH", "FULL_REGEXP"}
 
@@ -343,12 +396,21 @@ def run_custom_report(
     resource = prop if prop.startswith("properties/") else f"properties/{prop}"
 
     selected = list(metrics)
+    # returningUsers needs its own query against the newVsReturning dimension, so
+    # it's excluded from the main request's metric list entirely.
+    wants_returning = RETURNING_USERS in selected
     derived_selected = [m for m in selected if m in DERIVED_METRICS]
-    ga_metrics = [m for m in selected if m not in DERIVED_METRICS]
+    ga_metrics = [
+        m for m in selected if m not in DERIVED_METRICS and m != RETURNING_USERS
+    ]
     for d in derived_selected:
         for h in DERIVED_METRICS[d]["helpers"]:
             if h not in ga_metrics:
                 ga_metrics.append(h)
+    if not ga_metrics:
+        # Asking GA4 for zero metrics is an error; activeUsers is a harmless
+        # stand-in when returningUsers is the only column selected.
+        ga_metrics = ["activeUsers"]
 
     try:
         kwargs = dict(
@@ -364,6 +426,9 @@ def run_custom_report(
             if first in DERIVED_METRICS:
                 helpers = DERIVED_METRICS[first]["helpers"]
                 order_metric = helpers[0] if helpers else "activeUsers"
+            elif first == RETURNING_USERS:
+                # Can't order by a metric that isn't in this request.
+                order_metric = ga_metrics[0]
             else:
                 order_metric = first
             kwargs["order_bys"] = [
@@ -379,6 +444,19 @@ def run_custom_report(
         return {"error": f"Google Analytics request failed: {exc}"}
 
     report = _custom_report(response, dimensions, ga_metrics)
+
+    if wants_returning:
+        try:
+            by_dims, ret_total = _returning_by_dims(
+                client, resource, start, end, dimensions, filters, match, limit
+            )
+        except Exception as exc:
+            print("GA4 returning-users breakdown failed:", exc)
+            by_dims, ret_total = {}, 0
+        for row in report["rows"]:
+            row["metrics"][RETURNING_USERS] = by_dims.get(tuple(row["dims"]), 0)
+        report["totals"][RETURNING_USERS] = ret_total
+
     return _apply_derived(report, selected, derived_selected)
 
 
