@@ -1,27 +1,9 @@
-/* ════════════════════════════════════════════════════════════════════
-   PROJECTS — the landing page after login. Every signed-in role sees
-   the list (provisional); mutation buttons render only for roles the
-   server granted them to, and the API re-checks regardless.
-   ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from "react";
 import { LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
 import { filterLocal, listCountries, listRegions, locationsStatus, resolveLocation, searchCities } from "../locations";
 import { TopBar, Modal, ErrorNote, SmartSearch, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
 
-/* ── GEO PICKER ───────────────────────────────────────────────────────────────
-   Where a project's rankings are checked, as three search-as-you-type inputs:
-   Country → Region → City. Not dropdowns — the lists are every country, region
-   and city DataForSEO supports (~100k rows), which no <select> can hold. Each
-   keystroke queries our own `locations` table via /api/locations/search (see
-   client/src/locations.js), and each input narrows the one below it.
-
-   Region and city are optional; the project stores whichever is most specific,
-   because city-level codes are what make local rankings accurate. All three
-   empty = the server-wide default (RANK_LOCATION_CODE).                        */
-
-// Best-effort country guess from a domain's TLD; null when there's no confident
-// match (e.g. .com), so the caller leaves the current selection alone.
 const TLD_COUNTRIES = {
   ".au": { code: 2036, name: "Australia" },
   ".in": { code: 2356, name: "India" },
@@ -35,19 +17,13 @@ const TLD_COUNTRIES = {
 
 function countryFromDomain(domain) {
   const d = (domain || "").trim().toLowerCase();
-  // Matches ".au" and ".com.au" alike — we only look at how the host ends.
   const hit = Object.keys(TLD_COUNTRIES).find((tld) => d.endsWith(tld));
   return hit ? { ...TLD_COUNTRIES[hit], kind: "country" } : null;
 }
 
-// Three cascading SmartSearch inputs. State lives in the parent as three items
-// ({ code, name } or null) so the form can submit the codes and show the names.
 function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) {
   const [status, setStatus] = useState(null);
 
-  // Countries and the chosen country's regions are small enough to hold in
-  // memory, so they are fetched ONCE and filtered in the browser: those two
-  // inputs cost zero requests per keystroke. Cities stay server-side (116k rows).
   useEffect(() => {
     listCountries().catch(() => {});
     locationsStatus().then(setStatus).catch(() => setStatus(null));
@@ -57,8 +33,6 @@ function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) 
     if (country) listRegions(country.code).catch(() => {});
   }, [country?.code]);
 
-  // Suggestions carry the parent chain as the dimmed right-hand hint, so two
-  // cities called Springfield are told apart at a glance.
   const decorate = (rows) =>
     rows.map((r) => ({
       ...r,
@@ -117,28 +91,19 @@ function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) 
   );
 }
 
-/* The picker's three values as one API payload. Sent on both create and update,
-   so clearing a field genuinely clears it server-side. */
 const geoBody = (country, region, city) => ({
   countryCode: country?.code ?? null,
   regionCode: region?.code ?? null,
   cityCode: city?.code ?? null,
 });
 
-/* Shared by both modals: hold the three picker values, seed the country from
-   the domain's TLD until the user picks one by hand, and (when editing) load the
-   saved code back into the three inputs. */
 function useGeoPicker(project) {
   const [country, setCountry] = useState(null);
   const [region, setRegion] = useState(null);
   const [city, setCity] = useState(null);
-  // A project that already HAS a target counts as touched from the start, so
-  // editing its domain can never quietly overwrite a deliberate choice.
   const [touched, setTouched] = useState(project?.locationCode != null);
 
   useEffect(() => {
-    // Editing: one request turns the stored location_code back into the three
-    // rows the inputs display. New project: nothing to load.
     if (project?.locationCode == null) return;
     let live = true;
     resolveLocation(project.locationCode)
@@ -157,20 +122,19 @@ function useGeoPicker(project) {
   const onCountry = (item) => {
     setTouched(true);
     setCountry(item);
-    setRegion(null); // a new country invalidates both narrower choices
+    setRegion(null);
     setCity(null);
   };
   const onRegion = (item) => {
     setTouched(true);
     setRegion(item);
-    setCity(null); // ditto: the city must sit inside the chosen region
+    setCity(null);
   };
   const onCity = (item) => {
     setTouched(true);
     setCity(item);
   };
 
-  // Pre-fill from the domain's TLD, unless the user has touched the picker.
   const guessFromDomain = (domain) => {
     if (touched) return;
     const guess = countryFromDomain(domain);
@@ -209,10 +173,6 @@ export function ProjectsView({ user, onOpenProject, onPeople, onLogout }) {
   }, []);
 
   const toggleProject = async (p) => {
-    // Optimistic: flip the switch in the UI immediately, then persist in the
-    // background. Only the `active` flag changes, so there's no need to re-fetch
-    // the whole list — we just patch this project's row in local state. On
-    // failure we revert and surface the error.
     const next = !p.active;
     setProjects((list) => list.map((x) => (x.id === p.id ? { ...x, active: next } : x)));
     setError(null);
@@ -290,7 +250,7 @@ export function ProjectsView({ user, onOpenProject, onPeople, onLogout }) {
                   setConfirmId(null);
                 }}
                 onToggle={(e) => {
-                  e.stopPropagation(); // the card itself is clickable
+                  e.stopPropagation();
                   toggleProject(p);
                   setConfirmId(null);
                 }}
@@ -330,10 +290,8 @@ export function ProjectsView({ user, onOpenProject, onPeople, onLogout }) {
 
 function ProjectCard({ project, user, confirming, onOpen, onEdit, onToggle, onDelete }) {
   const showToggle = can(user, "toggleProject");
-  const showEdit = can(user, "toggleProject"); // same "manage settings" right the API uses
+  const showEdit = can(user, "toggleProject");
   const showDelete = can(user, "deleteProject");
-  // The server stores a ready-made label ("Australia · Western Australia ·
-  // Perth"), so the card needs no lookup. Older rows may only have the code.
   const country = project.locationLabel || (project.locationCode ? `Code ${project.locationCode}` : null);
 
   return (
@@ -505,7 +463,7 @@ function EditProjectModal({ project, onClose, onSaved }) {
   const [gscSiteUrl, setGscSiteUrl] = useState(project.gscSiteUrl || "");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  const geo = useGeoPicker(project); // loads the saved code back into the inputs
+  const geo = useGeoPicker(project);
 
   const onDomainChange = (val) => {
     setDomain(val);
@@ -520,8 +478,6 @@ function EditProjectModal({ project, onClose, onSaved }) {
         method: "PATCH",
         body: {
           domain: domain.trim() || null,
-          // Always sent, so clearing the picker really does reset the project
-          // to the server default (the old API ignored a null locationCode).
           ...geoBody(geo.country, geo.region, geo.city),
           gaPropertyId: gaPropertyId.trim() || null,
           gscSiteUrl: gscSiteUrl.trim() || null,

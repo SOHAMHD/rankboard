@@ -1,24 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   REPORT DOCUMENT — renderers for the generated block document.
-
-   A generated report version carries a BLOCK DOCUMENT in content_json (built
-   server-side from the frozen data_json — see report_document.py). This module
-   renders that document: header, narrative prose (with inline blob-chips), metric
-   grids, GA4/GSC/keyword data tables, the GSC daily-trend chart, and the
-   new-backlinks list. Sections whose source wasn't gathered render a clear "not
-   available for this period" flag.
-
-   The default export `ReportDocument` renders the whole document READ-ONLY (used
-   for locked/sent versions). The individual block components + helpers are also
-   EXPORTED so the editable document (ReportDocumentEditor.jsx) renders DATA blocks
-   identically — DATA VALUES are never editable, anywhere. Only narrative text is
-   editable, and that happens in the editor via the existing TipTap chip editor.
-
-   Number/value formatting reuses the SAME FORMATS table the scalar chip editor
-   uses, so display stays consistent across the app. Narrative blocks may carry a
-   `doc` (TipTap/ProseMirror JSON, with blob-chips) once edited; we render that
-   when present and fall back to the original `paragraphs`/`bullets` otherwise.
-   ════════════════════════════════════════════════════════════════════ */
 import {
   ResponsiveContainer,
   LineChart,
@@ -40,11 +19,9 @@ import {
 } from "lucide-react";
 import { FORMATS, applyFormat } from "../lib/blobFormats";
 
-// Match the dashboard's chart palette (brand purple + sky).
 const COLOR_CLICKS = "#5b5bf7";
 const COLOR_IMPRESSIONS = "#0284c7";
 
-// ── value formatting (reuse the chip editor's per-type FORMATS) ───────────────
 export function fmtValue(type, value) {
   if (value === null || value === undefined) return "—";
   const t = FORMATS[type] || FORMATS.text;
@@ -67,8 +44,6 @@ export function fmtDelta(type, value) {
   }
 }
 
-// Improvement direction for a delta: rank-like types improve when the number
-// goes DOWN; everything else improves when it goes UP. null = flat/no delta.
 function deltaImproved(type, delta) {
   if (delta === 0 || delta === null || delta === undefined) return null;
   const lowerIsBetter = type === "rank";
@@ -93,7 +68,6 @@ export function DeltaBadge({ type, delta, className = "" }) {
   );
 }
 
-// ── "not available for this period" flag ──────────────────────────────────────
 export function UnavailableNote({ reason }) {
   return (
     <p className="text-sm text-stone-500 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 flex items-center gap-2">
@@ -113,10 +87,6 @@ function Card({ children, className = "" }) {
   );
 }
 
-// ── narrative doc rendering (ProseMirror/TipTap JSON → read-only, chips resolved)
-// Mirrors the chip editor's preview: blob nodes resolve to their FROZEN formatted
-// value; a chip that can't resolve shows a clear broken marker. Same node types
-// the TipTap editor (StarterKit + blob node) produces.
 function renderChip(node, blobsByName, key) {
   const { name, kind, format, label } = node.attrs || {};
   const blob = blobsByName?.get(name);
@@ -179,7 +149,6 @@ function renderDocNodes(nodes, blobsByName, keyPrefix) {
   return nodes.map((n, i) => renderDocNode(n, blobsByName, `${keyPrefix}-${i}`));
 }
 
-// ── block renderers ───────────────────────────────────────────────────────────
 export function HeaderBlock({ block }) {
   return (
     <div className="bg-white border border-stone-200 rounded-xl p-5">
@@ -260,16 +229,8 @@ export function MetricGridBlock({ block, hideTitle }) {
   );
 }
 
-// ── row selection (repeating-row tables) ──────────────────────────────────────
-// A row/item is SHOWN unless it was explicitly deselected in the editor. Absent
-// flag = included, so freshly generated reports render every row (identical to
-// old behavior). Shared by the read-only renderers, the editor, and mirrored by
-// report_pdf._included on the server.
 export const rowIncluded = (r) => !r || r.included !== false;
 
-// Per-table quick control shown ONLY in the editor (selectable mode). Top-N picks
-// the first N rows in the table's CURRENT (frozen) order — see report_document.py
-// for each table's incoming sort.
 function RowSelectBar({ total, selected, onBulk }) {
   const Btn = ({ mode, children }) => (
     <button
@@ -305,18 +266,6 @@ function cell(col, cells) {
   return <span className="font-data text-stone-800">{fmtValue(col.type, v)}</span>;
 }
 
-// `selectable` (editor only): show ALL rows with a per-row checkbox + the Top-N
-// control bar, and report toggles via onToggleRow(rowIndexIntoAllRows, checked)
-// / onBulk("all"|"none"|N). Read-only (default, incl. locked/sent + PDF parity):
-// no checkboxes, only the selected rows are shown.
-/* `editable` turns the cells into inputs. Used ONLY for the keyword table, whose
-   ranks are entered by hand — everything else on a report is derived from a
-   frozen data pull and must not be typed over.
-
-   Edits land in content_json (the editable layer), never in data_json (the
-   frozen one), so the numbers on the Keywords page are unaffected: fixing a rank
-   here fixes THIS report and nothing else. The columns, headings and three-month
-   order are untouched — only the cells become writable. */
 export function DataTableBlock({
   block,
   selectable = false,
@@ -391,9 +340,6 @@ export function DataTableBlock({
                               <input
                                 value={raw === null || raw === undefined ? "" : String(raw)}
                                 onChange={(e) => onCellChange?.(i, c.key, e.target.value)}
-                                // A rank is a position, so metric cells accept
-                                // digits only — a stray "-" would be written
-                                // straight into content_json otherwise.
                                 inputMode={isDim ? "text" : "numeric"}
                                 placeholder={isDim ? "" : "—"}
                                 aria-label={`${c.label}${isDim ? "" : ` for row ${i + 1}`}`}
@@ -427,8 +373,6 @@ export function DataTableBlock({
 
 export function ChartBlock({ block, hideTitle }) {
   const points = block.points || [];
-  // Series are data-driven: GSC sends clicks/impressions, GA4 sends
-  // activeUsers/newUsers, etc. Fall back to the GSC pair for legacy blocks.
   const series =
     block.series && block.series.length
       ? block.series
@@ -437,12 +381,6 @@ export function ChartBlock({ block, hideTitle }) {
           { key: "impressions", label: "Impressions", type: "count" },
         ];
   const palette = [COLOR_CLICKS, COLOR_IMPRESSIONS, "#15b41f", "#e0362c"];
-  // 1–2 comparable series read fine on a shared/dual axis. But 3+ series (the
-  // GSC trend: clicks, impressions, CTR, avg. position) have wildly different
-  // scales — on one axis the largest (impressions) flattens the rest onto the
-  // zero line. So give EACH series its own independent, hidden axis; every line
-  // then uses the full height and stays visible (tooltip still shows real
-  // values). This mirrors the normalised PDF chart.
   const multi = series.length > 2;
   const dual = series.length === 2;
   return (
@@ -489,17 +427,11 @@ export function ChartBlock({ block, hideTitle }) {
   );
 }
 
-// Backlinks keep the FROZEN total volume in the count line (clients should see
-// the full backlink volume even when the list is trimmed) and add a "showing X
-// of Y" hint when a selection is active. `selectable` adds per-item checkboxes +
-// the Top-N bar; read-only shows only the selected items, renumbered 1..k.
 export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk, hideTitle }) {
   const allItems = block.items || [];
   const items = selectable ? allItems : allItems.filter(rowIncluded);
   const selectedCount = allItems.filter(rowIncluded).length;
-  const total = block.count; // frozen total volume for the period
-  // Posts lists (blogs / LinkedIn) carry a `noun` and per-item titles; real
-  // backlinks are URL-only. Wording + rendering adapt to whichever this is.
+  const total = block.count;
   const noun = block.noun || "backlink";
   if (allItems.length === 0) {
     return (
@@ -573,10 +505,6 @@ export function BacklinksBlock({ block, selectable = false, onToggleRow, onBulk,
   );
 }
 
-// Editable Targets & Goals grid (read-only view). Two labelled groups
-// (Previous / Current targets) x six team-entered fields, plus optional notes.
-// Values are MANUAL (typed in the editor), so they're the one grid the editor
-// lets you edit; empty cells show a dash.
 export function TargetsGridBlock({ block, hideTitle }) {
   const columns = block.columns || [];
   const fields = block.fields || [];
@@ -611,7 +539,6 @@ export function TargetsGridBlock({ block, hideTitle }) {
   );
 }
 
-// One block, read-only, dispatched by type. blobsByName resolves narrative chips.
 export function Block({ block, blobsByName }) {
   switch (block.type) {
     case "report_header":
@@ -633,11 +560,6 @@ export function Block({ block, blobsByName }) {
   }
 }
 
-// ════════════════════════════════════════════════════════════════════
-// ENTRY — renders a version's block document READ-ONLY (locked/sent versions,
-// or any non-editable view). Falls back to a friendly note if the version has
-// no block document (e.g. a legacy draft).
-// ════════════════════════════════════════════════════════════════════
 export default function ReportDocument({ version, blobs }) {
   const doc = version?.content;
   const blocks = doc && doc.type === "report_document" ? doc.blocks || [] : null;

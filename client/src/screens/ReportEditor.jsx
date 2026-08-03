@@ -1,18 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   REPORT CONTENT EDITOR — author-facing prose + data-blob editor.
-
-   An author opens a frozen DRAFT version, writes free-form prose, inserts named
-   data "blobs" (scalar frozen values) as atomic chips, picks each chip's display
-   FORMAT, sees a LIVE PREVIEW with every chip resolved to its formatted value,
-   and saves. The blob palette and preview both consume the SAME resolved-blobs
-   list from GET /api/reports/{id}/blobs (the backend resolver). content_json
-   stores the TipTap document (prose + chip refs with formats) — NOT rendered
-   HTML — so reopening restores chips and resolution stays dynamic.
-
-   Scope: editor only. No rendering/HTML export, no submit/review/send, no public
-   link — later slices. The "finalize" affordance here is just the data-integrity
-   gate (blocked while any chip is unresolved).
-   ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useMemo, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -45,14 +30,8 @@ import ReportDocumentEditor from "./ReportDocumentEditor";
 import DownloadPdfButton from "../lib/DownloadPdfButton";
 import SendReportButton from "../lib/SendReportButton";
 
-// Only scalar sources surface as chips this slice (tabular ranks/keywords are
-// excluded), so the palette groups are GA4 / GSC / Moz plus a "Changes" group
-// for delta chips. Unknown groups fall to the end (see groupedItems).
 const GROUP_ORDER = ["GA4", "GSC", "Moz", "Changes"];
 
-// The node array for an inserted blob chip + a trailing space. Shared by the
-// palette click handler and the "/" suggestion command so the chip attrs shape
-// (and the default-format-on-insert rule) can never drift between the two.
 export function blobInsertNodes(item) {
   return [
     {
@@ -75,10 +54,6 @@ const STATUS_BADGE = {
 
 const emptyDoc = () => ({ type: "doc", content: [{ type: "paragraph" }] });
 
-// The last COMPLETED month as "YYYY-MM" (e.g. in June 2026 → "2026-05"). The
-// generate picker DEFAULTS here so the common case (a finished month) is one
-// click — but the current month is selectable too (see currentMonth / the picker
-// `max`); generating it produces an in-progress report flagged as still maturing.
 function lastCompletedMonth() {
   const d = new Date();
   d.setDate(1);
@@ -86,16 +61,11 @@ function lastCompletedMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-// The CURRENT month as "YYYY-MM" — the LATEST month a report may be generated for
-// (a future month has no data, so the picker caps here). Past months and the
-// current month are selectable; the current month is generatable but flagged
-// in-progress (its data is still maturing).
 function currentMonth() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-// ── palette items: one "value" entry per blob + a "change" entry per delta ────
 export function buildPaletteItems(blobs) {
   const items = [];
   for (const b of blobs) {
@@ -130,7 +100,6 @@ export function groupedItems(items) {
   return order.filter((g) => by[g]?.length).map((g) => [g, by[g]]);
 }
 
-// ── walk the document for blob nodes that can't resolve (finalize guard) ──────
 function findUnresolved(doc, blobsByName) {
   const out = [];
   const walk = (node) => {
@@ -146,10 +115,6 @@ function findUnresolved(doc, blobsByName) {
   return out;
 }
 
-// ════════════════════════════════════════════════════════════════════
-// ENTRY POINT — versions list + open one in the editor (reachable in the
-// project dashboard under "Reports", gated to authors).
-// ════════════════════════════════════════════════════════════════════
 export function ReportsPanel({ user, project }) {
   const toast = useToast();
   const [versions, setVersions] = useState(null);
@@ -157,11 +122,9 @@ export function ReportsPanel({ user, project }) {
   const [openId, setOpenId] = useState(null);
   const [period, setPeriod] = useState(lastCompletedMonth());
   const [generating, setGenerating] = useState(false);
-  const [genMsg, setGenMsg] = useState(null); // { tone: "ok" | "warn", text }
-  // Delete (Super Admin / Admin only — server-enforced too). pendingDelete holds
-  // the row awaiting confirmation; sentAck gates the stronger SENT-tier confirm.
+  const [genMsg, setGenMsg] = useState(null);
   const canDelete = isReportDeleter(user);
-  const canSend = isReportSender(user); // Super Admin / Admin only — Team can author but not send
+  const canSend = isReportSender(user);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [sentAck, setSentAck] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -176,10 +139,6 @@ export function ReportsPanel({ user, project }) {
     load();
   }, [project.id]);
 
-  // Generate a report for the chosen month. Uses a raw fetch (not the api()
-  // helper) so we can branch on the HTTP STATUS — the backend returns a distinct
-  // code per outcome (409 duplicate / 422 not-ready / 503 transport) that api()
-  // would otherwise flatten into a single message.
   const generate = async () => {
     if (!period || generating) return;
     setGenerating(true);
@@ -192,8 +151,6 @@ export function ReportsPanel({ user, project }) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        // The current month generates fine but is in-progress (data still
-        // maturing) — say so; a completed past month gets the plain message.
         const maturing = period === currentMonth();
         setGenMsg({
           tone: "ok",
@@ -202,7 +159,7 @@ export function ReportsPanel({ user, project }) {
             : `Report generated for ${period}.`,
         });
         toast.success(`Report generated for ${period}.`, { title: "Report ready" });
-        load(); // refresh the list so the new draft appears (no auto-navigate)
+        load();
       } else if (res.status === 409) {
         setGenMsg({ tone: "warn", text: `An unsent report for ${period} already exists — see the list below.` });
         toast.info(`An unsent report for ${period} already exists.`);
@@ -210,7 +167,6 @@ export function ReportsPanel({ user, project }) {
         setGenMsg({ tone: "warn", text: "Google timed out, please try again." });
         toast.error("Google timed out, please try again.", { title: "Couldn't generate" });
       } else if (res.status === 422) {
-        // The backend reason is specific (no snapshot / maturation / GA4-or-GSC 403).
         setGenMsg({ tone: "warn", text: data.error || `Can't generate a report for ${period} yet.` });
         toast.error(data.error || `Can't generate a report for ${period} yet.`, { title: "Couldn't generate" });
       } else {
@@ -225,7 +181,6 @@ export function ReportsPanel({ user, project }) {
     }
   };
 
-  // Open the confirm modal for a row (reset the SENT acknowledgement each time).
   const askDelete = (v) => {
     setSentAck(false);
     setPendingDelete(v);
@@ -235,8 +190,6 @@ export function ReportsPanel({ user, project }) {
     setSentAck(false);
   };
 
-  // Confirmed delete: hard-DELETE the version, then refresh the list. 403 (role)
-  // / 404 (already gone) / any error surface as a warn message — never a crash.
   const confirmDelete = async () => {
     if (!pendingDelete || deleting) return;
     setDeleting(true);
@@ -277,7 +230,6 @@ export function ReportsPanel({ user, project }) {
       <h2 className="text-lg font-bold text-stone-900 font-display">Reports</h2>
       <p className="text-sm text-stone-500 mt-0.5">Open a draft to write its content. Locked versions open read-only.</p>
 
-      {/* Generate control (author-only: the whole panel is isAuthor-gated). */}
       <div className="mt-4 flex flex-wrap items-end gap-2 bg-white border border-stone-200 rounded-xl p-4">
         <div>
           <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Report month</label>
@@ -366,9 +318,6 @@ export function ReportsPanel({ user, project }) {
         </div>
       )}
 
-      {/* Delete confirmation — two tiers. A draft/in_review uses the simple
-          message; a SENT report uses the stronger named-consequence text AND a
-          mandatory acknowledgement, so it can never be deleted on a single click. */}
       {pendingDelete && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -442,10 +391,6 @@ export function ReportsPanel({ user, project }) {
   );
 }
 
-// ════════════════════════════════════════════════════════════════════
-// EDITOR — loads version + resolved blobs, then mounts the editor once both
-// are ready (so the atomic node bakes in the resolved-blobs map).
-// ════════════════════════════════════════════════════════════════════
 function ReportEditor({ versionId, onBack, canSend = false }) {
   const [version, setVersion] = useState(null);
   const [blobs, setBlobs] = useState(null);
@@ -482,15 +427,8 @@ function ReportEditor({ versionId, onBack, canSend = false }) {
       ) : error || !version || !blobs ? (
         <ErrorNote>{error || "Could not load this report version."}</ErrorNote>
       ) : version.content?.type === "report_document" ? (
-        // Generated reports carry a block document in content_json. The editable
-        // document handles BOTH a draft (structure controls + per-narrative chip
-        // editors) and a locked/sent version (read-only). The legacy prose/chip
-        // editor below is kept only for any pre-block-document draft.
         <ReportDocumentEditor key={versionId} version={version} blobs={blobs} canSend={canSend} />
       ) : (
-        // key={versionId} is load-bearing: it forces a fresh mount per version so
-        // the once-only useEditor([]) / useState seeds (which bake in this
-        // version's resolved-blobs map + content) re-run when switching versions.
         <ReportEditorInner key={versionId} version={version} blobs={blobs} canSend={canSend} />
       )}
     </div>
@@ -511,7 +449,6 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
   const [savedAt, setSavedAt] = useState(null);
   const [saveError, setSaveError] = useState(null);
 
-  // "/" trigger config — closes over the palette + the floating-menu state.
   const suggestion = useMemo(() => makeSuggestion({ paletteItems, setSugg }), [paletteItems]);
   const BlobNode = useMemo(() => createBlobNode(blobsByName), [blobsByName]);
 
@@ -555,7 +492,6 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
 
   return (
     <div className="w-full">
-      {/* ── header ── */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div>
           <h2 className="text-lg font-bold text-stone-900 font-display">
@@ -568,10 +504,6 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
             <span className="text-xs text-emerald-600">Saved {savedAt.toLocaleTimeString()}</span>
           )}
           <DownloadPdfButton versionId={version.id} periodKey={version.periodKey} label onError={setSaveError} />
-          {/* Send deliberately NOT offered while editing — emailing a client from
-              a half-finished draft is irreversible. Send from the versions list
-              instead, once the report is done. `canSend` is still threaded in;
-              the list's own SendReportButton uses it. */}
           {isDraft ? (
             <button onClick={save} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
               {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft
@@ -591,10 +523,8 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
       )}
       <ErrorNote>{saveError}</ErrorNote>
 
-      {/* ── finalize gate (data integrity) ── */}
       <FinalizeGate unresolved={unresolved} isDraft={isDraft} />
 
-      {/* ── 3-pane: palette · editor · preview ── */}
       <div className="mt-3 grid grid-cols-1 lg:grid-cols-[15rem_minmax(0,1fr)_minmax(0,1fr)] gap-4">
         {isDraft && <BlobPalette items={paletteItems} onInsert={insert} />}
 
@@ -616,7 +546,6 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
   );
 }
 
-// ── toolbar (draft only) ──────────────────────────────────────────────
 export function Toolbar({ editor }) {
   if (!editor) return null;
   const Btn = ({ on, onClick, children, label }) => (
@@ -650,7 +579,6 @@ export function Toolbar({ editor }) {
   );
 }
 
-// ── palette ────────────────────────────────────────────────────────────
 export function BlobPalette({ items, onInsert }) {
   const [q, setQ] = useState("");
   const filtered = q ? items.filter((i) => i.search.includes(q.toLowerCase())) : items;
@@ -681,7 +609,6 @@ export function BlobPalette({ items, onInsert }) {
   );
 }
 
-// ── finalize gate ──────────────────────────────────────────────────────
 function FinalizeGate({ unresolved, isDraft }) {
   const blocked = unresolved.length > 0;
   return (
@@ -716,7 +643,6 @@ function FinalizeGate({ unresolved, isDraft }) {
   );
 }
 
-// ── live preview ───────────────────────────────────────────────────────
 function PreviewPane({ doc, blobsByName }) {
   return (
     <div className="min-w-0">
@@ -798,7 +724,6 @@ function renderBlob(node, map, key) {
   );
 }
 
-// ── "/" suggestion floating menu ───────────────────────────────────────
 export function makeSuggestion({ paletteItems, setSugg }) {
   return {
     char: "/",
@@ -870,7 +795,6 @@ export function SuggestionMenu({ sugg }) {
       {sugg.items.map((it, i) => (
         <button
           key={it.key}
-          // mousedown (not click) so the editor selection isn't lost before insert
           onMouseDown={(e) => {
             e.preventDefault();
             sugg.command?.(it);

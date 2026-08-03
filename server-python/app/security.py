@@ -1,13 +1,3 @@
-"""AUTH DEPENDENCIES — FastAPI's equivalent of Express middleware.
-
-In Express we wrote:   router.use(requireAuth, requireRole(...))
-In FastAPI we write:   user = Depends(require_auth)
-                       user = Depends(require_permission("addProject"))
-
-Same two questions, same answers:
-  401 = we don't know who you are
-  403 = we know exactly who you are, and the answer is no
-"""
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -22,14 +12,6 @@ from .permissions import can
 
 def create_token(user_id: int, role: str, tfa: str = "verified",
                  minutes: int | None = None) -> str:
-    # `role` is carried as an INFORMATIONAL claim only — every guard below
-    # re-loads the role fresh from the DB (require_auth), so a stale token can
-    # never widen access. `tfa` records how far two-step verification has got:
-    #   "verified" — password + authenticator done; full access.
-    #   "pending"  — password ok, authenticator NOT yet done; may only reach
-    #                /me, /set-password and /auth/2fa/* (require_active_user
-    #                rejects it). Tokens minted before 2FA existed carry no tfa
-    #                claim and are treated as verified (backward compatible).
     exp = datetime.now(timezone.utc) + (
         timedelta(minutes=minutes) if minutes else timedelta(hours=8)
     )
@@ -38,15 +20,10 @@ def create_token(user_id: int, role: str, tfa: str = "verified",
 
 
 def create_pending_token(user_id: int, role: str) -> str:
-    """Short-lived token issued after the PASSWORD step but before the
-    authenticator code. Good for 15 minutes — long enough to scan a QR and
-    type a code, short enough to limit exposure."""
     return create_token(user_id, role, tfa="pending", minutes=15)
 
 
 def token_claims(authorization: str | None = Header(default=None)) -> dict:
-    """Decode the bearer token to its raw claims (used to read the `tfa` step).
-    Mirrors require_auth's decode; raises the same 401s."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Sign in required.")
     try:
@@ -59,11 +36,6 @@ def require_auth(
     authorization: str | None = Header(default=None),
     db: sqlite3.Connection = Depends(get_db),
 ) -> sqlite3.Row:
-    """Base authentication: proves WHO is calling and loads them fresh from the
-    DB so role changes and deletions apply immediately (never trust stale token
-    data). Does NOT enforce account standing — used directly only by /me and
-    /set-password, the two endpoints a must-change / not-yet-active user must
-    still reach. Everything else depends on require_active_user below."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Sign in required.")
     token = authorization[7:]
@@ -85,15 +57,7 @@ def require_active_user(
     user: sqlite3.Row = Depends(require_auth),
     claims: dict = Depends(token_claims),
 ) -> sqlite3.Row:
-    """Strict gate for every data/action endpoint: the caller must be ACTIVE,
-    must not owe a password reset, and must have COMPLETED two-step
-    verification. A pending / must-change / invited user is blocked here (403)
-    but can still log in, load /me, POST /set-password and hit /auth/2fa/*
-    (which use the base require_auth) to get themselves into good standing."""
     if claims.get("tfa") not in (None, "verified"):
-        # "pending" (authenticator not done) or "email_pending" (email code not
-        # done) — either way, verification isn't complete. None = a legacy token
-        # minted before 2FA, treated as verified for backward compatibility.
         raise HTTPException(403, "Complete two-step verification to continue.")
     if user["status"] != "active":
         raise HTTPException(403, "Your account isn't active yet — set your password to continue.")
@@ -103,7 +67,6 @@ def require_active_user(
 
 
 def require_permission(action: str):
-    """Proves the caller is ALLOWED, by asking the matrix."""
     def checker(user: sqlite3.Row = Depends(require_active_user)) -> sqlite3.Row:
         if not can(user["role"], action):
             raise HTTPException(403, "You don't have permission to do that.")
@@ -112,20 +75,6 @@ def require_permission(action: str):
 
 
 def require_roles(*allowed: str):
-    """Gate a route to a set of ROLES (the report workflow's authorization
-    helper). 403s if the caller's CURRENT role — re-loaded fresh from the DB by
-    require_active_user, never trusted from the token — isn't in `allowed`.
-
-    Later slices use it directly, e.g.
-        Depends(require_roles(*AUTHOR_ROLES))   # author a report
-        Depends(require_roles(*SENDER_ROLES))   # send a report to a client
-    (see permissions.AUTHOR_ROLES / SENDER_ROLES). No such endpoints exist yet;
-    this only establishes the reusable helper.
-
-    The 403 is raised as an HTTPException, so it flows through the app's
-    exception handler and — because CORSMiddleware sits OUTERMOST (see
-    app.main) — still carries the Access-Control-Allow-Origin header a browser
-    needs to read the error."""
     allowed_set = frozenset(allowed)
 
     def checker(user: sqlite3.Row = Depends(require_active_user)) -> sqlite3.Row:
@@ -141,11 +90,6 @@ def require_project_access(
     user: sqlite3.Row = Depends(require_active_user),
     db: sqlite3.Connection = Depends(get_db),
 ) -> sqlite3.Row:
-    """Per-project gate for every /{project_id}/... route: a Client may only
-    reach a project they're assigned to (user_projects); staff reach any.
-    Pulls project_id straight from the path. Deliberately does NOT check that
-    the project exists — that 404 stays the handler's job, so a missing project
-    still reads as "not found", not "forbidden". 403 when access is denied."""
     if not user_can_access_project(user, project_id, db):
         raise HTTPException(403, "You don't have access to this project.")
     return user

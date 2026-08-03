@@ -1,12 +1,3 @@
-/* Reusable "Download PDF" control for a report version.
-
-   GET /api/reports/{id}/pdf is auth-gated, so a plain <a href> can't carry the
-   Bearer token, and api() (JSON-only) can't read the binary body. We fetch the
-   bytes with the token, then trigger a browser download via a temporary object
-   URL. Rendering runs Playwright server-side (a couple of seconds), so the
-   button shows a spinner and disables itself so it can't fire twice. On failure
-   it calls onError with the server's {error} message instead of downloading a
-   broken file. */
 import { useState } from "react";
 import { Download, LoaderCircle } from "lucide-react";
 import { BASE, getToken } from "../api";
@@ -17,7 +8,6 @@ function slug(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "report";
 }
 
-// {project}-{period}-seo-report.pdf when the project is known, else report-{id}.pdf.
 function fileName({ projectName, periodKey, versionId }) {
   if (projectName && periodKey) return `${slug(projectName)}-${slug(periodKey)}-seo-report.pdf`;
   if (projectName) return `${slug(projectName)}-seo-report.pdf`;
@@ -28,21 +18,18 @@ export default function DownloadPdfButton({
   versionId,
   projectName,
   periodKey,
-  label = false, // true → "Download PDF" text (editor headers); false → icon-only (list rows)
+  label = false,
   className = "",
   onError,
-  beforeDownload, // optional async hook; runs (e.g. saves the draft) before the PDF is fetched
+  beforeDownload,
 }) {
   const [downloading, setDownloading] = useState(false);
   const toast = useToast();
 
   const download = async () => {
-    if (downloading) return; // guard the double-click
+    if (downloading) return;
     setDownloading(true);
     try {
-      // The PDF is rendered server-side from the SAVED content_json, so any
-      // unsaved editor edits (uploaded logo, typed text) must be persisted
-      // first — otherwise they silently won't appear in the download.
       if (beforeDownload) await beforeDownload();
       const res = await fetch(`${BASE}/api/reports/${versionId}/pdf`, {
         headers: { Authorization: `Bearer ${getToken()}` },
@@ -57,9 +44,9 @@ export default function DownloadPdfButton({
       a.href = url;
       a.download = fileName({ projectName, periodKey, versionId });
       document.body.appendChild(a);
-      a.click(); // download starts synchronously here…
+      a.click();
       a.remove();
-      URL.revokeObjectURL(url); // …so it's safe to revoke now
+      URL.revokeObjectURL(url);
       toast.success("Report downloaded.", { title: "PDF ready" });
     } catch (e) {
       const msg = e.message || "Couldn't generate the PDF — try again.";

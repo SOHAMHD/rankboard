@@ -1,63 +1,30 @@
-"""REPORT GOOGLE FETCH — live GA4 + GSC fetch for report GENERATION.
-
-The dashboard providers (analytics_provider / search_console_provider) deliberately
-NEVER raise — they swallow every failure into {"error": ...} so a misconfigured
-project degrades to a friendly message. That's wrong for report generation, where
-a setup problem MUST stop the freeze with a SPECIFIC, diagnosable reason. So this
-module REUSES their auth/client builders but runs report-shaped queries that
-classify every outcome into exactly three cases:
-
-  • SUCCESS (incl. a legitimate ZERO/empty result) → real data, returned to freeze
-  • ACCESS/AUTH failure (403/401, bad property/site, missing creds) → GoogleAccessError
-  • TRANSPORT failure (timeout, 5xx, 429, network)               → GoogleTransportError
-
-The two error types let the operator tell "fix access" from "retry" apart. Sections
-are declared ONCE here (GA4_SECTIONS) and iterated, so adding/removing a section is
-a localized change. GA4 Data API per-request caps (≤9 dims, ≤10 metrics) are honored
-by splitting a section's metrics into chunks and merging by dimension key.
-"""
 import calendar
 from datetime import date, datetime, timedelta, timezone
 
-from . import analytics_provider as ga          # reuse GA4 auth (_analytics_client)
-from . import search_console_provider as scp    # reuse GSC auth (_build_service) + _metrics
+from . import analytics_provider as ga
+from . import search_console_provider as scp
 
-# GA4 data matures ~48h; a report month is only eligible once it has fully ended
-# AND this buffer has elapsed past the last day. 2 days ≈ 48h.
 MATURATION_DAYS = 2
 
-# GA4 Data API per-request limits.
 GA4_MAX_METRICS = 10
 GA4_MAX_DIMENSIONS = 9
 
-# ── Declarative GA4 sections — the report's FIXED shape (not user-chosen) ──────
-# Each: key, the GA4 dimensions + (valid) metric API names, an optional row cap,
-# and `returning=True` to additionally derive returning-users via newVsReturning.
-# Derived values (avg engagement time, engaged sessions / user) are computed
-# generically from whichever component metrics a section requested — NOT sent to
-# GA4 (those aren't real metric names).
 GA4_SECTIONS = (
     {"key": "users_overview", "dimensions": [],
      "metrics": ["activeUsers", "newUsers", "totalUsers", "userEngagementDuration", "engagedSessions", "sessions"],
      "limit": None, "returning": True},
-    # Daily users time-series that backs the GA4 "Users Overview" line chart in the
-    # report. Dimensioned by date; sorted into date order downstream (report_document).
     {"key": "users_trend", "dimensions": ["date"],
      "metrics": ["activeUsers", "newUsers"],
      "limit": None, "order_by_dim": True},
     {"key": "by_channel", "dimensions": ["sessionDefaultChannelGroup"],
      "metrics": ["totalUsers", "newUsers", "activeUsers", "engagedSessions", "userEngagementDuration"],
      "limit": None},
-    # Region added between country and city so the report can show state/region.
     {"key": "by_country_city", "dimensions": ["country", "region", "city"],
      "metrics": ["activeUsers", "newUsers", "engagedSessions", "engagementRate", "userEngagementDuration"],
      "limit": 50},
     {"key": "by_landing_page", "dimensions": ["landingPagePlusQueryString"],
      "metrics": ["sessions", "activeUsers", "newUsers", "userEngagementDuration"],
      "limit": 25},
-    # Sessions intentionally NOT requested for these four: the device/browser/OS/
-    # language tables show user reach (active + new users) only — sessions was
-    # removed from these tables (it remains on landing-page / top-pages / channel).
     {"key": "by_browser", "dimensions": ["browser"],
      "metrics": ["activeUsers", "newUsers"], "limit": 25},
     {"key": "by_device", "dimensions": ["deviceCategory"],
@@ -71,15 +38,11 @@ GA4_SECTIONS = (
      "limit": 25},
 )
 
-# Overview metrics carried into the previous-vs-current deltas the report shows.
 _GA4_DELTA_KEYS = ("activeUsers", "newUsers", "totalUsers", "returningUsers", "avgEngagementSeconds")
 _GSC_DELTA_KEYS = ("clicks", "impressions", "ctr", "position")
 
 
-# ── Outcome classification ────────────────────────────────────────────────────
 class GoogleFetchError(Exception):
-    """Base for a section fetch that must STOP generation. `retryable`
-    distinguishes a transport blip from a setup/access problem."""
     retryable = False
 
     def __init__(self, message: str):
@@ -91,16 +54,13 @@ class GoogleFetchError(Exception):
 
 
 class GoogleAccessError(GoogleFetchError):
-    """403/401, wrong property/site, or missing credentials — FIX access, not retry."""
     retryable = False
 
 
 class GoogleTransportError(GoogleFetchError):
-    """Timeout / 5xx / 429 / network — RETRY; access is fine."""
     retryable = True
 
 
-# ── Period / date helpers ─────────────────────────────────────────────────────
 def _parse_period(period_key: str) -> tuple[int, int]:
     y_str, m_str = str(period_key).split("-")
     y, m = int(y_str), int(m_str)
@@ -110,15 +70,12 @@ def _parse_period(period_key: str) -> tuple[int, int]:
 
 
 def month_bounds(period_key: str) -> tuple[str, str]:
-    """ "2026-05" → ("2026-05-01", "2026-05-31") (inclusive YYYY-MM-DD dates the
-    GA4 + GSC APIs both accept)."""
     y, m = _parse_period(period_key)
     last = calendar.monthrange(y, m)[1]
     return f"{y:04d}-{m:02d}-01", f"{y:04d}-{m:02d}-{last:02d}"
 
 
 def previous_period(period_key: str) -> str:
-    """ "2026-01" → "2025-12". The prior month the report compares against."""
     y, m = _parse_period(period_key)
     if m == 1:
         return f"{y - 1:04d}-12"
@@ -126,9 +83,6 @@ def previous_period(period_key: str) -> str:
 
 
 def period_is_complete(period_key: str, now: datetime | None = None) -> bool:
-    """True only for a COMPLETE PAST month whose data has had MATURATION_DAYS to
-    settle. The current (incomplete) month and any future month return False — used
-    to FLAG (no longer to block) a still-maturing report."""
     now = now or datetime.now(timezone.utc)
     try:
         y, m = _parse_period(period_key)
@@ -140,10 +94,6 @@ def period_is_complete(period_key: str, now: datetime | None = None) -> bool:
 
 
 def period_has_started(period_key: str, now: datetime | None = None) -> bool:
-    """True once the SELECTED month has BEGUN (its first day is today or earlier),
-    i.e. the month is current or past. A FUTURE month (not yet started) is False —
-    it has no data to fetch. Pairs with period_is_complete: started-but-not-complete
-    is exactly the current, in-progress month."""
     now = now or datetime.now(timezone.utc)
     try:
         y, m = _parse_period(period_key)
@@ -153,26 +103,15 @@ def period_has_started(period_key: str, now: datetime | None = None) -> bool:
 
 
 def report_window(period_key: str, now: datetime | None = None) -> tuple[str, str]:
-    """The GA4/GSC date window for the SELECTED month. period_key ALONE picks WHICH
-    month; `now` only clamps the END of a still-open current month:
-      • a COMPLETE past month  → the full calendar month (INVARIANT to today)
-      • the CURRENT (in-progress) month → first-of-month .. today (you cannot fetch
-        days that haven't happened yet)
-    Returns inclusive YYYY-MM-DD start/end the GA4 + GSC APIs both accept. ISO date
-    strings compare lexicographically, so the today-vs-month-end test is exact.
-    (Precondition: the period has started — callers gate future months out.)"""
     now = now or datetime.now(timezone.utc)
     start, end = month_bounds(period_key)
     today = now.date().isoformat()
-    if today < end:        # the month's last day is still in the future → in progress
-        end = today        # cap the window at today; the rest of the month has no data
+    if today < end:
+        end = today
     return start, end
 
 
-# ── number parsing / derivations ──────────────────────────────────────────────
 def _num(raw):
-    """GA4/GSC return metric values as strings; convert to int when whole, else a
-    rounded float. Unparseable → 0."""
     try:
         f = float(raw)
     except (TypeError, ValueError):
@@ -181,9 +120,6 @@ def _num(raw):
 
 
 def _derive(metrics: dict) -> dict:
-    """Add the derived metrics the report uses, computed from component metrics
-    that are present (avg engagement time per active user; engaged sessions per
-    active user). A zero denominator yields 0, never an error."""
     out = dict(metrics)
     active = metrics.get("activeUsers")
     dur = metrics.get("userEngagementDuration")
@@ -195,7 +131,6 @@ def _derive(metrics: dict) -> dict:
     return out
 
 
-# ── GA4 ───────────────────────────────────────────────────────────────────────
 def _ga4_types():
     from google.analytics.data_v1beta.types import (
         DateRange, Dimension, Metric, MetricAggregation, OrderBy, RunReportRequest,
@@ -204,9 +139,6 @@ def _ga4_types():
 
 
 def _ga4_call(client, request, property_id: str):
-    """Run one GA4 runReport, classifying failure. PermissionDenied / Unauthenticated
-    are reliable ACCESS signals regardless of transport; every other API error
-    (5xx, 429, unavailable, deadline) and any non-API exception is TRANSPORT."""
     try:
         from google.api_core import exceptions as gax
     except ImportError:
@@ -224,9 +156,6 @@ def _ga4_call(client, request, property_id: str):
 
 
 def _ga4_run_section(client, resource, section, date_range, property_id) -> dict:
-    """Run ONE declarative section as a runReport (splitting into ≤10-metric
-    chunks merged by dimension key to honor the GA4 limit). Returns
-    {dimensions, rows:[{dims, metrics}], totals} with derived metrics applied."""
     DateRange, Dimension, Metric, MetricAggregation, OrderBy, RunReportRequest = _ga4_types()
     dims = section["dimensions"]
     metrics = section["metrics"]
@@ -246,9 +175,6 @@ def _ga4_run_section(client, resource, section, date_range, property_id) -> dict
             date_ranges=[DateRange(start_date=date_range[0], end_date=date_range[1])],
             metric_aggregations=[MetricAggregation.TOTAL],
         )
-        # Order/limit only make sense WITH a dimension; the dimensionless overview
-        # is a single aggregate row. A time-series section orders by its (date)
-        # dimension ascending; everything else orders by its first metric desc.
         if dims and section.get("order_by_dim"):
             kwargs["order_bys"] = [OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name=dims[0]), desc=False)]
         elif dims and chunk:
@@ -275,8 +201,6 @@ def _ga4_run_section(client, resource, section, date_range, property_id) -> dict
 
 
 def _ga4_returning(client, resource, date_range, property_id) -> int:
-    """Returning users via the newVsReturning dimension (GA4 does NOT expose a
-    `returningUsers` metric, and new+returning don't sum to total). 0 when absent."""
     DateRange, Dimension, Metric, MetricAggregation, OrderBy, RunReportRequest = _ga4_types()
     request = RunReportRequest(
         property=resource,
@@ -293,7 +217,6 @@ def _ga4_returning(client, resource, date_range, property_id) -> int:
 
 
 def _ga4_collect(client, resource, date_range, property_id) -> dict:
-    """Run every GA4 section for one date range → {range, sections}."""
     sections = {}
     for sec in GA4_SECTIONS:
         result = _ga4_run_section(client, resource, sec, date_range, property_id)
@@ -304,17 +227,14 @@ def _ga4_collect(client, resource, date_range, property_id) -> dict:
 
 
 def fetch_ga4(property_id, cur_range: tuple[str, str], prev_range: tuple[str, str]) -> dict:
-    """Fetch the report month AND prior month from GA4, returning the frozen-ready
-    structure (incl. previous-vs-current overview deltas). Raises GoogleAccessError /
-    GoogleTransportError on any failure — never a silent {"error": ...}."""
     if not property_id or not str(property_id).strip():
         raise GoogleAccessError("GA4 not configured: this project has no GA4 property id set")
     pid = str(property_id).strip()
     resource = pid if pid.startswith("properties/") else f"properties/{pid}"
 
     try:
-        client = ga._analytics_client()  # reuse the dashboard's service-account auth
-    except Exception as exc:  # bad/missing key content → a setup problem, name it
+        client = ga._analytics_client()
+    except Exception as exc:
         raise GoogleAccessError(f"GA4 credentials could not be loaded for property {pid}: {exc}")
 
     report = _ga4_collect(client, resource, cur_range, pid)
@@ -332,11 +252,7 @@ def fetch_ga4(property_id, cur_range: tuple[str, str], prev_range: tuple[str, st
     }
 
 
-# ── GSC ───────────────────────────────────────────────────────────────────────
 def _gsc_query(service, site_url: str, body: dict) -> list[dict]:
-    """Run one searchanalytics().query(), classifying failure by HTTP status:
-    401/403/400 → ACCESS (fix the grant or the gsc_site_url); 5xx/429/network →
-    TRANSPORT (retry). Returns raw rows (possibly [] — a legitimate empty result)."""
     try:
         from googleapiclient.errors import HttpError
     except ImportError:
@@ -366,8 +282,6 @@ def _gsc_query(service, site_url: str, body: dict) -> list[dict]:
 
 
 def _gsc_collect(service, site_url: str, date_range: tuple[str, str]) -> dict:
-    """Totals (clicks/impressions/CTR/avg position) + the daily trend series for
-    one month → {range, totals, trend}."""
     body = {"startDate": date_range[0], "endDate": date_range[1]}
 
     totals_rows = _gsc_query(service, site_url, dict(body))
@@ -383,16 +297,12 @@ def _gsc_collect(service, site_url: str, date_range: tuple[str, str]) -> dict:
 
 
 def fetch_gsc(site_url, cur_range: tuple[str, str], prev_range: tuple[str, str]) -> dict:
-    """Fetch the report month AND prior month from GSC (totals + daily trend),
-    returning the frozen-ready structure with previous-vs-current totals deltas.
-    Raises GoogleAccessError / GoogleTransportError on any failure."""
     if not site_url or not str(site_url).strip():
         raise GoogleAccessError("GSC not configured: this project has no gsc_site_url set")
     url = str(site_url).strip()
 
-    service, err = scp._build_service()  # reuse the dashboard's service-account auth
+    service, err = scp._build_service()
     if err:
-        # Missing key / build failure — a setup problem, not retryable.
         raise GoogleAccessError(f"GSC could not be initialised for {url}: {err}")
 
     report = _gsc_collect(service, url, cur_range)
@@ -407,10 +317,7 @@ def fetch_gsc(site_url, cur_range: tuple[str, str], prev_range: tuple[str, str])
     }
 
 
-# -- shared --------------------------------------------------------------------
 def _delta(current, previous):
-    """current - previous, or None when either is missing. (For GSC `position` a
-    NEGATIVE delta is an IMPROVEMENT, same rank convention as ranks/Moz.)"""
     if current is None or previous is None:
         return None
     value = current - previous

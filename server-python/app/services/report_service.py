@@ -1,21 +1,3 @@
-"""REPORT SERVICE — the gather → validate → freeze pipeline plus generate/fork.
-
-This is the DATA FOUNDATION for reports. Ranks/Moz/keywords come from data ALREADY
-IN THE DB (the manually-entered keyword_ranks rows for the report month and the
-two before it; the period's moz_metrics row) — generation NEVER makes a live rank
-call, and there is no automated rank checking anywhere in the product. GA4 + GSC are the exception: they are fetched LIVE from Google at generate
-time (see report_google.py) and then FROZEN into the blob, identical in treatment
-to ranks/Moz once gathered. Forking reuses the frozen blob and never re-fetches.
-
-  gather()           assemble the in-memory blob (+ deltas + the backlinks list)
-  validate()         LENIENT yes (always freezable) — missing sources are flagged
-  freeze()           the ONLY writer: blob → data_json, block document → content_json
-  generate()         gather → validate → build block document → freeze (no-dup guard)
-  fork_for_changes() copy a frozen version (data_json + content_json) verbatim
-
-All SQL goes through the db.py bridge (SQLite-dialect, `?` placeholders) so it
-runs on both SQLite and Supabase Postgres.
-"""
 import json
 import sqlite3
 
@@ -28,32 +10,18 @@ from . import report_google
 from . import report_registry as registry
 from . import keyword_rank_service
 
-# Blob schema version — bump if the frozen structure changes so a later reader
-# can branch on it.
 BLOB_SCHEMA_VERSION = 1
 
-# A non-sent version of a report already owns the project+period; generate must
-# not silently make a second. (Sent versions are historical and don't block.)
 UNSENT_STATUSES = ("draft", "in_review")
 
 
-# ── small helpers ─────────────────────────────────────────────────────────────
 def _delta(current, previous):
-    """Raw arithmetic change `current - previous`, or None when either side is
-    missing. Stored as-is: for RANK fields a NEGATIVE delta is an IMPROVEMENT
-    (the position number got smaller); for count fields positive is growth. The
-    render slice interprets direction per field type — we only store the number."""
     if current is None or previous is None:
         return None
     return current - previous
 
 
 def _period_upper_bound(period_key: str) -> str | None:
-    """ "2026-06" -> "2026-07" (exclusive upper bound = first day of next month).
-    Used to pick the Moz row captured at-or-before the period's end: an ISO
-    `fetched_at` string sorts lexicographically, and any "2026-06-..T.." < the
-    "2026-07" bound while any "2026-07-..T.." is not. None if the key isn't the
-    expected YYYY-MM shape (caller then falls back to the latest Moz row)."""
     try:
         y_str, m_str = period_key.split("-")
         y, m = int(y_str), int(m_str)
@@ -66,16 +34,7 @@ def _period_upper_bound(period_key: str) -> str | None:
     return f"{y:04d}-{m:02d}"
 
 
-# ── source pickers (all read-only) ────────────────────────────────────────────
-# _pick_snapshot() removed: snapshots are gone, ranks come from keyword_ranks.
-
-# _pick_prev_snapshot() removed: snapshots are gone, ranks come from keyword_ranks.
-
 def _pick_moz(db, project_id: int, period_key: str):
-    """The Moz row for the period: the latest refresh captured AT OR BEFORE the
-    period's end (fetched_at < first day of next month). Falls back to the
-    latest Moz row overall when the period key isn't YYYY-MM. None if the
-    project has no Moz history at all."""
     bound = _period_upper_bound(period_key)
     if bound is None:
         return db.execute(
@@ -91,8 +50,6 @@ def _pick_moz(db, project_id: int, period_key: str):
 
 
 def _pick_prev_moz(db, project_id: int, moz):
-    """The Moz row immediately BEFORE `moz` — the baseline for DA / link deltas.
-    None if `moz` is the project's first refresh."""
     if moz is None:
         return None
     return db.execute(
@@ -103,7 +60,6 @@ def _pick_prev_moz(db, project_id: int, moz):
     ).fetchone()
 
 
-# ── gather ────────────────────────────────────────────────────────────────────
 def gather(
     db,
     project_id: int,
@@ -113,21 +69,6 @@ def gather(
     ga4_fetch=None,
     gsc_fetch=None,
 ) -> dict:
-    """Assemble the frozen report data: ranks/Moz/keywords from the DB, GA4 + GSC
-    fetched LIVE from Google for the report month AND prior month, then folded into
-    the same in-memory structure that gets frozen. Computes month-over-month deltas
-    now (DA, per-keyword rank, GA4 overview, GSC totals) so they're stored, not
-    recomputed at render time. Writes NOTHING.
-
-    The returned dict carries the `blob` plus presence flags + per-source outcomes
-    validate() reads to tell "legitimately empty" (freeze it) from "absent /
-    access-failed / transport-failed" (fail, with the specific reason). 404 if the
-    project doesn't exist.
-
-    `now` (for the maturation guard) and `ga4_fetch`/`gsc_fetch` are injectable for
-    testing; production uses the real clock and report_google fetchers."""
-    # Resolve the live fetchers at call time (so tests can monkeypatch them on
-    # report_google); production uses the real GA4/GSC fetchers.
     ga4_fetch = ga4_fetch or report_google.fetch_ga4
     gsc_fetch = gsc_fetch or report_google.fetch_gsc
 
@@ -135,30 +76,14 @@ def gather(
     if project is None:
         raise HTTPException(404, "Project not found.")
 
-    # Default the month server-side (same convention as snapshot_service).
     if not period_key:
         (period_key,) = db.execute("SELECT strftime('%Y-%m','now')").fetchone()
 
-    # The rank columns are LABELLED with specific calendar months ("Rank · May
-    # 2026"), so each one's data must come from THAT month — never from "the most
-    # recent entry", which would silently put one month's numbers under another
-    # month's heading.
     prev_period = report_google.previous_period(period_key)
     prev2_period = report_google.previous_period(prev_period)
     moz = _pick_moz(db, project_id, period_key)
     prev_moz = _pick_prev_moz(db, project_id, moz)
 
-    # ── ranks + keywords: THREE MONTHS of manually-entered positions ───────────
-    # Read straight from keyword_ranks (the Keywords grid), one lookup per month.
-    # This replaced the snapshots/snapshot_ranks pair: a snapshot existed to
-    # freeze the output of an automated check, and with the numbers typed in by
-    # hand the month itself is the freeze.
-    #
-    # The section is present whenever the project has keywords at all — NOT only
-    # when the current month has data. Under snapshots, a month that was never
-    # snapshotted made the whole keyword section unavailable; now an unfilled
-    # month renders as blank cells under the right heading, which is the honest
-    # representation and keeps the three-month layout intact.
     kw_rows = db.execute(
         "SELECT id, term FROM keywords WHERE project_id = ? ORDER BY created_at, id",
         (project_id,),
@@ -172,12 +97,6 @@ def gather(
         prev2_m = keyword_rank_service.ranks_for_month(db, project_id, prev2_period)
 
         def _rank_of(maps, kw_id, term):
-            """This keyword's rank in one month, or None when not recorded.
-
-            Matches on keyword_id FIRST so a keyword survives being renamed, then
-            falls back to the term so it survives being deleted and re-added under
-            a new id. Same belt-and-braces the snapshot reader used.
-            """
             if kw_id in maps["by_keyword_id"]:
                 return maps["by_keyword_id"][kw_id]
             return maps["by_term"].get(term)
@@ -192,13 +111,11 @@ def gather(
             keyword_items.append({
                 "term": term,
                 "current_rank": cur,
-                "previous_rank": prev,             # None = that month not recorded
+                "previous_rank": prev,
                 "previous2_rank": prev2,
-                "rank_delta": _delta(cur, prev),   # current - previous (negative = improved)
+                "rank_delta": _delta(cur, prev),
             })
 
-        # Ranked keywords first (best first), then the unrecorded ones — the same
-        # order the snapshot query produced with "ORDER BY rank IS NULL, rank, term".
         order = lambda it: (it["current_rank"] is None, it["current_rank"] or 0, it["term"])
         rank_items.sort(key=lambda it: (it["rank"] is None, it["rank"] or 0, it["term"]))
         keyword_items.sort(key=order)
@@ -216,7 +133,6 @@ def gather(
             "items": keyword_items,
         }
 
-    # ── moz (with deltas vs the previous refresh) ─────────────────────────────
     moz_section = None
     if moz is not None:
         da, ld, il = moz["domain_authority"], moz["linking_domains"], moz["inbound_links"]
@@ -239,34 +155,18 @@ def gather(
             },
         }
 
-    # ── GA4 + GSC (fetched LIVE from Google, then frozen) ─────────────────────
-    # The SELECTED month drives WHICH month is fetched (report_window); `now` only
-    # clamps the end of a still-open current month. A complete past month is the
-    # full calendar month, INVARIANT to today.
     prev_period = report_google.previous_period(period_key)
     cur_range = report_google.report_window(period_key, now)
     prev_range = report_google.month_bounds(prev_period)
     period_complete = report_google.period_is_complete(period_key, now)
     period_started = report_google.period_has_started(period_key, now)
-    # The current, in-progress month: it has BEGUN but not yet matured. Generation
-    # proceeds (lenient) and the report is FLAGGED as covering an incomplete month —
-    # it is NOT blocked. A completed past month has this False (unchanged behavior).
     period_in_progress = period_started and not period_complete
 
     ga4_section = None
     gsc_section = None
-    # outcome: {"ok", "reason", "status"} — under LENIENT generation no outcome is
-    # fatal; the reason becomes a "not available for this period" flag on the
-    # rendered section (status is retained for diagnostics / a future retry hint).
     future_reason = (
         f"period {period_key} hasn't started yet — there is no data to report."
     )
-    # GA4/GSC are fetched for any month that has STARTED (current or past),
-    # INDEPENDENT of whether a snapshot/Moz row exists — generation always produces
-    # a full report and any source we can't fill is flagged, never fatal. The
-    # current month fetches its range up to today and is flagged in-progress (data
-    # still maturing), never blocked. Only a FUTURE month (no data yet) skips the
-    # fetch. A fetch error (access/transport) is classified by _fetch_section, too.
     if not period_started:
         ga4_outcome = {"ok": False, "reason": future_reason, "status": 422}
         gsc_outcome = {"ok": False, "reason": future_reason, "status": 422}
@@ -278,9 +178,6 @@ def gather(
             gsc_fetch, project["gsc_site_url"], cur_range, prev_range, registry.SOURCE_GSC
         )
 
-    # ── backlinks (NEW for this slice): the period's new-backlinks LIST, pulled
-    # additively from the backlinks table (same YYYY-MM key). A plain DB read that
-    # always succeeds; an empty month is "no new backlinks", not an error.
     backlinks_data = backlink_service.backlinks_for_month(db, project_id, period_key)
     backlinks_section = {
         "source": "backlinks",
@@ -289,19 +186,6 @@ def gather(
         "items": [{"url": u} for u in backlinks_data["urls"]],
     }
 
-    # ── posts (blog + LinkedIn content links): a plain per-project DB read that
-    # always succeeds (an empty list is "none added", not an error).
-    #
-    # SCOPED TO THIS PERIOD, like backlinks above. This query previously had no
-    # month filter, so every report listed every post the project had ever had —
-    # which read as "a month with no blogs is pulling in another month's". An
-    # empty month must render as "none added", never as a neighbour's content.
-    #
-    # COALESCE(month, substr(created_at, 1, 7)) mirrors the posts router's _row():
-    # `month` is NULL on rows created before the column existed, and those fall
-    # back to the month they were created in. Both functions behave identically on
-    # SQLite and Postgres, and created_at is "YYYY-MM-DD HH:MM:SS" on both, so
-    # substr(1, 7) yields "YYYY-MM".
     post_rows = db.execute(
         "SELECT kind, url, title FROM posts"
         " WHERE project_id = ? AND COALESCE(month, substr(created_at, 1, 7)) = ?"
@@ -324,21 +208,10 @@ def gather(
             "domain": project["domain"],
             "location_code": project["location_code"],
         },
-        # Kept as NULL: the column still exists on report_version (it pointed at
-        # the snapshot whose ranks were frozen in), but there are no snapshots any
-        # more — the ranks come from keyword_ranks.
         "rank_snapshot_id": None,
         "period_complete": period_complete,
-        # True for the current, in-progress month: data is partial and still
-        # maturing. The block document surfaces this as a header notice.
         "period_in_progress": period_in_progress,
-        # Per-section presence + a human reason when ABSENT. Under lenient
-        # generation a `present: False` source is NOT fatal — the reason is shown
-        # as a "not available for this period" flag on the rendered block.
         "sources": {
-            # Present whenever the project HAS keywords. A month with no ranks
-            # entered yet is not "unavailable" — it renders as blank cells under
-            # the right month heading, which is what the team then fills in.
             "ranks":     {"present": ranks_section is not None,
                           "reason": None if ranks_section is not None else "no keywords added for this project yet"},
             "keywords":  {"present": keywords_section is not None,
@@ -356,8 +229,8 @@ def gather(
             "ranks": ranks_section,
             "keywords": keywords_section,
             "moz": moz_section,
-            "ga4": ga4_section,   # live-fetched + frozen (None when the fetch failed)
-            "gsc": gsc_section,   # live-fetched + frozen (None when the fetch failed)
+            "ga4": ga4_section,
+            "gsc": gsc_section,
             "backlinks": backlinks_section,
             "posts": posts_section,
         },
@@ -379,11 +252,6 @@ def gather(
 
 
 def _fetch_section(fetch, target, cur_range, prev_range, source) -> tuple[dict | None, dict]:
-    """Run one live Google fetch, classifying the outcome into the three cases.
-    Returns (section_dict_or_None, outcome). SUCCESS (incl. a legitimate empty/
-    zero result) → the section + ok outcome; GoogleAccessError → 422 (fix access);
-    GoogleTransportError → 503 (retryable). The specific reason naming the API +
-    property is carried straight from the exception."""
     try:
         section = fetch(target, cur_range, prev_range)
         section["source"] = source
@@ -393,34 +261,12 @@ def _fetch_section(fetch, target, cur_range, prev_range, source) -> tuple[dict |
         return None, {"ok": False, "reason": exc.reason_text(), "status": status}
 
 
-# ── validate ──────────────────────────────────────────────────────────────────
 def validate(gathered: dict) -> tuple[bool, str | None, int]:
-    """LENIENT validation. Always returns (True, None, 200): a report is ALWAYS
-    freezable. Data-presence problems are NOT failures any more — a missing
-    snapshot / Moz row / GA4 / GSC, or an immature (incomplete) month, are recorded
-    as per-source presence flags + reasons in the blob (blob["sources"]) and
-    surface as "not available for this period" flags on the rendered block document,
-    never a 422/503.
-
-    (This replaces the prior STRICT behavior that 422'd on any missing source and
-    503'd on a GA4/GSC transport blip.) The only genuinely blocking guards live
-    elsewhere and are NOT about data presence: project-not-found 404 (raised in
-    gather) and the duplicate-unsent-version 409 (raised in generate).
-
-    Kept as an explicit step so the gather → validate → freeze shape is unchanged;
-    it is the surgical seam where leniency lives."""
     return True, None, 200
 
 
-# ── freeze (the only writer) ──────────────────────────────────────────────────
 def freeze(db, gathered: dict, user_id: int, content: dict | None = None,
            parent_version_id: int | None = None) -> int:
-    """Serialise the gathered blob into a NEW report_version row (status 'draft',
-    frozen_at set, rank_snapshot_id recorded) and return its id. data_json is the
-    FROZEN immutable data; content_json is the EDITABLE block document seeded from
-    it (`content`) — no longer empty. ONLY call after validate() — freeze never
-    re-validates. `frozen_at` uses datetime('now') (bridge-translated) so it
-    matches house timestamp text on both backends; created_at takes its default."""
     data_json = json.dumps(gathered["blob"])
     content_json = json.dumps(content if content is not None else {})
     cur = db.execute(
@@ -441,21 +287,7 @@ def freeze(db, gathered: dict, user_id: int, content: dict | None = None,
     return cur.lastrowid
 
 
-# ── operations ────────────────────────────────────────────────────────────────
 def generate(db, project_id: int, period_key: str | None, user_id: int) -> dict:
-    """Generate a fresh frozen version for a project+period: gather → validate →
-    build block document → freeze. LENIENT: a report is always produced even when
-    a data source is missing (each absent source is flagged in the document, not
-    fatal). content_json is populated with the full block document seeded from the
-    frozen data_json. Enforces the no-duplicate rule in code: if a non-sent
-    (draft/in_review) version already exists for this project+period, returns 409
-    rather than silently making a second — use fork_for_changes to iterate instead.
-
-      404 unknown project · 409 unsent version already exists
-    (no more data-presence 422s / transport 503s — those are now flags).
-    """
-    # Resolve the period up front so the duplicate check runs BEFORE any live
-    # Google fetch — a known conflict must not spend GA4/GSC API calls.
     period = period_key
     if not period:
         (period,) = db.execute("SELECT strftime('%Y-%m','now')").fetchone()
@@ -472,8 +304,6 @@ def generate(db, project_id: int, period_key: str | None, user_id: int) -> dict:
             f"an unsent report for {period} exists; use changes to fork it.",
         )
 
-    # No conflict → gather (this is where GA4/GSC are fetched live), validate
-    # (lenient — always passes), then build + freeze the block document.
     gathered = gather(db, project_id, period)
     ok, reason, status = validate(gathered)
     if not ok:
@@ -485,17 +315,6 @@ def generate(db, project_id: int, period_key: str | None, user_id: int) -> dict:
 
 
 def delete_version(db, version_id: int) -> dict:
-    """HARD-delete a report version (irreversible row removal). Allowed for ANY
-    status — draft, in_review, AND sent — per the product decision; the role gate
-    (DELETER_ROLES: Super Admin / Admin) is enforced on the endpoint. 404 if the
-    version doesn't exist.
-
-    Lineage is safe: report_version.parent_version_id REFERENCES report_version(id)
-    ON DELETE SET NULL on BOTH backends, so deleting a FORK PARENT neither errors
-    nor orphans its children — each child's parent_version_id is set NULL by the FK
-    while its frozen data_json/content_json stay intact. SQLite honors this because
-    get_db opens the connection with PRAGMA foreign_keys = ON; Postgres enforces FKs
-    unconditionally. One row is removed via DELETE — no schema/DDL change."""
     row = db.execute(
         "SELECT id, status FROM report_version WHERE id = ?", (version_id,)
     ).fetchone()
@@ -506,13 +325,6 @@ def delete_version(db, version_id: int) -> dict:
 
 
 def fork_for_changes(db, version_id: int, user_id: int) -> dict:
-    """"Changes" == same frozen data, new editable file. Create a NEW
-    report_version that COPIES the source's data_json AND content_json verbatim
-    (forking never re-gathers or re-fetches — the data stays frozen), status
-    'draft', parent_version_id = source id. The source row is untouched.
-
-      404 if the source version doesn't exist.
-    """
     src = db.execute("SELECT * FROM report_version WHERE id = ?", (version_id,)).fetchone()
     if src is None:
         raise HTTPException(404, "Report version not found.")
@@ -526,8 +338,8 @@ def fork_for_changes(db, version_id: int, user_id: int) -> dict:
             src["project_id"],
             src["period_key"],
             src["id"],
-            src["data_json"],     # frozen data copied verbatim
-            src["content_json"],  # editable layer copied verbatim
+            src["data_json"],
+            src["content_json"],
             src["rank_snapshot_id"],
             user_id,
         ),
@@ -535,11 +347,7 @@ def fork_for_changes(db, version_id: int, user_id: int) -> dict:
     return get_version(db, cur.lastrowid, include_data=True)
 
 
-# ── reads / shaping ───────────────────────────────────────────────────────────
 def version_to_dict(row, include_data: bool = False) -> dict:
-    """One report_version row → the camelCase shape the API returns (matching the
-    rest of the app). data_json/content_json are parsed back to objects only
-    when include_data is set (the list view omits the heavy blob)."""
     out = {
         "id": row["id"],
         "projectId": row["project_id"],
@@ -558,8 +366,6 @@ def version_to_dict(row, include_data: bool = False) -> dict:
 
 
 def get_version(db, version_id: int, include_data: bool = False) -> dict:
-    """Fetch a single version (404 if missing). include_data returns the frozen
-    data_json + content_json blobs for inspection."""
     row = db.execute("SELECT * FROM report_version WHERE id = ?", (version_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "Report version not found.")
@@ -567,7 +373,6 @@ def get_version(db, version_id: int, include_data: bool = False) -> dict:
 
 
 def list_versions(db, project_id: int) -> list[dict]:
-    """All versions for a project, newest first — metadata only (no blob)."""
     rows = db.execute(
         "SELECT * FROM report_version WHERE project_id = ?"
         " ORDER BY created_at DESC, id DESC",
@@ -576,11 +381,7 @@ def list_versions(db, project_id: int) -> list[dict]:
     return [version_to_dict(r) for r in rows]
 
 
-# ── content editor support (this slice) ───────────────────────────────────────
 def available_blobs(db, version_id: int) -> list[dict]:
-    """The SCALAR blobs an author can insert into this version, resolved from its
-    FROZEN data_json (single source for the palette AND the live preview). 404 if
-    the version doesn't exist. No live fetch — frozen values only."""
     row = db.execute(
         "SELECT data_json FROM report_version WHERE id = ?", (version_id,)
     ).fetchone()
@@ -591,12 +392,6 @@ def available_blobs(db, version_id: int) -> list[dict]:
 
 
 def template_blocks(db, version_id: int) -> list[dict]:
-    """The canonical TEMPLATE blocks for this version, rebuilt from its FROZEN
-    data_json (NOT from the possibly-edited content_json). The editable document
-    uses this to RE-ADD a template section the author removed — a removed GA4
-    table / metric grid / backlinks list can be brought back because the data is
-    still in data_json. Read-only; no live fetch; data_json untouched. 404 if the
-    version doesn't exist."""
     row = db.execute(
         "SELECT data_json FROM report_version WHERE id = ?", (version_id,)
     ).fetchone()
@@ -607,14 +402,6 @@ def template_blocks(db, version_id: int) -> list[dict]:
 
 
 def save_content(db, version_id: int, content: dict, user_id: int) -> dict:
-    """Persist the editor's document into content_json. DRAFT-ONLY: a version in
-    'in_review' or 'sent' is LOCKED — 409 if a write is attempted (enforces the
-    "locked once submitted" rule at the data layer, even though submit isn't built
-    yet). 404 if the version doesn't exist.
-
-    `content` is the editor's structured document (TipTap/ProseMirror JSON: prose
-    + atomic blob references carrying {name, kind, format}) — NOT rendered HTML —
-    so reopening restores chips with their formats and resolution stays dynamic."""
     row = db.execute(
         "SELECT status FROM report_version WHERE id = ?", (version_id,)
     ).fetchone()

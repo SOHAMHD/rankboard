@@ -1,18 +1,9 @@
-/* Reusable "Send report" control for a report version.
-
-   Opens a modal where the author adds N recipient email addresses (as chips),
-   an optional subject + message, then sends. The backend
-   (POST /api/reports/{id}/send) renders the PDF once and emails it to every
-   recipient, returning a per-recipient delivery result so we can report partial
-   success. Like DownloadPdfButton, an optional `beforeSend` hook runs first so
-   unsaved editor edits are persisted before the PDF is rendered server-side. */
 import { useState } from "react";
 import { Send, LoaderCircle, X, Plus, Mail } from "lucide-react";
 import { api } from "../api";
 import { BTN_PRIMARY, BTN_GHOST, INPUT_CLS } from "../ui";
 import { useToast } from "../toast.jsx";
 
-// Same loose check the backend uses — catch obvious typos before sending.
 function isEmail(s) {
   const v = (s || "").trim();
   if (!v || (v.match(/@/g) || []).length !== 1) return false;
@@ -23,14 +14,14 @@ function isEmail(s) {
 export default function SendReportButton({
   versionId,
   periodKey,
-  label = false, // true → text button (editor headers); false → icon-only (list rows)
+  label = false,
   className = "",
-  beforeSend, // optional async hook (e.g. save the draft) run before the send
-  onSent, // optional callback(result) after a successful send
+  beforeSend,
+  onSent,
 }) {
   const [open, setOpen] = useState(false);
-  const [emails, setEmails] = useState([]); // confirmed recipient chips
-  const [draft, setDraft] = useState(""); // the text currently being typed
+  const [emails, setEmails] = useState([]);
+  const [draft, setDraft] = useState("");
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
@@ -51,8 +42,6 @@ export default function SendReportButton({
     reset();
   };
 
-  // Commit the typed text (or a pasted, comma/space/newline-separated list) into
-  // chips. Silently drops blanks and exact duplicates; flags malformed ones.
   const commitDraft = (text = draft) => {
     const parts = text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
     if (parts.length === 0) return;
@@ -88,7 +77,6 @@ export default function SendReportButton({
   };
 
   const send = async () => {
-    // Fold any half-typed address in the box into the list before sending.
     const pending = draft.trim();
     let recipients = emails;
     if (pending) {
@@ -172,7 +160,6 @@ export default function SendReportButton({
               </button>
             </div>
 
-            {/* Recipients: chip list + a free-typing input */}
             <label className="block text-xs font-medium text-stone-600 mt-4 mb-1">
               Recipients
             </label>
@@ -207,7 +194,6 @@ export default function SendReportButton({
               Press Enter, comma, or space to add each address. Add as many as you like.
             </p>
 
-            {/* Optional subject + message */}
             <label className="block text-xs font-medium text-stone-600 mt-3 mb-1">
               Subject <span className="text-stone-400 font-normal">(optional)</span>
             </label>

@@ -1,8 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   PEOPLE (ADMIN PANEL) — reachable from the top bar by anyone whose
-   permissions include manageUsers (today: Super Admin only). The
-   server gates every /api/users route with the same permission.
-   ════════════════════════════════════════════════════════════════════ */
 import { Fragment, useEffect, useState } from "react";
 import {
   Check,
@@ -35,9 +30,7 @@ export function AdminPanelView({ user, onBack, onLogout }) {
   const [showWizard, setShowWizard] = useState(false);
   const [emailModal, setEmailModal] = useState(null);
   const [confirmId, setConfirmId] = useState(null);
-  const [manageUser, setManageUser] = useState(null); // Team member / Client whose projects are edited
-  // Super Admin gets the full panel; Admin (assignProjects only) gets an
-  // assign-projects-only view — no onboard/delete/role controls.
+  const [manageUser, setManageUser] = useState(null);
   const canManage = can(user, "manageUsers");
 
   const refresh = async () => {
@@ -75,9 +68,6 @@ export function AdminPanelView({ user, onBack, onLogout }) {
     }
   };
 
-  // Resending always issues a NEW temp password and invalidates the old one. For
-  // someone still "invited" that's harmless (they never set one). For an ACTIVE
-  // account it breaks the password they chose, so confirm before calling.
   const resendInvite = async (u) => {
     if (
       u.status === "active" &&
@@ -92,7 +82,7 @@ export function AdminPanelView({ user, onBack, onLogout }) {
     }
     try {
       const d = await api(`/users/${u.id}/resend-invite`, { method: "POST" });
-      setEmailModal(d.email); // contains the NEW temp password
+      setEmailModal(d.email);
     } catch (err) {
       setError(err.message);
     }
@@ -276,10 +266,6 @@ export function AdminPanelView({ user, onBack, onLogout }) {
   );
 }
 
-/* ── Shared project picker: a scrollable checkbox list of projects.
-   Reused by the onboarding wizard and the "Manage projects" modal so the
-   two stay visually identical. `selected` is a Set of project ids. ── */
-
 function ProjectChecklist({ projects, selected, onToggle, loading }) {
   if (loading) {
     return (
@@ -302,17 +288,8 @@ function ProjectChecklist({ projects, selected, onToggle, loading }) {
         return (
           <label
             key={p.id}
-            /* `relative` is REQUIRED, not decorative. The input below is
-               `sr-only`, which is `position:absolute; margin:-1px; clip:...`.
-               Without a positioned ancestor it resolves against a container far
-               up the tree, so (a) focusing it on click made the browser scroll
-               that distant box into view — the "jumps to the bottom" bug — and
-               (b) its escaped, negatively-margined box inflated this list's
-               scroll height, producing a scrollbar with nothing to scroll to.
-               Positioning the row pins the input inside its own row. */
             className="relative flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-stone-50 transition-colors"
           >
-            {/* Native control kept for keyboard/AT; the square below is the visual. */}
             <input
               type="checkbox"
               checked={checked}
@@ -336,10 +313,6 @@ function ProjectChecklist({ projects, selected, onToggle, loading }) {
     </div>
   );
 }
-
-/* ── Manage projects: edit an existing client's assignments. Loads all
-   projects, pre-checks the client's current set (from GET /api/users), and
-   PATCHes the chosen set as a full replacement. ── */
 
 function ManageProjectsModal({ user, onClose, onSaved }) {
   const [projects, setProjects] = useState([]);
@@ -404,10 +377,6 @@ function ManageProjectsModal({ user, onClose, onSaved }) {
   );
 }
 
-/* ── Onboarding wizard: add person → choose role → [Client: pick
-   projects] → send invite. The project step is inserted into the flow
-   only when the chosen role is "Client". ── */
-
 const STEP_LABELS = {
   details: "Details",
   role: "Role",
@@ -416,25 +385,23 @@ const STEP_LABELS = {
 };
 
 function OnboardWizard({ onClose, onCreated }) {
-  const [step, setStep] = useState("details"); // details | role | projects | review | sent
+  const [step, setStep] = useState("details");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("Team");
   const [projects, setProjects] = useState([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
-  const [selected, setSelected] = useState(new Set()); // project ids
+  const [selected, setSelected] = useState(new Set());
   const [sentEmail, setSentEmail] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  // Load the project list once up front so the Client step is instant.
   useEffect(() => {
     (async () => {
       try {
         const d = await api("/projects");
         setProjects(d.projects);
       } catch {
-        // Non-fatal: the picker simply shows "no projects" on failure.
       } finally {
         setProjectsLoading(false);
       }
@@ -442,7 +409,6 @@ function OnboardWizard({ onClose, onCreated }) {
   }, []);
 
   const isScoped = role === "Client" || role === "Team";
-  // The project step only exists in the Client flow.
   const flow = isScoped ? ["details", "role", "projects", "review"] : ["details", "role", "review"];
   const stepIndex = flow.indexOf(step);
 
@@ -471,7 +437,6 @@ function OnboardWizard({ onClose, onCreated }) {
           name: name.trim(),
           email: email.trim(),
           role,
-          // Scoped roles (Team + Client) carry assignments; global roles send none.
           project_ids: isScoped ? [...selected] : [],
         },
       });
@@ -665,9 +630,6 @@ function OnboardWizard({ onClose, onCreated }) {
   );
 }
 
-/* Renders an email record as the server composed it. NOTE: the From line is
-   hardcoded below and must be kept in step with EMAIL_FROM in server-python/.env
-   — it is not returned by the API. */
 export function EmailPreview({ email }) {
   return (
     <div className="rounded-xl border border-stone-200 overflow-hidden">

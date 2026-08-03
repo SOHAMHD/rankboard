@@ -36,7 +36,6 @@ class PostIn(BaseModel):
 @router.get("/{project_id}/posts", dependencies=[Depends(require_project_access)])
 def list_posts(project_id: int, kind: str | None = None, month: str | None = None,
                db: sqlite3.Connection = Depends(get_db)):
-    """A project's posts, newest first. Optional kind and month filters."""
     if kind is not None and kind not in _KINDS:
         raise HTTPException(400, "Unknown post kind.")
     if month is not None and not _MONTH_RE.match(month):
@@ -47,10 +46,6 @@ def list_posts(project_id: int, kind: str | None = None, month: str | None = Non
         clauses.append("kind = ?")
         params.append(kind)
     if month:
-        # Match the NULL fallback _row() uses (and the report gather): a row
-        # created before the `month` column existed belongs to the month it was
-        # created in. A bare `month = ?` would make those rows invisible to every
-        # month filter while still showing an inferred month in the response.
         clauses.append("COALESCE(month, substr(created_at, 1, 7)) = ?")
         params.append(month)
     where = " AND ".join(clauses)

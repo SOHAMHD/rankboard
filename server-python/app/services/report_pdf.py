@@ -1,38 +1,3 @@
-"""REPORT PDF — HTML→PDF render of a generated report version (headless Chrome).
-
-FULL TEMPLATE SLICE: renders the COMPLETE multi-page monthly SEO report — cover,
-table of contents, progress summary + key-metrics, achievements, Moz authority,
-the GA4 audience grid + eight GA4 data tables, the GSC performance grid + daily
-trend chart, the keyword-rankings table (green/red change cells), the numbered
-backlinks list, and the targets / strategy narrative pages — with Poppins
-embedded, the brand palette, a running footer on every page and page numbering.
-It EXTENDS the proof slice: the working Playwright render_pdf() is reused as-is.
-
-INPUT: the report_version block document (content_json, type "report_document")
-plus its frozen data_json — exactly what report_service.get_version(include_data=
-True) returns ({"content": ..., "data": ...}). Values are taken from the already-
-seeded content blocks; nothing is re-fetched and nothing is stored.
-
-ENGINE: Playwright + Chromium. The endpoint that calls render_pdf() is a SYNC
-FastAPI handler, so FastAPI runs it in a worker thread (no asyncio loop) and the
-Playwright SYNC API is safe to use.
-
-ASSETS (server-python/app/assets/, embedded as base64 data URIs so set_content
-has no external file deps):
-  • "2rd Logo In HD Format PNG.png" — the fixed InfyApp agency logo (cover + top
-    bars). Brand colours sampled from it: blue #0066a8, charcoal #424242.
-  • Poppins-{Regular,Medium,SemiBold,Bold,Light}.ttf — embedded via @font-face.
-
-PAGINATION: the template PRE-PAGINATES — long sections (GA4 tables, the keyword
-table, the backlinks list) are split into fixed-size page chunks in Python, so
-every emitted ``.page`` is exactly one physical A4 page. That gives deterministic,
-correctly-numbered pages and a clean table of contents without relying on the
-browser's flow breaks. @page is margin:0 (full-bleed cover); each page paints its
-own footer band.
-
-Missing/ungathered sections (available is False) render a clean "not available
-for this period" panel — never a blank page or a broken layout.
-"""
 import base64
 import html
 import re
@@ -43,38 +8,34 @@ from pathlib import Path
 
 _ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
-# ── Brand palette (matched to the "May 2026" reference design in assets/) ──────
-_BLUE = "#5980a6"          # brand blue (ellipses / arrows / dots)
-_BLUE_HEAD = "#5980a6"     # big section headings (the reference azure)
-_BLUE_DARK = "#4a6d90"     # sub-accents
-_BLUE_DEEP = "#0a2540"     # TOC hero gradient end
-_BLUE_TINT = "#eef2f7"     # table header / soft fills
-_BLUE_TINT2 = "#f8fafb"    # zebra stripe
-_CHARCOAL = "#424242"      # logo charcoal
-_INK = "#2a2f36"           # body text
-_BODY = "#1d1f20"          # body text
-_MUTED = "#8a8a8d"         # secondary text
-_GA = "#3a3f45"            # justified narrative grey
-_BORDER = "#e4e4e6"        # hairlines
-_BG_SOFT = "#f5f7f9"       # card fill
-_GREEN = "#15b41f"         # improvement
+_BLUE = "#5980a6"
+_BLUE_HEAD = "#5980a6"
+_BLUE_DARK = "#4a6d90"
+_BLUE_DEEP = "#0a2540"
+_BLUE_TINT = "#eef2f7"
+_BLUE_TINT2 = "#f8fafb"
+_CHARCOAL = "#424242"
+_INK = "#2a2f36"
+_BODY = "#1d1f20"
+_MUTED = "#8a8a8d"
+_GA = "#3a3f45"
+_BORDER = "#e4e4e6"
+_BG_SOFT = "#f5f7f9"
+_GREEN = "#15b41f"
 _GREEN_BG = "#e3f7e5"
-_RED = "#e0362c"           # decline
+_RED = "#e0362c"
 _RED_BG = "#fdecea"
 
-# Contact block on the closing "Thank you" page (the InfyApp agency's own details).
 _AGENCY_PHONE = "+91 7304 5050 68"
 _AGENCY_EMAIL = "info@infyappdevelopment.com"
 _AGENCY_SITE = "infyappdevelopment.com"
 _AGENCY_ADDR = "211, Lotus Business Park, Rambaugh Lane,\n Next to Chincholi Signal Petrol Pump,\nMalad West - 400064"
 
-# How many rows/items fit on one physical page for each long section.
 _TABLE_ROWS_PER_PAGE = 20
 _KEYWORD_ROWS_PER_PAGE = 22
 _BACKLINKS_PER_PAGE = 30
 
 
-# ── asset embedding (cached; read once per process) ───────────────────────────
 @lru_cache(maxsize=None)
 def _data_uri(filename: str, mime: str) -> str:
     raw = (_ASSETS / filename).read_bytes()
@@ -83,18 +44,11 @@ def _data_uri(filename: str, mime: str) -> str:
 
 @lru_cache(maxsize=1)
 def _logo_uri() -> str:
-    # Use the tightly-cropped logo (whitespace trimmed) so it fills its box under
-    # object-fit:contain and renders at the SAME visual size as the client logo.
-    # The original "2rd Logo In HD Format PNG.png" is a huge square with lots of
-    # padding, which made the mark appear much smaller than the client's logo.
     return _data_uri("infapp-logo-trimmed.png", "image/png")
 
 
 @lru_cache(maxsize=1)
 def _toc_hero_uri():
-    """The Table-of-Contents banner image, if the user dropped one into assets as
-    seo-hero.(png|jpg|jpeg|webp). Returns None when absent so the TOC falls back to
-    the built-in gradient banner."""
     for name, mime in (("seo-hero.png", "image/png"), ("seo-hero.jpg", "image/jpeg"),
                        ("seo-hero.jpeg", "image/jpeg"), ("seo-hero.webp", "image/webp")):
         if (_ASSETS / name).exists():
@@ -104,14 +58,11 @@ def _toc_hero_uri():
 
 @lru_cache(maxsize=1)
 def _wave_uri():
-    """The cover accent band image (assets/wave.png), embedded as a data URI.
-    Returns None when absent so the cover simply omits the band."""
     return _data_uri("wave.png", "image/png") if (_ASSETS / "wave.png").exists() else None
 
 
 @lru_cache(maxsize=1)
 def _font_face_css() -> str:
-    """@font-face rules embedding the Poppins weights actually used."""
     weights = [
         ("Poppins-Light.ttf", 300),
         ("Poppins-Regular.ttf", 400),
@@ -131,15 +82,11 @@ def _font_face_css() -> str:
     return "".join(faces)
 
 
-# ── decorative motifs (match the reference cover / thank-you pages) ────────────
 import math  # noqa: E402  (local to the decorative helpers below)
 
 
 @lru_cache(maxsize=8)
 def _halftone_dots(big: str = "left") -> str:
-    """Inner <circle>s of a halftone disc: dots large on one side, fading to tiny
-    on the other. `big`='left' → dense/large toward the left edge (used dense-left
-    or dense-right by flipping)."""
     R, step, rmin, rmax = 150, 9, 0.4, 3.6
     out = []
     x = -R
@@ -188,8 +135,6 @@ def _ordinal(n: int) -> str:
 
 
 def _period_range_label(period_key: str, period_label: str) -> str:
-    """"2026-05" → "1st May 2026 - 31st May 2026" (the footer range on the
-    reference). Falls back to period_label when the key isn't a YYYY-MM."""
     try:
         import calendar
         y_s, m_s = str(period_key).split("-")
@@ -203,24 +148,11 @@ def _period_range_label(period_key: str, period_label: str) -> str:
         return period_label or ""
 
 
-# ── value / delta formatting (mirrors client lib/blobFormats.js defaults) ─────
 def _num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _human_duration(seconds, signed: bool = False) -> str:
-    """Seconds -> "45s" / "1m 5s" / "2m". Under a minute stays in seconds; at a
-    minute or more it switches to minutes, and the trailing "0s" is dropped so a
-    round two minutes reads "2m" rather than "2m 0s".
-
-    Mirrors the frontend's formatEngagement() in Dashboard.jsx and the "auto"
-    duration format in lib/blobFormats.js — the three must agree or the same
-    figure reads differently on screen and in the PDF.
-
-    `signed` prefixes a "+" on positives (for deltas); negatives already carry
-    their own "-", and the minutes/seconds split is done on the ABSOLUTE value so
-    -65 renders "-1m 5s" and not "-1m -5s".
-    """
     total = int(round(abs(seconds)))
     minutes, secs = divmod(total, 60)
     if minutes == 0:
@@ -234,8 +166,6 @@ def _human_duration(seconds, signed: bool = False) -> str:
 
 
 def _fmt_value(type_: str, v) -> str:
-    """Default per-type display (matches blobFormats default format ids). PERCENT
-    values are stored as FRACTIONS (0–1) so they're ×100 for display."""
     if not _num(v):
         return "—"
     try:
@@ -253,15 +183,11 @@ def _fmt_value(type_: str, v) -> str:
 
 
 def _fmt_delta(type_: str, d):
-    """(text, tone) for a delta. RANK is lower-is-better (negative = improvement);
-    everything else: positive = growth. tone ∈ {up, down, flat} drives the color.
-    The convention is intentional: ranks are stored current−previous, so a
-    NEGATIVE rank delta means the position number dropped → improved → green."""
     if not _num(d) or d == 0:
         return ("—", "flat")
     improved = (d < 0) if type_ == "rank" else (d > 0)
     tone = "up" if improved else "down"
-    s = "+" if d > 0 else ""  # negatives already carry "-"
+    s = "+" if d > 0 else ""
     if type_ == "count":
         text = f"{s}{round(d):,}"
     elif type_ == "duration":
@@ -269,9 +195,6 @@ def _fmt_delta(type_: str, d):
     elif type_ == "percent":
         text = f"{s}{round(d * 100, 2)}%"
     elif type_ == "rank":
-        # CSS-drawn triangle, not "▲"/"▼" (U+25B2/25BC): those glyphs are absent
-        # from Barlow and from the default font set on a bare Linux server, so
-        # they render as tofu boxes there while looking fine on Windows.
         arrow = '<span class="tri t-up"></span>' if improved else '<span class="tri t-down"></span>'
         text = arrow + str(abs(round(d, 1)))
     else:
@@ -283,12 +206,6 @@ def _esc(v) -> str:
     return html.escape("" if v is None else str(v))
 
 
-# Allowlist for any user-supplied value used as an <img src> in the rendered
-# document. The report renderer is a REAL headless browser, so an arbitrary URL
-# here is an SSRF sink (it would fetch http://169.254.169.254/… etc.) and an
-# arbitrary string is an attribute-injection sink. We accept ONLY inline
-# base64 data-image URIs — exactly what the editor produces — and drop anything
-# else to empty. Returns a safe, attribute-escaped string.
 _DATA_IMAGE_RE = re.compile(r"^data:image/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=\s]+$", re.I)
 
 
@@ -303,14 +220,9 @@ def _chunk(seq, n):
 
 
 def _included(item) -> bool:
-    """A repeating-row table row/item is INCLUDED unless the author explicitly
-    deselected it (``included: false`` in content_json). Absent flag = included,
-    so freshly generated / never-edited reports render every row exactly as
-    before."""
     return (item or {}).get("included", True) is not False
 
 
-# ── block pickers ─────────────────────────────────────────────────────────────
 def _blocks(content: dict) -> list:
     if not content or content.get("type") != "report_document":
         return []
@@ -331,21 +243,18 @@ def _header_block(content: dict) -> dict:
     return {}
 
 
-# ── shared fragments ──────────────────────────────────────────────────────────
 def _unavailable(reason: str) -> str:
     return (f'<div class="unavailable"><span class="ua-icon">—</span>'
             f'<span>{_esc(reason or "Not available for this period.")}</span></div>')
 
 
 def _section_head(title: str, sub: str = "") -> str:
-    # An empty/blank title renders NO heading (author cleared it on purpose).
     if not (title or "").strip():
         return ""
     sub_html = f'<p class="sub">{_esc(sub)}</p>' if sub else ""
     return f'<h2 class="section">{_esc(title)}</h2>{sub_html}'
 
 
-# ── metric grid ───────────────────────────────────────────────────────────────
 def _metric_card(m: dict) -> str:
     type_ = m.get("type", "count")
     label = _esc(m.get("label"))
@@ -364,8 +273,6 @@ def _metric_card(m: dict) -> str:
 
 
 def _metric_grid_page(grid: dict, sub: str = "", period_label: str = "", prev_label: str = "") -> str:
-    """Previous-vs-current metric grid as TWO columns (Previous Month / Current
-    Month), each a plain label + value list. No delta/percentage, no red/green."""
     title = (grid or {}).get("title") or ""
     head = f'<h2 class="section">{_esc(title)}</h2>' if (title or "").strip() else ""
     if not grid or grid.get("available") is False:
@@ -387,11 +294,7 @@ def _metric_grid_page(grid: dict, sub: str = "", period_label: str = "", prev_la
     return head + f'<div class="cmp-grid">{column(prev_h, True)}{column(curr_h, False)}</div>'
 
 
-# ── narrative ─────────────────────────────────────────────────────────────────
 def _resolve_chip(node, blobs_by_name) -> str:
-    """A ProseMirror `blob` node -> its FROZEN formatted value. kind 'delta' uses
-    the delta value; anything else uses the current value. Mirrors the client's
-    applyFormat defaults via the existing PDF formatters. Unknown blob -> label."""
     attrs = node.get("attrs") or {}
     name, kind, label = attrs.get("name"), attrs.get("kind"), attrs.get("label")
     blob = (blobs_by_name or {}).get(name)
@@ -437,9 +340,6 @@ def _render_li(li, blobs_by_name) -> str:
 
 
 def _render_doc(doc, blobs_by_name) -> str:
-    """ProseMirror/TipTap JSON -> report HTML (paragraphs, headings as bold paras,
-    bullet/ordered lists, blockquotes), resolving inline blob chips to frozen
-    values. Kept in step with the client read-only renderer."""
     parts = []
     for node in doc.get("content") or []:
         t = node.get("type")
@@ -461,8 +361,6 @@ def _render_doc(doc, blobs_by_name) -> str:
 
 def _narrative_page(block: dict, banner: str = "", blobs_by_name=None) -> str:
     head = _section_head(block.get("title") or "")
-    # Prefer the EDITED doc (TipTap JSON) so author edits reach the PDF; fall back
-    # to the original templated paragraphs/bullets for never-edited blocks.
     doc = block.get("doc")
     if isinstance(doc, dict) and doc.get("type") == "doc":
         body = _render_doc(doc, blobs_by_name or {})
@@ -480,7 +378,6 @@ def _narrative_page(block: dict, banner: str = "", blobs_by_name=None) -> str:
     return banner + head + paras + bl
 
 
-# ── data table (chunked into pages) ───────────────────────────────────────────
 def _table_cell_html(col: dict, value) -> str:
     kind = col.get("kind")
     type_ = col.get("type", "text")
@@ -493,21 +390,19 @@ def _table_cell_html(col: dict, value) -> str:
 
 
 def _data_table_pages(block: dict, sub: str, rows_per_page: int) -> list:
-    """Returns a list of (inner_html) pages for a data_table block."""
     title = block.get("title") or ""
     columns = block.get("columns") or []
     if block.get("available") is False:
         return [_section_head(title, sub) + _unavailable(block.get("unavailableReason"))]
 
     all_rows = block.get("rows") or []
-    rows = [r for r in all_rows if _included(r)]  # trim BEFORE pagination
+    rows = [r for r in all_rows if _included(r)]
     head_cells = "".join(
         f'<th class="{ "num" if c.get("kind") in ("metric","delta") else "" }">{_esc(c.get("label"))}</th>'
         for c in columns)
     thead = f"<thead><tr>{head_cells}</tr></thead>"
 
     if not rows:
-        # Distinguish "author deselected every row" from "no data this period".
         msg = ("No rows selected for this period." if all_rows
                else "No rows for this period.")
         empty = (f'<table class="dt">{thead}<tbody><tr>'
@@ -530,7 +425,6 @@ def _data_table_pages(block: dict, sub: str, rows_per_page: int) -> list:
     return pages
 
 
-# ── keyword table (green/red change cells), chunked ───────────────────────────
 def _keyword_pages(block: dict) -> list:
     title = block.get("title") or ""
     sub = "Lower position is better — a green change means the keyword moved up."
@@ -538,7 +432,7 @@ def _keyword_pages(block: dict) -> list:
     if block.get("available") is False:
         return [_section_head(title, sub) + _unavailable(block.get("unavailableReason"))]
     all_rows = block.get("rows") or []
-    rows = [r for r in all_rows if _included(r)]  # trim BEFORE pagination
+    rows = [r for r in all_rows if _included(r)]
     head_cells = "".join(
         f'<th class="{ "num" if c.get("kind") in ("metric","delta") else "" }">{_esc(c.get("label"))}</th>'
         for c in columns)
@@ -559,7 +453,6 @@ def _keyword_pages(block: dict) -> list:
         for r in chunk:
             cells = (r or {}).get("cells") or {}
             delta = cells.get("rank_delta")
-            # row tone from the change: negative delta = improved = green
             if _num(delta) and delta != 0:
                 row_tone = "row-up" if delta < 0 else "row-down"
             else:
@@ -576,17 +469,14 @@ def _keyword_pages(block: dict) -> list:
     return pages
 
 
-# ── backlinks numbered list, chunked ──────────────────────────────────────────
 def _backlinks_pages(block: dict, extra_head_px: float = 0.0) -> list:
     title = block.get("title") or ""
     all_items = block.get("items") or []
-    items = [it for it in all_items if _included(it)]  # trim BEFORE pagination
-    # Backlinks KEEP the frozen total volume (the period metric) — trimming the
-    # list only changes what's shown, so the sub reads "43 new backlinks · showing 5".
+    items = [it for it in all_items if _included(it)]
     count = block.get("count", len(all_items))
     shown = len(items)
     month = block.get("month")
-    noun = block.get("noun")  # posts pass e.g. "blog post"; backlinks leave it unset
+    noun = block.get("noun")
     if noun:
         sub = f"{count} {noun}{'' if count == 1 else 's'}"
     else:
@@ -604,20 +494,10 @@ def _backlinks_pages(block: dict, extra_head_px: float = 0.0) -> list:
         return [_section_head(title, sub)
                 + '<div class="unavailable"><span class="ua-icon">—</span>'
                   f'<span>{_esc(msg)}</span></div>']
-    # Pack by estimated height (URLs wrap, so a long URL is several lines) so a
-    # page never runs past the footer.
     def _bl_height(url):
         import math as _m
         return max(1, _m.ceil(len(url or "") / 88)) * 16 + 12
 
-    # HEAD_PX covers this function's own section head; BUDGET_PX matches the
-    # global per-page budget used everywhere else in the pipeline (previously a
-    # locally-hardcoded 955, which was LARGER than the real 940px page budget —
-    # that alone let a full page of backlinks run past the footer). The first
-    # chunk additionally reserves `extra_head_px` for a group-title <h2> the
-    # caller may bundle onto this page's HTML (see _build_section_pages), since
-    # that heading consumes real page space this function wasn't otherwise
-    # accounting for.
     HEAD_PX, BUDGET_PX = 64, _PAGE_BUDGET
     chunks, cur, used = [], [], HEAD_PX + extra_head_px
     for it in items:
@@ -645,7 +525,6 @@ def _backlinks_pages(block: dict, extra_head_px: float = 0.0) -> list:
     return pages
 
 
-# ── GSC daily trend → inline SVG line chart ───────────────────────────────────
 def _chart_page(block: dict) -> str:
     title = block.get("title") or ""
     if block.get("available") is False:
@@ -657,9 +536,6 @@ def _chart_page(block: dict) -> str:
     if not points or not series:
         return _section_head(title) + _unavailable("No daily trend for this period.")
 
-    # When the series are on very different scales (e.g. GSC clicks vs impressions
-    # vs CTR vs position), normalise EACH line to its own min..max so every line is
-    # visible. Same-scale charts (GA4 active vs new users) keep a shared axis.
     per_series = block.get("normalize") == "series"
     W, H = 940, 360
     pad_l = 18 if per_series else 48
@@ -720,13 +596,12 @@ def _chart_page(block: dict) -> str:
             + f'<div class="chart-card"><div class="chart-legend">{legend}</div>{svg}</div>')
 
 
-# ── cover + TOC ───────────────────────────────────────────────────────────────
 def _cover_html(header: dict, period_label: str, period_range: str) -> str:
     project = _esc(header.get("projectName") or "Client")
     domain = _esc(header.get("domain") or "")
     month = _esc(period_label or header.get("periodLabel") or "")
     domain_html = f'<div class="cv-domain">{domain}</div>' if domain else ""
-    client_logo = _safe_image_src(header.get("clientLogo"))  # allowlist to data:image/* only
+    client_logo = _safe_image_src(header.get("clientLogo"))
     client_logo_html = (f'<img class="cv-client-logo" src="{client_logo}" alt="Client"/>'
                         if client_logo else '<span class="cv-client-logo-ph"></span>')
     wave_uri = _wave_uri()
@@ -759,12 +634,6 @@ def _cover_html(header: dict, period_label: str, period_range: str) -> str:
 
 
 def _ci_svg(body: str) -> str:
-    """Inline SVG contact icon.
-
-    Deliberately NOT a Unicode/emoji entity (&#9742; etc.): those require a
-    symbol or emoji font on the rendering host. A bare Linux server has none,
-    so Chromium renders tofu boxes. Inline SVG has no font dependency.
-    """
     return (
         '<svg class="ci" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" '
         'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>'
@@ -787,8 +656,6 @@ _IC_PIN = _ci_svg(
 
 
 def _thankyou_html() -> str:
-    """Closing page — matches the reference: infApp mark, big "Thank you!",
-    a short note, the agency contact block, and two halftone discs."""
     return f"""
     <section class="page thankyou">
       <div class="ty-logo"><img src="{_logo_uri()}" alt="InfyApp"/></div>
@@ -832,23 +699,12 @@ def _toc_html(entries: list, period_range: str, page_no=None, total=None) -> str
     return _wrap_content_page(inner, period_range, page_no, total)
 
 
-# ── page wrapper ──────────────────────────────────────────────────────────────
 def _wrap_content_page(inner: str, period_range: str, page_no=None, total=None,
                        *, project_name: str = "", domain: str = "", client_logo: str = "",
                        prepared_by: str = AGENCY_NAME, left_logo: str = "", right_logo: str = "") -> str:
-    """A content page in the new house style: a top header with two logo slots
-    and a centered "PROJECT · MONTHLY SEO REPORT" title, and a two-tier footer —
-    the reporting line (period + prepared-by + domain) and a faint report/page
-    line.
-
-    The running header shows the client's logo on the left and the InfyApp logo
-    on the right on EVERY page; a slot with no logo becomes an invisible spacer
-    (so the title stays centred) rather than an empty bordered "LOGO" box."""
     pg = f"{page_no} / {total}" if page_no and total else (str(page_no) if page_no else "")
     title = _esc(f"{project_name} · Monthly SEO Report".strip(" ·").upper())
 
-    # Left slot: caller override → client logo → empty. Right slot: caller
-    # override → the InfyApp agency logo (present on every page).
     left_url = left_logo or client_logo
     right_url = right_logo or _logo_uri()
 
@@ -870,7 +726,6 @@ def _wrap_content_page(inner: str, period_range: str, page_no=None, total=None,
     </section>"""
 
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
 def _css() -> str:
     vars_css = f""":root{{
       --blue:{_BLUE};--blue-head:{_BLUE_HEAD};--blue-dark:{_BLUE_DARK};--blue-deep:{_BLUE_DEEP};
@@ -1061,10 +916,6 @@ def _css() -> str:
 
 
 def _targets_grid_page(block: dict) -> str:
-    """Editable Targets & Goals grid (May reference style): two labelled groups
-    (Previous Month / Current Month Targets), each a 4-across grid of underlined
-    field labels + big blue values, split by a blue divider, with an optional
-    free-text notes paragraph underneath. Empty values render as a dash."""
     title = block.get("title") or ""
     columns = block.get("columns") or []
     fields = block.get("fields") or []
@@ -1088,7 +939,6 @@ def _targets_grid_page(block: dict) -> str:
     return _section_head(title) + "".join(groups) + notes_html
 
 
-# -- document assembly ---------------------------------------------------------
 def _thead_title(title: str) -> str:
     if not (title or "").strip():
         return ""
@@ -1096,8 +946,6 @@ def _thead_title(title: str) -> str:
 
 
 def _narrative_is_empty(b: dict) -> bool:
-    """True when a narrative/note block has no author content yet (so an unfilled
-    note slot prints nothing in the PDF)."""
     doc = b.get("doc")
     if isinstance(doc, dict) and doc.get("type") == "doc":
         def has_text(nodes):
@@ -1116,11 +964,8 @@ def _narrative_is_empty(b: dict) -> bool:
 
 
 def _data_table_inline(b: dict) -> str:
-    """A single compact table (no forced pagination) for grouped sections."""
     title = b.get("title") or ""
     columns = b.get("columns") or []
-    # Keyword Rankings is a top-level section -> full-size heading; the GA4
-    # breakdown tables use the smaller sub-heading.
     head = _section_head(title) if b.get("id") == "keywords" else _thead_title(title)
     if b.get("available") is False:
         return head + _unavailable(b.get("unavailableReason"))
@@ -1163,9 +1008,6 @@ def _render_block_inline(b: dict, vs_sub: str, blobs_by_name, period_label='', p
     return ""
 
 
-# Section grouping: (page title, [block ids], show_group_title). Blocks are packed
-# onto ONE page per group (no more one-block-per-page whitespace). Long content
-# (backlinks, oversized tables) spills to extra pages of the same section.
 _PAGE_GROUPS = [
     ("Progress Summary", ["progress-summary"],True),
     ("Key Metrics", ["key-metrics", "achievements"], False),
@@ -1180,10 +1022,7 @@ _PAGE_GROUPS = [
     ("New Backlinks", ["backlinks"], True),
     ("Blog Posts", ["posts-blogs"], True),
     ("LinkedIn Posts", ["posts-linkedin"], True),
-     # Targets grid + its notes share ONE page.
     ("Targets & Goals", ["targets", "targets-notes"], True),
-    # Strategy & Notes is a distinct section and always starts on its own page
-    # (see _BREAK_BEFORE), rather than sharing the Targets & Goals page.
     ("Strategy & Notes", ["strategy"], True),
 ]
 
@@ -1212,8 +1051,6 @@ def _node_text_len(node) -> int:
 
 
 def _doc_para_lens(doc) -> list:
-    """Per-top-level-paragraph character counts (list items counted separately) so
-    a multi-paragraph note is estimated by REAL paragraph count, not lumped text."""
     lens = []
     for node in (doc or {}).get("content") or []:
         t = node.get("type")
@@ -1226,9 +1063,6 @@ def _doc_para_lens(doc) -> list:
 
 
 def _block_units(b: dict) -> float:
-    """Approximate rendered HEIGHT of a block in PX (~96dpi) so blocks pack onto
-    pages without a browser measure. Calibrated to the real CSS sizes; the page
-    budget keeps a small safety margin below the true height to avoid clipping."""
     t = b.get("type")
     if t == "narrative":
         if _narrative_is_empty(b):
@@ -1242,43 +1076,30 @@ def _block_units(b: dict) -> float:
                     + [len(x) for x in (b.get("bullets") or [])])
         if not lens:
             lens = [0]
-        # each paragraph: its own wrapped lines * line-height + paragraph margin
         text_px = sum(_m.ceil(max(1, l / 90)) * 23 + 14 for l in lens)
         head = 50 if b.get("title") else 0
-        return head + text_px + 24          # heading + paragraphs + block margin
+        return head + text_px + 24
     if t == "metric_grid":
         n = len(b.get("metrics") or [])
-        return 104 + n * 58                 # heading + column heads + a row per metric
+        return 104 + n * 58
     if t == "chart":
         return 380
     if t == "data_table":
         rows = len([r for r in (b.get("rows") or []) if _included(r)])
-        return 89 + rows * 28               # sub-heading + table head + rows
+        return 89 + rows * 28
     if t == "targets_grid":
         return 454
     return 40
 
 
-# Usable A4 content height in px (297mm minus top padding + footer band), with a
-# small safety margin so a packed page never overflows and clips.
 _PAGE_BUDGET = 940.0
 
-# Sections that must BEGIN on a new page (their first block forces a page
-# break); the rest of the section still packs onto that page.
 _BREAK_BEFORE = {"GA4 - Audience Overview", "Detailed Traffic Summary", "Search Console", "Targets & Goals", "Strategy & Notes"}
 
-# Sections rendered as ONE indivisible page (never split by the height budget);
-# they also start fresh (add them to _BREAK_BEFORE). Use for short sections that
-# must stay together, e.g. Targets & Goals + Monthly SEO Objectives.
 _KEEP_TOGETHER = {"Targets & Goals"}
 
 
 def _build_section_pages(content: dict, period_label: str, prev_label: str, blobs_by_name=None):
-    """Pack the block document onto pages: sections FLOW so short ones SHARE a page,
-    but a block never splits across a page boundary (a block that would overflow the
-    current page starts a new one). Long units (backlinks, oversized tables) take
-    their own page(s). Returns a list of {"html", "starts": [section titles that
-    begin on that page]} so the TOC points at the right page."""
     header = _header_block(content)
     maturing = header.get("maturingNotice") if header.get("maturing") else None
     banner = f'<div class="banner">{_esc(maturing)}</div>' if maturing else ""
@@ -1300,7 +1121,6 @@ def _build_section_pages(content: dict, period_label: str, prev_label: str, blob
             current = gi
             grouped[gi].append(b)
 
-    # Flatten to renderable items: (section_title, html, kind, is_section_start, units).
     BIG = _PAGE_BUDGET + 1.0
     items = []
     section_no = 0
@@ -1311,9 +1131,6 @@ def _build_section_pages(content: dict, period_label: str, prev_label: str, blob
         section_no += 1
         eyebrow = f'<div class="rp-eyebrow">Section {section_no:02d}</div>'
         state = {"started": False}
-        # TOC label follows the EDITED title of the group's primary (non-note)
-        # block, falling back to the built-in group title. Renaming a heading in
-        # the editor updates the contents page too; empty note slots never hijack it.
         rep = title
         if not show_title:
             for _pb in gblocks:
@@ -1333,7 +1150,6 @@ def _build_section_pages(content: dict, period_label: str, prev_label: str, blob
                 if html:
                     parts.append(f'<div class="blk">{html}</div>')
             if parts:
-                # one un-splittable page (starts fresh via _BREAK_BEFORE)
                 items.append((rep, "".join(parts), "flow", True, 200.0))
             continue
 
@@ -1342,8 +1158,6 @@ def _build_section_pages(content: dict, period_label: str, prev_label: str, blob
             state["started"] = True
             return first
 
-        # A group title is BUNDLED onto its first emitted block so the heading can
-        # never be orphaned (or clipped) alone at the bottom of a page.
         pend = (f'<div class="blk">{eyebrow}<h2 class="section">{_esc(title)}</h2></div>'
                 if show_title else eyebrow)
         pend_u = 90.0 if show_title else 24.0
@@ -1370,7 +1184,6 @@ def _build_section_pages(content: dict, period_label: str, prev_label: str, blob
             items.append((rep, pend + f'<div class="blk">{html}</div>', "flow", mark(), pend_u + _block_units(b)))
             pend, pend_u = "", 0.0
 
-    # Pack items onto pages by the height budget; sections flow across boundaries.
     pages = []
     cur, cur_units, cur_starts = [], 0.0, []
 
@@ -1400,8 +1213,6 @@ def _build_section_pages(content: dict, period_label: str, prev_label: str, blob
 
 
 def render_html(version: dict, blobs: list | None = None) -> str:
-    """Build the full print HTML (cover + TOC + every section) from a version dict
-    carrying `content` (the report_document) and `data` (frozen blob)."""
     content = version.get("content") or {}
     header = _header_block(content)
     period_label = (content.get("period_label") or header.get("periodLabel")
@@ -1413,8 +1224,6 @@ def render_html(version: dict, blobs: list | None = None) -> str:
     blobs_by_name = {b.get("name"): b for b in (blobs or [])}
     section_pages = _build_section_pages(content, period_label, prev_label, blobs_by_name)
 
-    # Page numbering: cover = p1, TOC = p2, content from p3. Used for the TOC's
-    # page column; content footers show the reporting-period range (reference style).
     content_start = 3
     toc_entries = []
     seen = set()
@@ -1425,10 +1234,8 @@ def render_html(version: dict, blobs: list | None = None) -> str:
                 seen.add(title)
                 toc_entries.append((title, page_no))
 
-    # Total physical pages: cover (1) + TOC (2) + content + thank-you.
     total_pages = 2 + len(section_pages) + 1
 
-    # Assemble: cover, TOC, every section page, then the closing thank-you page.
     project_name = header.get("projectName") or (content.get("project") or {}).get("name") or ""
     domain = header.get("domain") or (content.get("project") or {}).get("domain") or ""
     parts = [_cover_html(header, period_label, period_range),
@@ -1443,21 +1250,9 @@ def render_html(version: dict, blobs: list | None = None) -> str:
             f'<style>{_css()}</style></head><body>{"".join(parts)}</body></html>')
 
 
-# -- PDF conversion (Playwright / headless Chromium) ---------------------------
 def render_pdf(version: dict, blobs: list | None = None) -> bytes:
-    """Render the report HTML to PDF bytes via headless Chromium. A4, real
-    background colors (print_background) so the cover motif renders. Launches a
-    fresh browser per call (on-demand; nothing cached or stored). MUST be called
-    from a SYNC context (no running asyncio loop) - the PDF endpoint is a sync
-    FastAPI handler, which FastAPI runs in a worker thread."""
     from playwright.sync_api import sync_playwright
 
-    # Render the cover, the content sections, and the thank-you page as SEPARATE
-    # PDFs, then merge them. This is only so the top-right InfyApp logo (added to
-    # the "content" part) appears on the content pages but NOT on the cover or
-    # thank-you page. Each part is rendered with the SAME settings as the old
-    # single-shot render (its own @page CSS via prefer_css_page_size), so page
-    # layout is unchanged — no Playwright header/footer, no margin overrides.
     parts = None
     agency = ""
     try:
@@ -1469,14 +1264,10 @@ def render_pdf(version: dict, blobs: list | None = None) -> bytes:
         print('industry renderer failed, using legacy:', exc)
         html_str = render_html(version, blobs)
 
-    # CONTENT pages only (cover + thank-you are full-bleed, no header/footer):
-    #   • HEADER  — InfyApp logo pinned to the TOP-RIGHT corner of every page.
-    #   • FOOTER  — page number at the bottom-left.
     logo_img = f'<img src="{agency}" style="height:9mm">' if agency else ""
     header_tpl = (
         '<div style="width:100%;box-sizing:border-box;padding:0 14mm;text-align:right;'
         f'-webkit-print-color-adjust:exact;print-color-adjust:exact">{logo_img}</div>')
-    # Dynamic month for the footer title: e.g. a June report -> "June SEO Report".
     _content = version.get("content") or {}
     _hdr = next((b for b in (_content.get("blocks") or []) if b.get("type") == "report_header"), {})
     _period_label = _hdr.get("periodLabel") or _content.get("period_label") or ""
@@ -1542,7 +1333,6 @@ def render_pdf(version: dict, blobs: list | None = None) -> bytes:
 
 
 def pdf_filename(version: dict) -> str:
-    """`{project}-{period}-seo-report.pdf`, slugified for a safe download name."""
     content = version.get("content") or {}
     data = version.get("data") or {}
     header = _header_block(content)
@@ -1556,24 +1346,7 @@ def pdf_filename(version: dict) -> str:
         return s or "report"
     return f"{slug(project)}-{slug(period)}-seo-report.pdf"
 
-# ── cover thumbnail (for the monthly report email) ────────────────────────────
 def render_cover_png(version: dict, blobs: list | None = None, width: int = 440) -> bytes:
-    """Render page 1 of the report (the cover) to PNG bytes, for embedding as a
-    thumbnail in the monthly report email.
-
-    Reuses the SAME Playwright/Chromium path and the SAME cover HTML as
-    render_pdf() — report_industry.render_document(part="cover") — so the
-    thumbnail always matches the attached PDF. Nothing is cached or stored here;
-    the caller decides where the bytes go.
-
-    The page is rendered at FULL A4 (794x1123 css px = 210x297mm at 96dpi) and
-    shrunk via device_scale_factor rather than rendered into a small viewport,
-    because the cover's CSS is authored in millimetres for print and would
-    reflow at 440px wide. This also avoids needing Pillow to resize.
-
-    MUST be called from a SYNC context (no running asyncio loop) — same
-    constraint as render_pdf().
-    """
     from playwright.sync_api import sync_playwright
     from . import report_industry
 

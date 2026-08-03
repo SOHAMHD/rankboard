@@ -1,39 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   REPORT DOCUMENT EDITOR — make the generated block document EDITABLE.
-
-   PRODUCT BOUNDARY (enforced here): apart from the DATA VALUES, everything is
-   editable. Editable = document STRUCTURE (reorder / delete / add free-text /
-   re-add a removed template section) and all NARRATIVE TEXT (with blob-chips).
-   IMMUTABLE = the data values — metric_grid metrics, chart series, backlinks
-   list, header. Those blocks are MOVE / DELETE / RE-ADD only; their inner values
-   are rendered exactly as read-only and never edited.
-
-   ONE EXCEPTION: the KEYWORD TABLE (block id "keywords", see EDITABLE_TABLE_ID).
-   Its ranks are typed in by hand on the Keywords page rather than pulled from an
-   API, so a typo has to be fixable at report time. It stays inside the boundary
-   above in the way that matters — the edit is written to content_json, so
-   data_json stays frozen and the Keywords page is untouched. Fixing a rank here
-   fixes THIS report only.
-
-   REUSE (no rebuilding):
-     • Narrative blocks host the EXISTING TipTap chip editor — createBlobNode
-       (lib/blobNode.jsx) + the "/" suggestion, palette, Toolbar and format picker
-       exported from ReportEditor.jsx. A chip stores {name,kind,format,label} and
-       resolves to a FROZEN value (immutable; format is display-only). The palette
-       values come from GET /api/reports/{id}/blobs.
-     • DATA blocks reuse the read-only renderers from ReportDocument.jsx verbatim.
-     • SAVE goes through the EXISTING PATCH /api/reports/{id}/content (draft-only,
-       author-gated). data_json is never touched — all edits live in content_json.
-
-   A narrative block gains a `doc` (TipTap/ProseMirror JSON) once it enters the
-   editor; the read-only renderer (ReportDocument.jsx) prefers `doc` and falls
-   back to the original paragraphs/bullets, so a saved-then-reopened document
-   round-trips through the SAME schema.
-
-   A locked/sent version is shown READ-ONLY (no crash, clear banner). Re-adding a
-   removed template section rebuilds it from the frozen data_json via the
-   read-only GET /api/reports/{id}/template-blocks endpoint.
-   ════════════════════════════════════════════════════════════════════ */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -69,8 +33,6 @@ import ReportDocument, {
   BacklinksBlock,
 } from "./ReportDocument";
 
-// New blocks need a stable, unique id. Browser context — Date.now()/Math.random
-// are fine here (unlike workflow scripts). Prefix marks an author-added block.
 function newId(prefix) {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 }
@@ -88,9 +50,6 @@ function newFreeTextBlock() {
   };
 }
 
-// A narrative block's editable representation: prefer an already-edited `doc`,
-// else build one from the templated paragraphs/bullets so the chip editor has
-// something to edit. Kept in sync with ReportDocument's read-only fallback.
 function docFromNarrative(block) {
   if (block.doc && block.doc.type === "doc") return block.doc;
   const content = [];
@@ -111,10 +70,6 @@ function docFromNarrative(block) {
   return { type: "doc", content };
 }
 
-/* The keyword table is the one data_table whose CELLS are editable: its ranks are
-   entered by hand on the Keywords page rather than pulled from an API, so a typo
-   has to be fixable at report time. The id is set by
-   report_document.py _keyword_table(). */
 const EDITABLE_TABLE_ID = "keywords";
 
 const DATA_BLOCK_TYPES = new Set([
@@ -142,9 +97,6 @@ function ReadOnlyDataBlock({ block, hideTitle }) {
   }
 }
 
-// ════════════════════════════════════════════════════════════════════
-// ENTRY — draft → editable; locked/sent → read-only.
-// ════════════════════════════════════════════════════════════════════
 export default function ReportDocumentEditor({ version, blobs, canSend = false }) {
   if (version.status !== "draft") {
     return (
@@ -159,7 +111,6 @@ export default function ReportDocumentEditor({ version, blobs, canSend = false }
   return <EditableDoc version={version} blobs={blobs} canSend={canSend} />;
 }
 
-// ── one narrative block, edited with the EXISTING TipTap chip editor ───────────
 function NarrativeEditor({ block, BlobNode, suggestion, onDocChange, onFocusEditor }) {
   const initialDoc = useMemo(() => docFromNarrative(block), [block.id]);
 
@@ -178,8 +129,6 @@ function NarrativeEditor({ block, BlobNode, suggestion, onDocChange, onFocusEdit
     []
   );
 
-  // Seed the block's doc once so even an UNEDITED narrative persists as a doc on
-  // save (consistent shape; the read-only renderer prefers doc).
   useEffect(() => {
     onDocChange(block.id, initialDoc);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -195,10 +144,6 @@ function NarrativeEditor({ block, BlobNode, suggestion, onDocChange, onFocusEdit
   );
 }
 
-// ── editable Targets & Goals grid (team-entered values + notes) ───────────────
-// Unlike DATA blocks, these values ARE editable: they're manual targets, not
-// gathered data. Each keystroke updates the block in `blocks` state, so the
-// existing PATCH /content save persists them verbatim.
 function TargetsGridEditor({ block, onSetValue }) {
   const columns = block.columns || [];
   const fields = block.fields || [];
@@ -229,8 +174,6 @@ function TargetsGridEditor({ block, onSetValue }) {
   );
 }
 
-// Trim surrounding transparent / near-white padding from an uploaded logo so it
-// sits flush against the page margin (both cover logos end up equidistant).
 function trimLogo(dataUrl) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -267,7 +210,7 @@ function trimLogo(dataUrl) {
         o.getContext("2d").drawImage(c, left, top, w, h, 0, 0, w, h);
         resolve(o.toDataURL("image/png"));
       } catch (e) {
-        resolve(dataUrl); // tainted canvas or any failure -> keep original
+        resolve(dataUrl);
       }
     };
     img.onerror = () => resolve(dataUrl);
@@ -275,8 +218,6 @@ function trimLogo(dataUrl) {
   });
 }
 
-// ── cover header: preview + client-logo upload (stored as a data URL on the
-// report_header block, so it travels in content_json and renders on the PDF cover) ─
 function HeaderEditor({ block, onSetLogo }) {
   const onFile = (e) => {
     const f = e.target.files && e.target.files[0];
@@ -312,7 +253,6 @@ function HeaderEditor({ block, onSetLogo }) {
   );
 }
 
-// ── structure controls that wrap EVERY block ──────────────────────────────────
 function BlockFrame({ index, total, label, onUp, onDown, onDelete, onAddTextBelow, children }) {
   return (
     <div className="group relative rounded-xl border border-stone-200 bg-stone-50/40 p-2">
@@ -363,7 +303,6 @@ function IconBtn({ label, onClick, disabled, danger, children }) {
   );
 }
 
-// ── the editable document ─────────────────────────────────────────────────────
 function EditableDoc({ version, blobs, canSend = false }) {
   const blobsByName = useMemo(() => new Map((blobs || []).map((b) => [b.name, b])), [blobs]);
   const paletteItems = useMemo(() => buildPaletteItems(blobs || []), [blobs]);
@@ -383,8 +322,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
   const [savedAt, setSavedAt] = useState(null);
   const [saveError, setSaveError] = useState(null);
 
-  // The canonical template (rebuilt server-side from the frozen data_json), so a
-  // section deleted in a PRIOR session can still be re-added. Read-only fetch.
   useEffect(() => {
     let cancelled = false;
     api(`/reports/${version.id}/template-blocks`)
@@ -395,7 +332,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
     };
   }, [version.id]);
 
-  // Stable callbacks (the TipTap onUpdate closure captures these once).
   const onDocChange = useCallback((id, doc) => {
     setBlocks((bs) => bs.map((b) => (b.id === id ? { ...b, doc } : b)));
   }, []);
@@ -403,11 +339,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
     activeEditorRef.current = editor;
   }, []);
 
-  // ── repeating-row selection (data_table rows / backlinks_list items) ──────────
-  // Toggling a checkbox or a Top-N control writes an `included` flag onto the
-  // rows/items INSIDE the block — saved verbatim by the existing PATCH /content.
-  // rowIndex is the index into the block's FULL rows/items array (the editor
-  // renders every row), so a filtered read-only view never desyncs.
   const rowsKey = (block) => (block.type === "backlinks_list" ? "items" : "rows");
   const setRowIncluded = useCallback((blockId, rowIndex, included) => {
     setBlocks((bs) =>
@@ -420,7 +351,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
     );
   }, []);
   const setRowsBulk = useCallback((blockId, mode) => {
-    // mode: "all" | "none" | N (top-N picks the first N rows in current order).
     setBlocks((bs) =>
       bs.map((b) => {
         if (b.id !== blockId) return b;
@@ -434,28 +364,14 @@ function EditableDoc({ version, blobs, canSend = false }) {
     );
   }, []);
 
-  // Cover client logo: stored as a data URL on the report_header block.
   const setClientLogo = useCallback((blockId, dataUri) => {
     setBlocks((bs) => bs.map((b) => (b.id === blockId ? { ...b, clientLogo: dataUri } : b)));
   }, []);
 
-  // Rename any section: the default title stays until the author edits it.
   const setBlockTitle = useCallback((blockId, value) => {
     setBlocks((bs) => bs.map((b) => (b.id === blockId ? { ...b, title: value } : b)));
   }, []);
 
-  /* Keyword table: edit a cell in place. The ONLY data_table whose values are
-     writable, because its numbers are typed in by hand rather than pulled from
-     an API.
-
-     Writes into `blocks`, which is saved to content_json — data_json stays
-     frozen and the Keywords page is untouched. Correcting a rank here corrects
-     THIS report only, which is how every other report edit already behaves.
-
-     rank_delta is recomputed on every edit. It isn't a displayed column, but
-     report_pdf reads it to tint the row green/red and _achievements reads it to
-     name the biggest movers — so leaving the original value behind would show a
-     row tinted for a change the printed numbers no longer support. */
   const setCellValue = useCallback((blockId, rowIndex, colKey, value) => {
     setBlocks((bs) =>
       bs.map((b) => {
@@ -485,7 +401,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
     );
   }, []);
 
-  // Targets grid: manual value + notes edits (the one editable non-narrative block).
   const setTargetValue = useCallback((blockId, colKey, fieldKey, value) => {
     setBlocks((bs) =>
       bs.map((b) => {
@@ -522,7 +437,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
     setAddOpen(false);
   };
 
-  // Insert a blob chip into the editor the author last focused.
   const insertBlob = (item) => {
     const editor = activeEditorRef.current;
     if (!editor) return;
@@ -542,7 +456,7 @@ function EditableDoc({ version, blobs, canSend = false }) {
       setSavedAt(new Date());
     } catch (e) {
       setSaveError(e.message);
-      throw e; // let callers (e.g. download-before-save) abort instead of exporting stale content
+      throw e;
     } finally {
       setSaving(false);
     }
@@ -550,8 +464,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
 
   return (
     <div className="w-full">
-      {/* ── header / save (sticky so Download + Save stay reachable while
-          scrolling the long document — no more scrolling back to the top) ── */}
       <div className="sticky top-0 z-30 -mx-6 px-6 py-3 mb-3 flex flex-wrap items-center justify-between gap-3 bg-stone-100/90 backdrop-blur-sm border-b border-stone-200">
         <div>
           <h2 className="text-lg font-bold text-stone-900 font-display">
@@ -571,8 +483,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
             beforeDownload={save}
             onError={setSaveError}
           />
-          {/* Send deliberately NOT offered while editing — see ReportEditor.jsx.
-              Send from the versions list once the report is finished. */}
           <button onClick={() => save().catch(() => {})} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
             {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft
           </button>
@@ -585,7 +495,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
         Reorder, delete, and add blocks; edit any text block (type <kbd className="px-1 rounded bg-stone-100 border border-stone-200">/</kbd> to insert data). Keyword ranks are editable here; every other data value is fixed. Edits apply to this report only.
       </p>
 
-      {/* ── 2-pane: document · insert-data palette ── */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_15rem] gap-4">
         <div className="min-w-0 space-y-3">
           {blocks.map((block, i) => {
@@ -632,8 +541,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
                     block={block}
                     selectable
                     hideTitle
-                    /* Only the keyword table is editable — its ranks are typed in
-                       by hand. Every other data_table is a frozen API pull. */
                     editable={block.id === EDITABLE_TABLE_ID}
                     onCellChange={(rowIndex, colKey, value) =>
                       setCellValue(block.id, rowIndex, colKey, value)
@@ -661,7 +568,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
             );
           })}
 
-          {/* ── add controls ── */}
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <button onClick={addTextEnd} className={`${BTN_GHOST} px-3 py-1.5`}>
               <Type size={14} /> Add text block
@@ -697,7 +603,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
           </div>
         </div>
 
-        {/* ── insert-data palette (reused chip-editor palette) ── */}
         <div className="lg:sticky lg:top-4 self-start">
           <BlobPalette items={paletteItems} onInsert={insertBlob} />
           <p className="mt-2 text-[11px] text-stone-400">
@@ -707,7 +612,6 @@ function EditableDoc({ version, blobs, canSend = false }) {
         </div>
       </div>
 
-      {/* shared "/" suggestion menu (one instance for all narrative editors) */}
       <SuggestionMenu sugg={sugg} />
     </div>
   );

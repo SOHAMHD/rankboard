@@ -1,21 +1,8 @@
-/* ════════════════════════════════════════════════════════════════════
-   AUTHORITY (Moz) — per-project domain authority overview.
-
-   On mount we load the CACHED values only (GET /moz never calls Moz —
-   its quota is tiny). The four tiles mirror Moz's own Overview layout:
-   Domain Authority (a 0–100 circular ring), Linking Domains, Inbound
-   Links, and Ranking Keywords. "Refresh from Moz" is the ONLY thing that
-   spends quota (POST /moz/refresh); it shows a spinner, then updates the
-   tiles, or shows the error inline if it fails. Moz's ToS requires the
-   "Data by Moz" attribution link, so it lives in the footer.
-   ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from "react";
 import { RefreshCw, LoaderCircle, ShieldCheck, Globe, Link as LinkIcon } from "lucide-react";
 import { api } from "../api";
 import { ErrorNote, BTN_PRIMARY, can } from "../ui";
 
-// 1437 -> "1.4k", 2_300_000 -> "2.3M". Plain numbers under 1000 keep their
-// thousands separators. null/non-finite -> the em-dash placeholder.
 function formatCompact(value) {
   if (value == null) return "—";
   const n = Number(value);
@@ -28,8 +15,6 @@ function formatCompact(value) {
   return `${trim(n / 1_000_000_000)}B`;
 }
 
-// ISO timestamp -> a short relative label ("just now", "5 mins ago", "3 days
-// ago"), falling back to a locale date once it's older than a month.
 function formatFetchedAt(iso) {
   if (!iso) return null;
   const then = new Date(iso);
@@ -44,9 +29,6 @@ function formatFetchedAt(iso) {
   return then.toLocaleDateString();
 }
 
-// Domain Authority is a 0–100 score, so it gets a small circular progress ring
-// (inline SVG). The arc is drawn clockwise from 12 o'clock via a rotated group;
-// the score stays upright in the middle.
 function AuthorityRing({ value }) {
   const has = value != null && Number.isFinite(Number(value));
   const v = Math.max(0, Math.min(100, Number(value) || 0));
@@ -78,8 +60,6 @@ function AuthorityRing({ value }) {
   );
 }
 
-// A plain number tile (Linking Domains / Inbound Links / Ranking Keywords),
-// matching the Rank Ledger's Stat card styling.
 function NumberTile({ icon: Icon, label, value }) {
   return (
     <div className="bg-white rounded-xl border border-stone-200 px-4 py-3">
@@ -92,16 +72,12 @@ function NumberTile({ icon: Icon, label, value }) {
 }
 
 export function MozOverview({ project, user }) {
-  // Refreshing spends Moz quota and writes a new row, so it needs the same
-  // write right the POST /moz/refresh endpoint enforces. Read-only members
-  // (no addKeyword) see the cached metrics but not the Refresh button.
   const mayRefresh = can(user, "addKeyword");
-  const [data, setData] = useState(null); // the stored row, or null when none yet
-  const [loading, setLoading] = useState(true); // first cached-values load
-  const [refreshing, setRefreshing] = useState(false); // a Moz call is in flight
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
 
-  // On mount (and per project), load the CACHED row only — never calls Moz.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -115,7 +91,6 @@ export function MozOverview({ project, user }) {
     };
   }, [project.id]);
 
-  // The one path that spends Moz quota.
   const refresh = async () => {
     setRefreshing(true);
     setError(null);
@@ -175,7 +150,6 @@ export function MozOverview({ project, user }) {
       ) : (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-            {/* Domain Authority — the circular ring tile. */}
             <div className="bg-white rounded-xl border border-stone-200 px-4 py-3 flex items-center gap-4">
               <AuthorityRing value={data.domainAuthority} />
               <div>
@@ -190,7 +164,6 @@ export function MozOverview({ project, user }) {
             <NumberTile icon={LinkIcon} label="Inbound Links" value={data.inboundLinks} />
           </div>
 
-          {/* Footer: last-updated, optional spam score, and the required credit. */}
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 mt-4 text-xs text-stone-400">
             <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
               {lastUpdated && <span>Last updated: {lastUpdated}</span>}

@@ -1,11 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   POSTS — per-project content links (blog posts + LinkedIn posts). The
-   SEO team pastes links here, tagging each with the month it belongs to
-   (same "YYYY-MM" convention as Backlinks); they also flow into the report,
-   scoped to that report's month. One view, parameterised by `kind` ("blog" |
-   "linkedin"), for both nav subsections. Reads are open to anyone who can
-   see the project; add/delete are author-only.
-   ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from "react";
 import { ExternalLink, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
@@ -21,14 +13,11 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-/** "2026-06" -> "June 2026" (falls back to the raw key). */
 function monthLabel(key) {
   const m = String(key).split("-");
   const idx = Number(m[1]) - 1;
   return m.length === 2 && idx >= 0 && idx < 12 ? `${MONTH_NAMES[idx]} ${m[0]}` : String(key);
 }
-
-
 
 export function PostsView({ user, project, kind }) {
   const meta = KIND_META[kind] || KIND_META.blog;
@@ -37,10 +26,10 @@ export function PostsView({ user, project, kind }) {
 ).padStart(2, "0")}`;
 
 const [month, setMonth] = useState(currentMonth);
-  const [posts, setPosts] = useState(null); // null = loading
+  const [posts, setPosts] = useState(null);
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
- 
+
   const [monthFilter, setMonthFilter] = useState("all");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -92,9 +81,6 @@ const [month, setMonth] = useState(currentMonth);
     }
   };
 
-  // Distinct months present among the loaded posts, newest first (plus a
-  // "No month" bucket for links added before this column existed) — the
-  // filter dropdown's options, same idea as Backlinks' grouped-by-month list.
   const monthCounts = new Map();
   (posts || []).forEach((p) => {
     const key = p.month || "";
@@ -105,9 +91,6 @@ const [month, setMonth] = useState(currentMonth);
   const visible =
     posts && (monthFilter === "all" ? posts : posts.filter((p) => (p.month || "") === monthFilter));
 
-  // Group the visible posts into per-month buckets (newest month first, a
-  // "No month" bucket last) so the list renders as month cards — the same
-  // shape as Backlinks.
   const groups = [];
   if (visible) {
     const byMonth = new Map();

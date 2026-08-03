@@ -1,7 +1,3 @@
-"""PROJECT ROUTES — the main website's API: projects + the Rank
-Ledger keywords. Viewing is open to all signed-in users (provisional);
-every mutation asks the matrix.
-"""
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
@@ -36,18 +32,13 @@ def row_to_project(p: sqlite3.Row, keyword_count: int | None = None) -> dict:
         "id": p["id"],
         "name": p["name"],
         "domain": p["domain"],
-        # The EFFECTIVE DataForSEO target: the most specific of country/region/
-        # city. None = use the server default (RANK_LOCATION_CODE).
         "locationCode": p["location_code"],
-        # What was actually picked in the three-input geo picker, plus a
-        # ready-made label ("Australia · Western Australia · Perth") so the
-        # project list needs no lookup to render it.
         "countryCode": p["country_code"],
         "regionCode": p["region_code"],
         "cityCode": p["city_code"],
         "locationLabel": p["location_label"],
-        "gaPropertyId": p["ga_property_id"],  # None = GA4 traffic panel disabled
-        "gscSiteUrl": p["gsc_site_url"],  # None = Search Console panel disabled
+        "gaPropertyId": p["ga_property_id"],
+        "gscSiteUrl": p["gsc_site_url"],
         "active": bool(p["active"]),
         "createdAt": p["created_at"],
     }
@@ -61,20 +52,18 @@ def row_to_keyword(k: sqlite3.Row) -> dict:
         "id": k["id"],
         "term": k["term"],
         "currentRank": k["current_rank"],
-        "previousRank": k["previous_rank"],  # None = first lookup ("New")
+        "previousRank": k["previous_rank"],
         "lastChecked": k["last_checked"],
     }
 
 
 def row_to_snapshot(s, keyword_count: int | None = None) -> dict:
-    # Accepts a sqlite3.Row or the summary dict from create_snapshot —
-    # both index the same keys.
     out = {
         "id": s["id"],
         "periodKey": s["period_key"],
         "label": s["label"],
         "capturedAt": s["captured_at"],
-        "createdAt": s["created_at"],  # full timestamp; distinguishes same-month saves
+        "createdAt": s["created_at"],
         "source": s["source"],
         "locked": bool(s["locked"]),
     }
@@ -86,7 +75,7 @@ def row_to_snapshot(s, keyword_count: int | None = None) -> dict:
 def row_to_snapshot_rank(r: sqlite3.Row) -> dict:
     return {
         "term": r["term"],
-        "rank": r["rank"],  # None = keyword had never been checked when frozen
+        "rank": r["rank"],
         "lastChecked": r["last_checked"],
     }
 
@@ -96,12 +85,6 @@ def list_projects(
     user: sqlite3.Row = Depends(require_active_user),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """LEFT JOIN + GROUP BY: each project with its keyword count in one
-    query. LEFT (not INNER) so projects with zero keywords still appear.
-
-    Per-client scoping: staff (accessible_project_ids → None) see every
-    project as before; a Client sees only the projects assigned to them. An
-    empty set short-circuits to no projects without hitting the DB."""
     allowed = accessible_project_ids(user, db)
     if allowed is None:
         rows = db.execute(
@@ -138,13 +121,6 @@ def project_detail(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     return {"project": {**row_to_project(project), "keywords": [row_to_keyword(k) for k in keywords]}}
 
 
-# ── Shared request bodies for the GA4 reads ─────────────────────────
-# All three analytics endpoints (summary, single-dimension breakdown, and the
-# Explore report) take the SAME structured filter payload — a list of
-# {dimension, operator, value, exclude} conditions joined by `match` — so a
-# filter set once in the UI applies across the whole Traffic section. POST
-# bodies (not query strings) carry the structured filters cleanly.
-
 class ReportFilterIn(BaseModel):
     dimension: str
     operator: str
@@ -170,11 +146,6 @@ class ReportIn(AnalyticsIn):
 
 
 def _validate_filters(filters: list[ReportFilterIn], match: str) -> str | None:
-    """Validate the SHARED filter payload exactly the way /report does: every
-    filter.dimension in ALLOWED_DIMENSIONS, every filter.operator in
-    ALLOWED_MATCH_TYPES, and `match` one of AND/OR — so we never hand GA4 an
-    arbitrary string. Returns an error string for the first problem, or None
-    when the payload is acceptable."""
     if any(f.dimension not in ALLOWED_DIMENSIONS for f in filters):
         return "Unsupported filter dimension"
     if any(f.operator not in ALLOWED_MATCH_TYPES for f in filters):
@@ -190,19 +161,6 @@ def project_analytics(
     body: AnalyticsIn,
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """GA4 traffic for this project — the headline summary, the trend
-    time-series, and every fixed breakdown (channels, country, city, language,
-    browser, device, landing pages) in one response. Viewing is open to any
-    signed-in user (the router-level require_auth), matching the other reads.
-
-    A POST so the SHARED dimension filter (body.filters + body.match) rides
-    along as structured JSON; the same payload /report accepts, validated the
-    same way. With filters set, the cards, trend and breakdowns all reflect
-    them. The default range is the last 28 days; start/end accept any GA4 date
-    expression (e.g. "30daysAgo", "2026-06-01", "today"). If the project has no
-    GA4 property ID — or GA4 isn't configured / errors out / the filter yields
-    no data — the provider returns a clear message instead of crashing, and we
-    pass it straight through."""
     project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(404, "Project not found.")
@@ -213,24 +171,10 @@ def project_analytics(
     filters = [f.model_dump() for f in body.filters]
     kw = dict(start_date=body.start, end_date=body.end, filters=filters, match=body.match)
 
-    # Returning users is a separate headline value, derived from the
-    # newVsReturning dimension (see get_returning_users), so it needs its own GA4
-    # round trip alongside the main one.
-    #
-    # These two used to run BACK TO BACK, which meant the endpoint's latency was
-    # the sum of two multi-second GA4 calls even though neither depends on the
-    # other's result. Firing them together makes it the slower of the two instead.
-    # get_analytics already fans out internally with the same pattern, and the
-    # provider caches its Google client PER THREAD, so being called from a worker
-    # thread is expected.
     with ThreadPoolExecutor(max_workers=2) as pool:
         analytics_job = pool.submit(get_analytics, project["ga_property_id"], **kw)
         returning_job = pool.submit(get_returning_users, project["ga_property_id"], **kw)
         analytics = analytics_job.result()
-        # Only attach it when the summary report itself succeeded — filtered the
-        # same way so the card matches the rest of the summary. The extra call is
-        # wasted when the summary failed, but it ran concurrently, so it cost no
-        # extra wall-clock time.
         if isinstance(analytics, dict) and isinstance(analytics.get("summary"), dict):
             analytics["summary"]["returningUsers"] = returning_job.result()
 
@@ -243,17 +187,6 @@ def project_analytics_breakdown(
     body: BreakdownIn,
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """GA4 traffic broken down by ONE requested `dimension` (plus the same
-    three metrics as /analytics), powering the dynamic dimension picker.
-
-    A POST carrying the SAME shared filter payload (body.filters + body.match)
-    as /report and /analytics, validated the same way. `body.dimension` is a
-    GA4 API name validated against ALLOWED_DIMENSIONS; an unknown one
-    short-circuits to {"error": "Unsupported dimension"} so we never hand GA4
-    arbitrary input. start/end reuse the SAME date handling as /analytics. Like
-    the other GA reads it never crashes — an incompatible combination, an
-    invalid filter, or any GA4 API error comes back as {"error": ...} for the
-    client to show as a friendly message."""
     project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(404, "Project not found.")
@@ -279,18 +212,6 @@ def project_analytics_report(
     body: ReportIn,
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """The "Explore" report builder — ONE GA4 runReport for an arbitrary
-    combination of dimensions, metrics and string filters (GA4's Free-form
-    exploration / Data API runReport). Viewing is open to any signed-in user
-    (the router-level require_auth), matching the other project reads.
-
-    Every dimension and filter.dimension must be in ALLOWED_DIMENSIONS, every
-    metric in REPORT_METRICS, every filter.operator in ALLOWED_MATCH_TYPES,
-    and `match` one of AND/OR — so we never hand GA4 an arbitrary string. An
-    invalid request short-circuits to {"report": {"error": ...}}. start/end
-    reuse the SAME date handling as /analytics. Like the other GA reads it
-    never crashes — any GA4 API error comes back as {"error": ...} for the
-    client to show as a friendly message."""
     project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(404, "Project not found.")
@@ -327,17 +248,6 @@ def project_search_console(
     end: str | None = None,
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """Google Search Console performance for this project — the headline
-    totals, the per-query and per-page breakdowns, and a by-date trend in one
-    response. Viewing is open to any signed-in user (the router-level
-    require_auth), matching the other reads.
-
-    start/end are YYYY-MM-DD query params reusing the SAME date handling as the
-    GA4 analytics endpoint (default to the last 28 days; passed straight to the
-    provider). If the project has no GSC site URL we short-circuit to a clear
-    message; otherwise the provider returns {totals, queries, pages, trend} — or
-    {error} on any failure (no access, API not enabled, bad site URL), which we
-    pass straight through so the client shows a friendly message, never a 500."""
     project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(404, "Project not found.")
@@ -347,10 +257,6 @@ def project_search_console(
     return data
 
 
-# ── Search Console Performance report (Google's "Search results" report) ──
-# The four enum sets the Search Analytics API accepts, validated here so we
-# never hand Google an arbitrary string. Values are the lowercase forms
-# Google documents (the provider sends them verbatim).
 SC_SEARCH_TYPES = {"web", "image", "video", "news", "discover", "googleNews"}
 SC_DIMENSIONS = {"query", "page", "country", "device", "searchAppearance", "date"}
 SC_OPERATORS = {"equals", "contains", "notContains", "includingRegex", "excludingRegex"}
@@ -366,7 +272,7 @@ class SearchConsolePerformanceIn(BaseModel):
     start: str | None = None
     end: str | None = None
     searchType: str = "web"
-    dimension: str = "query"  # the active table breakdown
+    dimension: str = "query"
     filters: list[SearchConsoleFilterIn] = []
 
 
@@ -376,22 +282,6 @@ def project_search_console_performance(
     body: SearchConsolePerformanceIn,
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """The Search Console Performance ("Search results") report for this
-    project — the headline totals, a by-date trend, and the active dimension
-    breakdown, ALL over the same property + date range + search type + filter
-    set, so the cards, chart and table always agree. Viewing is open to any
-    signed-in user (the router-level require_auth), matching the other reads.
-
-    A POST so the stackable filter list (each {dimension, operator, expression}
-    joined by AND) rides along as structured JSON. searchType, dimension and
-    every filter.dimension / filter.operator are validated against the
-    allowlists above; an unknown one short-circuits to {"error": ...} so we
-    never hand Google an arbitrary string. start/end are YYYY-MM-DD, defaulting
-    to the last 28 days (matching the GA4 panel). If the project has no GSC
-    site URL we short-circuit to a clear message; otherwise we run THREE
-    queries and return {totals, trend, rows, dimension}. Like the other reads
-    it never crashes — a 403, the API not being enabled, or an empty result
-    comes back as {"error": ...} for the client to show as a friendly message."""
     project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(404, "Project not found.")
@@ -407,8 +297,6 @@ def project_search_console_performance(
     if not project["gsc_site_url"]:
         return {"error": "No Search Console property configured"}
 
-    # Search Console wants concrete YYYY-MM-DD dates — default to the last 28
-    # days when a bound isn't supplied (matches the GA4 panel).
     end = body.end
     start = body.start
     if not start or not end:
@@ -429,12 +317,11 @@ def project_search_console_performance(
             res = query_performance(
                 site_url, start, end, body.searchType, dimensions, filters
             )
-            # The provider returns {error} on any failure — surface it.
             if isinstance(res, dict) and res.get("error"):
                 raise RuntimeError(res["error"])
             return res
 
-        totals_rows = run([])  # no dimensions → a single summary row
+        totals_rows = run([])
         trend_rows = run(["date"])
         rows_data = run([body.dimension])
     except Exception as exc:
@@ -453,8 +340,6 @@ def project_search_console_performance(
 
 
 def normalize_domain(raw: str | None) -> str | None:
-    """ "https://www.Sattva-Connect.com/about" -> "sattva-connect.com".
-    Store one canonical form so SERP matching is reliable."""
     if not raw or not raw.strip():
         return None
     d = raw.strip().lower()
@@ -465,29 +350,18 @@ def normalize_domain(raw: str | None) -> str | None:
 
 
 def normalize_ga_property_id(raw: str | None) -> str | None:
-    """Store the GA4 property ID as a bare trimmed string, or NULL when
-    blank. The provider accepts either "123456789" or "properties/123456789"."""
     if not raw or not raw.strip():
         return None
     return raw.strip()
 
 
 def normalize_gsc_site_url(raw: str | None) -> str | None:
-    """Store the Search Console site URL as a bare trimmed string, or NULL when
-    blank. The provider accepts either a URL-prefix property
-    ("https://www.example.com/") or a domain property ("sc-domain:example.com"),
-    so we keep it verbatim — GSC matches it exactly."""
     if not raw or not raw.strip():
         return None
     return raw.strip()
 
 
 def _lookup_location(db: sqlite3.Connection, code: int, kind: str) -> sqlite3.Row:
-    """Fetch one row of the expected kind from our geo table, or 400.
-
-    This is the trust boundary. The picker is a free-text search, so the client
-    sends back whatever code it was given — the server re-reads it here and never
-    takes the client's word for the kind or the parent."""
     row = db.execute(
         "SELECT location_code, name, full_name, kind, country_code, region_code"
         " FROM locations WHERE location_code = ?",
@@ -506,18 +380,6 @@ def _resolve_geo(
     region: int | None,
     city: int | None,
 ) -> tuple[int | None, int | None, int | None, int | None, str | None]:
-    """Validate the country/region/city trio and reduce it to what we store:
-        (location_code, country_code, region_code, city_code, location_label)
-
-    Rules, all enforced server-side:
-      • Each code must exist and be of its own kind.
-      • A region must belong to the chosen country; a city to the chosen region
-        (and country) — so a mismatched combination can never be saved.
-      • Region and city are optional. `location_code` — the single value the rank
-        checker sends DataForSEO — is the most specific one given, because that
-        is what makes local rankings accurate.
-      • All three empty = NULL = fall back to the server-wide default.
-    """
     if region is not None and country is None:
         raise HTTPException(400, "Choose a country before a region.")
     if city is not None and country is None:
@@ -547,10 +409,6 @@ def _resolve_geo(
 
 
 def _geo_from_body(db: sqlite3.Connection, body) -> tuple:
-    """Accept EITHER the three-input trio (countryCode/regionCode/cityCode) or a
-    bare locationCode from an older client, and return the storable tuple. When
-    only locationCode arrives we look the code up and split it ourselves, so the
-    old contract keeps working unchanged."""
     if body.countryCode is not None or body.regionCode is not None or body.cityCode is not None:
         return _resolve_geo(db, body.countryCode, body.regionCode, body.cityCode)
 
@@ -574,8 +432,6 @@ def _geo_from_body(db: sqlite3.Connection, body) -> tuple:
 class ProjectIn(BaseModel):
     name: str
     domain: str | None = None
-    # The geo picker's three inputs. locationCode is still accepted on its own
-    # for backward compatibility (see _geo_from_body).
     countryCode: int | None = None
     regionCode: int | None = None
     cityCode: int | None = None
@@ -622,9 +478,6 @@ class ProjectUpdateIn(BaseModel):
 
 @router.patch("/{project_id}", dependencies=[Depends(require_project_access), Depends(require_permission("toggleProject"))])
 def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connection = Depends(get_db)):
-    """Started life as the active/inactive toggle; now also updates the
-    domain. (Uses the toggleProject permission as a general "manage
-    project settings" right for now — revisit when the matrix is decided.)"""
     fields, values = [], []
     if body.active is not None:
         fields.append("active = ?")
@@ -632,10 +485,6 @@ def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connectio
     if body.domain is not None:
         fields.append("domain = ?")
         values.append(normalize_domain(body.domain))
-    # Geo: rewrite all five columns together, since they're one choice. Keyed on
-    # the fields the client actually SENT (model_fields_set), not on non-null —
-    # that's what lets "Server default" clear a saved country back to NULL, which
-    # the old `is not None` check silently ignored.
     geo_keys = {"countryCode", "regionCode", "cityCode", "locationCode"} & body.model_fields_set
     if geo_keys:
         location_code, country_code, region_code, city_code, label = _geo_from_body(db, body)
@@ -662,19 +511,12 @@ def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connectio
 
 @router.delete("/{project_id}", dependencies=[Depends(require_project_access), Depends(require_permission("deleteProject"))])
 def delete_project(project_id: int, db: sqlite3.Connection = Depends(get_db)):
-    """The FK cascade in the schema deletes the project's keywords
-    automatically — no manual cleanup, no orphans."""
     cur = db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
     if cur.rowcount == 0:
         raise HTTPException(404, "Project not found.")
     return {"ok": True}
 
 
-# ── Rank-check quota ────────────────────────────────────────────────
-# Who may run a rank check, and how often. Only Super Admin and Admin
-# (Manager) can check; each is capped at RANK_CHECK_LIMIT runs per project
-# within a rolling RANK_CHECK_WINDOW_DAYS window. Enforced here on the server —
-# the button being hidden/disabled on the client is only a convenience.
 RANK_CHECK_ROLES = ("Super Admin", "Admin")
 RANK_CHECK_LIMIT = 3
 RANK_CHECK_WINDOW_DAYS = 14
@@ -689,14 +531,6 @@ def check_project_ranks(
     user: sqlite3.Row = Depends(require_roles(*RANK_CHECK_ROLES)),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """Check every keyword in the project against the rank provider and
-    record the lookups (current -> previous rotation). This is the same
-    write path as manual entry — a future cron job just calls this
-    endpoint on a schedule and the dashboard fills itself in.
-
-    Restricted to Super Admin / Admin (require_roles above), and rate-limited
-    to RANK_CHECK_LIMIT runs per user per project within a rolling
-    RANK_CHECK_WINDOW_DAYS window."""
     from datetime import datetime, timedelta, timezone
 
     project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
@@ -709,10 +543,6 @@ def check_project_ranks(
     if not kws:
         raise HTTPException(400, "No keywords to check yet.")
 
-    # ── Enforce the quota BEFORE the (slow, paid) provider call. Count this
-    # user's checks on this project inside the rolling window. created_at is
-    # stored as 'YYYY-MM-DD HH:MM:SS' UTC (datetime('now')), so a string compare
-    # against the same-format cutoff is correct and DB-agnostic.
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=RANK_CHECK_WINDOW_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
     recent = db.execute(
@@ -722,7 +552,6 @@ def check_project_ranks(
         (user["id"], project_id, cutoff),
     ).fetchall()
     if len(recent) >= RANK_CHECK_LIMIT:
-        # The quota frees up when the OLDEST run in the window ages out.
         try:
             oldest = datetime.strptime(recent[0]["created_at"], "%Y-%m-%d %H:%M:%S")
             resets_on = (oldest + timedelta(days=RANK_CHECK_WINDOW_DAYS)).strftime("%b %d, %Y")
@@ -743,7 +572,6 @@ def check_project_ranks(
             "Add one when creating the project, or via PATCH /api/projects/:id {\"domain\": \"yoursite.com\"}.",
         )
 
-    # Per-project country if set, otherwise the global server default.
     location_code = project["location_code"] if project["location_code"] is not None else RANK_LOCATION_CODE
 
     try:
@@ -759,8 +587,6 @@ def check_project_ranks(
     for k in kws:
         rank = ranks.get(k["term"])
         if rank is None:
-            # Not in the checked depth: report it, leave the ledger row
-            # untouched rather than inventing a number.
             not_found.append(k["term"])
             continue
         db.execute(
@@ -769,8 +595,6 @@ def check_project_ranks(
         )
         updated += 1
 
-    # Record this run against the quota (only reached on a successful check, so
-    # a failed provider call doesn't burn a slot).
     db.execute(
         "INSERT INTO rank_check_log (user_id, project_id) VALUES (?, ?)",
         (user["id"], project_id),
@@ -788,13 +612,8 @@ def check_project_ranks(
     }
 
 
-# ── Bulk import via Excel ───────────────────────────────────────────
-
 @router.get("/keywords/sample-template")
 def download_sample_template(user=Depends(require_active_user)):
-    """Serve the .xlsx template. A GET that returns a file, not JSON:
-    the Content-Disposition header tells the browser to download it
-    with a filename instead of trying to render it."""
     data = build_sample_workbook()
     return Response(
         content=data,
@@ -808,12 +627,6 @@ def download_sample_template(user=Depends(require_active_user)):
     dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
 )
 async def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Connection = Depends(get_db)):
-    """Accept an uploaded .xlsx, validate every row, insert the good
-    ones, and report a per-row reason for every skipped one.
-
-    Partial success is intentional: importing 47 of 50 keywords and
-    naming the 3 problems beats rejecting the whole file over one typo.
-    """
     project = db.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(404, "Project not found.")
@@ -822,7 +635,7 @@ async def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Co
         raise HTTPException(400, "Please upload an .xlsx file (the sample template format).")
 
     raw = await file.read()
-    if len(raw) > 5 * 1024 * 1024:  # 5 MB ceiling
+    if len(raw) > 5 * 1024 * 1024:
         raise HTTPException(400, "That file is too large (limit 5 MB).")
 
     try:
@@ -830,7 +643,6 @@ async def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Co
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
-    # Skip terms already tracked on this project (idempotent re-imports).
     existing = {
         r["term"]
         for r in db.execute("SELECT term FROM keywords WHERE project_id = ?", (project_id,)).fetchall()
@@ -839,8 +651,6 @@ async def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Co
     skipped_existing = len(valid) - len(to_insert)
 
     for v in to_insert:
-        # Keyword only — current/previous rank stay NULL until a rank
-        # check fills them in (same as adding a keyword by hand).
         db.execute(
             "INSERT INTO keywords (project_id, term) VALUES (?, ?)",
             (project_id, v["term"]),
@@ -849,7 +659,7 @@ async def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Co
     return {
         "imported": len(to_insert),
         "skippedExisting": skipped_existing,
-        "errors": errors,  # [{row, reason}, ...]
+        "errors": errors,
         "totalRows": len(valid) + len(errors),
     }
 
@@ -894,9 +704,6 @@ class NewRankIn(BaseModel):
     dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
 )
 def record_lookup(project_id: int, keyword_id: int, body: NewRankIn, db: sqlite3.Connection = Depends(get_db)):
-    """Record a NEW LOOKUP: current -> previous, new number -> current,
-    stamp the date. A future automated rank-checker calls this same
-    write path — only WHO supplies the number changes."""
     if body.newRank is None or body.newRank < 1:
         raise HTTPException(400, "New rank must be a whole number of 1 or more.")
 
@@ -919,8 +726,6 @@ def record_lookup(project_id: int, keyword_id: int, body: NewRankIn, db: sqlite3
     dependencies=[Depends(require_project_access), Depends(require_permission("deleteKeyword"))],
 )
 def delete_keyword(project_id: int, keyword_id: int, db: sqlite3.Connection = Depends(get_db)):
-    # Both ids in the WHERE clause: a keyword can only be deleted
-    # through its own project — matters once per-project access exists.
     cur = db.execute(
         "DELETE FROM keywords WHERE id = ? AND project_id = ?", (keyword_id, project_id)
     )
@@ -929,15 +734,10 @@ def delete_keyword(project_id: int, keyword_id: int, db: sqlite3.Connection = De
     return {"ok": True}
 
 
-# ── Manual monthly ranks — the Keywords grid (keywords x months) ──────────────
-# There is no automated rank check: the team types each keyword's position per
-# month here, and the report's three-month table is three reads of this data.
-
-
 class RankCellIn(BaseModel):
     keywordId: int
-    month: str          # "YYYY-MM"
-    rank: int | None = None   # None / 0 clears the cell
+    month: str
+    rank: int | None = None
 
 
 class RankCellsIn(BaseModel):
@@ -950,13 +750,6 @@ def get_keyword_ranks(
     months: str = "",
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """The grid for one project: every keyword with its rank in each requested
-    month. `months` is a comma-separated list of "YYYY-MM" (newest last), so the
-    client controls exactly which columns it wants.
-
-    A month with no stored row is ABSENT from a keyword's `ranks` map rather than
-    present-as-null — that's how the grid tells "never recorded" from "recorded as
-    not ranking". Read-only, so any user who can see the project can read it."""
     wanted = [m.strip() for m in (months or "").split(",") if m.strip()]
     if not wanted:
         raise HTTPException(400, "Pass ?months=YYYY-MM,YYYY-MM,... — at least one month.")
@@ -968,34 +761,20 @@ def get_keyword_ranks(
     dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
 )
 def save_keyword_ranks(project_id: int, body: RankCellsIn, db: sqlite3.Connection = Depends(get_db)):
-    """Bulk-upsert grid cells — only the cells sent are touched, so editing one
-    column can't blank the rest of the row and two people on different months
-    can't clobber each other. A null/0 rank DELETES that cell. Gated on the same
-    `recordRank` permission the old rank-recording endpoint used."""
     return keyword_rank_service.save_cells(db, project_id, [c.model_dump() for c in body.cells])
 
-
-# ── Snapshots — frozen monthly copies of the ledger (read-only views) ─
 
 @router.post(
     "/{project_id}/snapshots", status_code=201,
     dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
 )
 def save_snapshot(project_id: int, db: sqlite3.Connection = Depends(get_db)):
-    """Freeze the current month's ranks for this project. Gated by recordRank
-    (so Team can freeze the month it just recorded). The capture itself lives
-    in snapshot_service.create_snapshot (404 unknown project, 409 if the
-    month is locked)."""
     summary = create_snapshot(db, project_id)
     return {"snapshot": row_to_snapshot(summary, summary["keyword_count"])}
 
 
 @router.get("/{project_id}/snapshots", dependencies=[Depends(require_project_access)])
 def list_snapshots(project_id: int, db: sqlite3.Connection = Depends(get_db)):
-    """All saved snapshots for the project, newest first, each with its
-    frozen keyword count. Ordered by created_at so multiple saves within the
-    same month come back newest-first (the UI groups them by month).
-    Read-only."""
     project = db.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(404, "Project not found.")
@@ -1013,16 +792,12 @@ def list_snapshots(project_id: int, db: sqlite3.Connection = Depends(get_db)):
 
 @router.get("/{project_id}/snapshots/{snapshot_id}", dependencies=[Depends(require_project_access)])
 def snapshot_detail(project_id: int, snapshot_id: int, db: sqlite3.Connection = Depends(get_db)):
-    """One snapshot's meta plus its frozen rows (term, rank, last_checked),
-    ranked best-first with never-checked keywords (NULL rank) last.
-    Read-only."""
     snap = db.execute(
         "SELECT * FROM snapshots WHERE id = ? AND project_id = ?", (snapshot_id, project_id)
     ).fetchone()
     if snap is None:
         raise HTTPException(404, "Snapshot not found.")
     rows = db.execute(
-        # `rank IS NULL` sorts 0 (has a rank) before 1 (never checked).
         "SELECT * FROM snapshot_ranks WHERE snapshot_id = ? ORDER BY rank IS NULL, rank ASC, term",
         (snapshot_id,),
     ).fetchall()

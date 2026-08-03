@@ -1,24 +1,8 @@
-/* ════════════════════════════════════════════════════════════════════
-   TOASTS — app-wide, ephemeral notifications.
-
-   Wrap the app once in <ToastProvider> (see main.jsx). Anywhere below it:
-
-     const toast = useToast();
-     toast.success("Signed in");
-     toast.error("Something went wrong");
-     toast.info("Heads up");
-
-   Each toast auto-dismisses (errors linger a little longer) and can be
-   closed by hand. Rendered top-right, stacked newest on top, above
-   everything else (z-[100]). No external state, no localStorage.
-   ════════════════════════════════════════════════════════════════════ */
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { CheckCircle2, AlertCircle, Info, X } from "lucide-react";
 
 const ToastContext = createContext(null);
 
-// Per-kind styling + icon. Kept tiny and Tailwind-only so it matches the rest
-// of the UI without a compiler step.
 const KIND = {
   success: { icon: CheckCircle2, ring: "border-emerald-200", bar: "bg-emerald-500", iconCls: "text-emerald-600" },
   error:   { icon: AlertCircle,  ring: "border-rose-200",    bar: "bg-rose-500",    iconCls: "text-rose-600" },
@@ -37,7 +21,6 @@ export function ToastProvider({ children }) {
     (message, kind = "info", opts = {}) => {
       if (!message) return;
       const id = ++idRef.current;
-      // Errors stay ~6s (more to read / react to); the rest ~4s.
       const duration = opts.duration ?? (kind === "error" ? 6000 : 4000);
       setToasts((list) => [{ id, message, kind, title: opts.title }, ...list]);
       if (duration > 0) setTimeout(() => dismiss(id), duration);
@@ -46,7 +29,6 @@ export function ToastProvider({ children }) {
     [dismiss]
   );
 
-  // Stable helper object so consumers can destructure without re-renders.
   const api = useMemo(
     () => ({
       notify,
@@ -94,8 +76,6 @@ export function ToastProvider({ children }) {
   );
 }
 
-// Safe to call even outside a provider (returns no-op helpers), so a component
-// never crashes if it's rendered in isolation (e.g. tests).
 export function useToast() {
   const ctx = useContext(ToastContext);
   return (

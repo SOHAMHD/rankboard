@@ -1,45 +1,23 @@
-/* ════════════════════════════════════════════════════════════════════
-   SHARED UI — design tokens and components every screen uses.
-
-   Why split files now: one giant App.jsx was fine for a prototype,
-   but each screen growing independently makes a single file painful
-   to navigate and review. The rule of thumb: split when a file has
-   more than one reason to change.
-   ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useRef, useState } from "react";
 import { Eye, KeyRound, LoaderCircle, LogOut, Mail, Search, Users, X } from "lucide-react";
 import { api } from "./api";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
 
-// The ONE place mapping the report workflow's role concepts to the strings
-// actually stored in users.role (mirrors server-python/app/permissions.py).
-// Use ROLE.* and the flags below instead of sprinkling raw strings around.
 export const ROLE = {
-  ADMIN: "Super Admin",   // everything
-  MANAGER: "Admin",       // all projects; authors + (later) sends reports
-  TEAM_MEMBER: "Team",    // all projects; authors reports; can't send
-  USER: "Client",         // scoped to assigned projects
+  ADMIN: "Super Admin",
+  MANAGER: "Admin",
+  TEAM_MEMBER: "Team",
+  USER: "Client",
 };
 
-// Convenience role flags derived from user.role. Report UI is NOT gated yet —
-// these just make the role available the same way `can(user, action)` does.
 export const isAdmin = (user) => user?.role === ROLE.ADMIN;
 export const isManager = (user) => user?.role === ROLE.MANAGER;
 export const isTeamMember = (user) => user?.role === ROLE.TEAM_MEMBER;
-// Anyone who may author a report: manager, team member, or admin.
 export const isAuthor = (user) => isAdmin(user) || isManager(user) || isTeamMember(user);
-// May HARD-delete a report version (any status): Super Admin + Admin/Manager only.
-// Mirrors server-python permissions.DELETER_ROLES; this only hides the control —
-// the backend enforces the same set on the endpoint regardless.
 export const isReportDeleter = (user) => isAdmin(user) || isManager(user);
-// May SEND a report to a client: Super Admin + Admin/Manager only (NOT Team).
-// Mirrors server-python permissions.SENDER_ROLES; hiding the control is a
-// convenience — the /reports/{id}/send endpoint enforces the same set.
 export const isReportSender = (user) => isAdmin(user) || isManager(user);
 
-// Display labels for roles. The STORED value stays the raw role string
-// (these are presentation only).
 export const ROLE_LABELS = {
   "Super Admin": "Super Admin",
   "Admin": "Admin (Manager)",
@@ -56,10 +34,6 @@ export const ROLE_DESCRIPTIONS = {
   "Client": "Permissions to be decided — most likely read-only.",
 };
 
-// A user is read-only when they can't author reports AND the server granted
-// them no write permission at all (today: the Client role). Authors are never
-// read-only. Derived from the permissions row + role so the "Read-only"
-// indicator stays accurate now that Team is a write-capable author.
 const WRITE_ACTIONS = ["manageUsers", "addProject", "toggleProject", "deleteProject", "addKeyword", "deleteKeyword"];
 export const isReadOnly = (user) =>
   !!user && !isAuthor(user) && !WRITE_ACTIONS.some((a) => user.permissions?.[a]);
@@ -80,10 +54,6 @@ export const BTN_PRIMARY =
 export const BTN_GHOST =
   "inline-flex items-center justify-center gap-1.5 rounded-lg border border-stone-300 hover:border-stone-400 bg-white text-stone-700 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500";
 
-/* The client-side `can` reads the permissions object the SERVER sent
-   with the user (from /api/auth/me). The matrix itself lives in one
-   place — server/src/permissions.js — and the client just renders
-   what it's told. Hiding a button here is UX; the API re-checks. */
 export const can = (user, action) => !!user?.permissions?.[action];
 
 export function TopBar({ user, onLogout, onPeople, onHome }) {
@@ -212,34 +182,6 @@ export function Toggle({ on, onClick }) {
   );
 }
 
-
-/* ════════════════════════════════════════════════════════════════════
-   SMART SEARCH — a text input that suggests as you type.
-
-   Built for lists far too long to be a <select> (every country, every region,
-   every city), and used three times over in the project geo picker. The user
-   types a few letters; `onSearch(query)` fetches the matches; picking one calls
-   `onChange(item)` with the whole row (not just an id), so the caller keeps the
-   label for free.
-
-   Deliberate behaviours, each one a papercut we'd otherwise hit:
-     • Debounced (180ms) so typing "united kingdom" is ~2 requests, not 14.
-     • Stale responses are dropped by sequence number, so a slow reply for "de"
-       can never overwrite the results for "delh".
-     • Focusing an empty input searches "" — the API returns the first page, so
-       it still feels like a dropdown when you don't know what to type.
-     • Full keyboard control: ↑ ↓ Enter Escape, and the highlighted row is
-       scrolled into view.
-     • Clearing the text clears the selection, so there's no way to leave a
-       stale label sitting over an unset value.
-
-   Props:
-     value      the selected item ({ code, name, … }) or null
-     onChange   called with an item, or null when cleared
-     onSearch   async (query) => items;  each item needs { code, name } and may
-                add `hint` (shown dimmed on the right)
-     label / hint / placeholder / disabled / disabledHint / autoFocus
-   ════════════════════════════════════════════════════════════════════ */
 export function SmartSearch({
   label,
   optional,
@@ -261,10 +203,9 @@ export function SmartSearch({
   const [busy, setBusy] = useState(false);
   const boxRef = useRef(null);
   const listRef = useRef(null);
-  const seq = useRef(0);        // newest request wins
-  const query = useRef("");     // what the open list is showing
+  const seq = useRef(0);
+  const query = useRef("");
 
-  // The input mirrors the selection unless the user is actively typing.
   const shown = open ? text : value?.name ?? "";
 
   const run = (q) => {
@@ -273,7 +214,7 @@ export function SmartSearch({
     setBusy(true);
     Promise.resolve(onSearch(q))
       .then((rows) => {
-        if (mine !== seq.current) return; // a newer keystroke already won
+        if (mine !== seq.current) return;
         setItems(rows || []);
         setActive(0);
       })
@@ -285,9 +226,6 @@ export function SmartSearch({
       });
   };
 
-  // Debounce the typing, but not the first open (that should feel instant).
-  // debounceMs={0} skips the wait entirely — used where the list is already in
-  // memory, so filtering is synchronous and there's nothing to spare the network.
   useEffect(() => {
     if (!open) return;
     if (text === query.current) return;
@@ -296,7 +234,6 @@ export function SmartSearch({
     return () => clearTimeout(t);
   }, [text, open, debounceMs]);
 
-  // Click outside closes and restores the selected label.
   useEffect(() => {
     if (!open) return;
     const away = (e) => {
@@ -306,7 +243,6 @@ export function SmartSearch({
     return () => document.removeEventListener("mousedown", away);
   }, [open]);
 
-  // Keep the highlighted row visible while arrowing through a long list.
   useEffect(() => {
     listRef.current?.children[active]?.scrollIntoView({ block: "nearest" });
   }, [active, items]);
@@ -332,7 +268,7 @@ export function SmartSearch({
     } else if (e.key === "Enter") {
       if (open && items[active]) {
         e.preventDefault();
-        e.stopPropagation(); // don't let the modal's Enter-to-submit fire too
+        e.stopPropagation();
         pick(items[active]);
       }
     } else if (e.key === "Escape") {
@@ -406,7 +342,7 @@ export function SmartSearch({
                 role="option"
                 aria-selected={i === active}
                 onMouseEnter={() => setActive(i)}
-                onMouseDown={(e) => e.preventDefault()} // keep focus so blur can't beat the click
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => pick(item)}
                 className={`px-3 py-1.5 cursor-pointer flex items-baseline justify-between gap-3 ${
                   i === active ? "bg-orange-50 text-stone-900" : "text-stone-700"
@@ -425,13 +361,9 @@ export function SmartSearch({
   );
 }
 
-
-/* ── Change password: verify it's really you via an emailed one-time code,
-   then set a new password. When the email step is frozen (local dev) the code
-   step is skipped and the user sets a new password directly. ── */
 export function ChangePasswordModal({ onClose }) {
-  const [otpRequired, setOtpRequired] = useState(null); // null = still loading the config
-  const [phase, setPhase] = useState("request"); // request | verify | done (OTP mode only)
+  const [otpRequired, setOtpRequired] = useState(null);
+  const [phase, setPhase] = useState("request");
   const [emailSentTo, setEmailSentTo] = useState(null);
   const [code, setCode] = useState("");
   const [pw1, setPw1] = useState("");
@@ -442,7 +374,7 @@ export function ChangePasswordModal({ onClose }) {
   useEffect(() => {
     api("/auth/config")
       .then((d) => setOtpRequired(!!d.passwordOtpRequired))
-      .catch(() => setOtpRequired(true)); // safe default: require the code
+      .catch(() => setOtpRequired(true));
   }, []);
 
   const requestCode = async () => {

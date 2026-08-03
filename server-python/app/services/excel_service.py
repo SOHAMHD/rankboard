@@ -1,49 +1,21 @@
-"""EXCEL BULK IMPORT — generate the sample template, and parse uploads.
-
-Design choices worth understanding:
-
-- We READ uploads in read_only mode and WRITE the sample with styling.
-  openpyxl is the right tool here (not pandas) because we want precise
-  control over headers, validation, and a styled template — and because
-  it streams large files without loading everything into memory.
-
-- Validation is PER ROW and never trusts the file. A user's spreadsheet
-  is just untrusted input wearing a friendly extension: rows can be
-  blank, mistyped, duplicated, or malicious. We collect the good rows
-  and a per-row reason for every bad one, then report both — so the
-  user fixes 3 bad rows instead of being told only "invalid file".
-
-- The parser returns plain dicts; the ROUTE decides what to insert.
-  Keeping DB writes out of here keeps this unit testable and focused.
-
-- The user only ever supplies the KEYWORD. A keyword's Google position
-  is discovered automatically the next time "Check rankings" runs — so
-  the template has a single column and the parser ignores anything else.
-"""
 import io
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
-# The contract between the sample file and the parser: this exact
-# header. Keyword is the only thing we ask the user for.
 COLUMNS = ["keyword"]
-MAX_ROWS = 1000  # guard against someone uploading a 1M-row monster
+MAX_ROWS = 1000
 
 
 def build_sample_workbook() -> bytes:
-    """Return a styled .xlsx template as bytes, ready to stream to the
-    browser. Row 1 = header, then a few example rows, then a notes
-    block so the user knows the rules without reading docs."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Keywords"
 
-    header_fill = PatternFill("solid", start_color="EA580C")  # the app's orange
+    header_fill = PatternFill("solid", start_color="EA580C")
     header_font = Font(bold=True, color="FFFFFF", name="Arial")
     body_font = Font(name="Arial")
 
-    # Header row
     ws.append(["Keyword"])
     cell = ws.cell(row=1, column=1)
     cell.fill = header_fill
@@ -51,7 +23,6 @@ def build_sample_workbook() -> bytes:
     cell.alignment = Alignment(horizontal="left", vertical="center")
     ws.row_dimensions[1].height = 22
 
-    # Example rows (clearly illustrative)
     examples = [
         "online yoga classes",
         "meditation retreat rishikesh",
@@ -63,7 +34,6 @@ def build_sample_workbook() -> bytes:
 
     ws.column_dimensions["A"].width = 46
 
-    # Notes a couple of rows below the data
     notes_start = 2 + len(examples) + 1
     notes = [
         "How to use this template:",
@@ -84,11 +54,6 @@ def build_sample_workbook() -> bytes:
 
 
 def parse_keyword_workbook(file_bytes: bytes) -> tuple[list[dict], list[dict]]:
-    """Parse an uploaded .xlsx. Returns (valid_rows, errors).
-
-    valid_rows: [{"term"}, ...]   — rank columns are intentionally ignored
-    errors:     [{"row": <excel row number>, "reason": "..."}, ...]
-    """
     try:
         wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     except Exception:
@@ -100,21 +65,17 @@ def parse_keyword_workbook(file_bytes: bytes) -> tuple[list[dict], list[dict]]:
     seen_terms: set[str] = set()
     data_rows = 0
 
-    # enumerate starting at row 1; we skip row 1 as the header
     for excel_row, row in enumerate(ws.iter_rows(values_only=True), start=1):
         if excel_row == 1:
-            continue  # header
+            continue
         if row is None:
             continue
 
         term_raw = row[0] if len(row) > 0 else None
 
-        # Blank keyword → silently skip (trailing empties, notes, etc.).
-        # Keyword is the only field, so a row with no keyword is just noise.
         if term_raw is None or str(term_raw).strip() == "":
             continue
 
-        # Skip the template's own notes block if left in.
         if isinstance(term_raw, str) and term_raw.strip().startswith(("How to use", "•")):
             continue
 
@@ -125,7 +86,6 @@ def parse_keyword_workbook(file_bytes: bytes) -> tuple[list[dict], list[dict]]:
 
         term = str(term_raw).strip().lower()
 
-        # Duplicate within the same file → keep the first, flag the rest.
         if term in seen_terms:
             errors.append({"row": excel_row, "reason": f"Duplicate of an earlier row for “{term}”; skipped."})
             continue

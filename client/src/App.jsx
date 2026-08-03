@@ -1,15 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   APP — the state machine, now just a thin coordinator.
-
-   Each screen lives in its own module and owns its own data fetching;
-   this file only decides WHICH screen renders:
-
-     no user                → Login
-     mustChangePassword     → forced password change
-     openProjectId set      → that project's dashboard
-     view === "people"      → admin panel (if permitted)
-     otherwise              → Projects (the main landing page)
-   ════════════════════════════════════════════════════════════════════ */
 import { lazy, Suspense, useEffect, useState } from "react";
 import { LoaderCircle } from "lucide-react";
 import { api, getToken, setToken } from "./api";
@@ -18,9 +6,6 @@ import { useToast } from "./toast.jsx";
 import { LoginView, SetPasswordView, TwoFactorView } from "./screens/Auth.jsx";
 import { ProjectsView } from "./screens/Projects.jsx";
 
-// The two heaviest screens are code-split so they aren't in the initial bundle:
-// Dashboard pulls in Recharts + the TipTap report editors, and AdminPanel is
-// only reachable by admins. They load on demand behind the <Suspense> fallback.
 const ProjectDashboard = lazy(() =>
   import("./screens/Dashboard.jsx").then((m) => ({ default: m.ProjectDashboard }))
 );
@@ -40,12 +25,10 @@ export default function App() {
   const toast = useToast();
   const [user, setUser] = useState(null);
   const [booting, setBooting] = useState(true);
-  const [view, setView] = useState("projects"); // "projects" | "people"
+  const [view, setView] = useState("projects");
   const [openProjectId, setOpenProjectId] = useState(null);
-  const [twofa, setTwofa] = useState(null); // {required, enrolled, verified} from login/me
+  const [twofa, setTwofa] = useState(null);
 
-  // On load: if a token is saved, ask the server who we are, so a
-  // page refresh doesn't log the user out.
   useEffect(() => {
     if (!getToken()) {
       setBooting(false);
@@ -60,8 +43,6 @@ export default function App() {
       .finally(() => setBooting(false));
   }, []);
 
-  // Warm the code-split Dashboard chunk in the background once signed in, so
-  // opening a project does not stall on a lazy-load fetch.
   useEffect(() => {
     if (!user) return;
     const t = setTimeout(() => {
@@ -74,9 +55,8 @@ export default function App() {
     try {
       const d = await api("/auth/login", { method: "POST", body: { email, password } });
       setToken(d.token);
-      setUser(d.user); // includes the permissions object from the server
-      setTwofa(d.twofa); // {required, enrolled, verified:false} — gates access below
-      // If 2FA still stands between them and the app, say so; otherwise welcome.
+      setUser(d.user);
+      setTwofa(d.twofa);
       if (d.twofa && d.twofa.required && !d.twofa.verified) {
         toast.info("Password accepted — one more step to finish signing in.");
       } else {
@@ -84,7 +64,7 @@ export default function App() {
       }
     } catch (err) {
       toast.error(err.message || "Login failed.", { title: "Sign-in failed" });
-      throw err; // let LoginView still show its inline error
+      throw err;
     }
   };
 
@@ -97,8 +77,6 @@ export default function App() {
     toast.info("You've been signed out.");
   };
 
-  // Called when the authenticator (or a backup) code checks out: swap the
-  // pending token for the verified one and let the app render.
   const handle2faVerified = (token, u) => {
     setToken(token);
     setUser(u);

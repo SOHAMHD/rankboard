@@ -1,26 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   KEYWORDS — the one page where rankings live. A spreadsheet grid:
-   one ROW per keyword, one editable COLUMN per month.
-
-   There is no automated rank checking anywhere in the product, and no
-   snapshots: the team types each keyword's position for each month, and a
-   hand-entered month IS the frozen record. The report's three-month keyword
-   table reads these same rows.
-
-   HOW SAVING WORKS
-   Cells are saved as a BULK UPSERT of only the cells that changed (PUT
-   /projects/:id/keyword-ranks). Two consequences worth knowing:
-     • Editing one month can never blank another — the server only touches the
-       cells it receives.
-     • Clearing a cell DELETES that stored value rather than writing 0, so it
-       goes back to reading "—" (never recorded) rather than "not ranking".
-
-   BLANK vs NOT RANKING
-   A rank of 0 in the sheets this data comes from means "not in the results".
-   The column's constraint is >= 1, so 0 is stored as "no value" — the grid and
-   the report both show "—". If you need to distinguish the two later, that's a
-   schema change, not a UI one.
-   ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ListOrdered, LoaderCircle, Plus, Save, Trash2 } from "lucide-react";
 import { api } from "../api";
@@ -32,15 +9,12 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-/** "2026-06" -> "Jun 2026" (short, because it's a column heading). */
 function shortMonthLabel(key) {
   const [y, m] = String(key).split("-");
   const idx = Number(m) - 1;
   return idx >= 0 && idx < 12 ? `${MONTH_NAMES[idx].slice(0, 3)} ${y}` : String(key);
 }
 
-/** The last `count` months as "YYYY-MM", OLDEST first — so the grid reads left to
- *  right like the report's three-month table does. */
 function recentMonths(count) {
   const out = [];
   const d = new Date();
@@ -58,15 +32,12 @@ export function KeywordsView({ user, project }) {
   const [monthCount, setMonthCount] = useState(3);
   const months = useMemo(() => recentMonths(monthCount), [monthCount]);
 
-  const [rows, setRows] = useState(null); // null = loading
+  const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
 
-  // Cells the user has touched but not yet saved: "keywordId:month" -> string.
-  // Kept SEPARATE from the loaded rows so the grid can show what's unsaved, and
-  // so a save sends only these rather than the whole matrix.
   const [dirty, setDirty] = useState({});
   const dirtyCount = Object.keys(dirty).length;
 
@@ -94,8 +65,6 @@ export function KeywordsView({ user, project }) {
 
   const cellKey = (id, month) => `${id}:${month}`;
 
-  /** The value to display: the unsaved edit if there is one, else the stored
-   *  rank, else "". An ABSENT month in `ranks` means never recorded. */
   const cellValue = (row, month) => {
     const k = cellKey(row.id, month);
     if (k in dirty) return dirty[k];
@@ -104,8 +73,6 @@ export function KeywordsView({ user, project }) {
   };
 
   const setCell = (row, month, raw) => {
-    // Digits only — a rank is a position, and letting through "-" or "." would
-    // just produce a 400 from the server on save.
     const clean = raw.replace(/[^0-9]/g, "");
     setDirty((d) => ({ ...d, [cellKey(row.id, month)]: clean }));
   };
@@ -322,9 +289,6 @@ export function KeywordsView({ user, project }) {
   );
 }
 
-/* ── Add keywords: one per line, so a column can be pasted straight from a
-   sheet. Ranks are filled in on the grid afterwards, not here — keeping the two
-   steps separate is what makes a 40-keyword paste bearable. ── */
 function AddKeywordsModal({ projectId, onClose, onAdded }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -343,9 +307,6 @@ function AddKeywordsModal({ projectId, onClose, onAdded }) {
     setError(null);
     let added = 0;
     const failed = [];
-    // Sequential on purpose: the add endpoint is one-keyword-at-a-time, and a
-    // partial failure should report WHICH terms failed rather than aborting the
-    // whole paste.
     for (const term of terms) {
       try {
         await api(`/projects/${projectId}/keywords`, { method: "POST", body: { term } });

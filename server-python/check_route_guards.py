@@ -1,23 +1,3 @@
-"""SAFETY NET — fail loudly if any project-scoped route is missing its guard.
-
-Per-client scoping leans on EVERY route with a `{project_id}` path param being
-protected by `require_project_access` (see app/security.py). A future route
-added without it would silently let any signed-in user reach another client's
-project. This script catches that: it imports the real app, finds every route
-whose path contains "{project_id}", and exits non-zero if any of them lacks the
-guard in its (fully-merged) dependency tree.
-
-Run it from the server-python directory:
-
-    python check_route_guards.py
-
-Exit 0 = every project-scoped route is guarded. Exit 1 = at least one is not
-(the offenders are listed). Importing the app runs init_db(), which only
-CREATEs tables IF NOT EXISTS (no reset) and starts no server.
-
-It's also pytest-collectable: `pytest check_route_guards.py` runs
-test_all_project_routes_guarded().
-"""
 import sys
 
 from fastapi.routing import APIRoute
@@ -29,10 +9,6 @@ PROJECT_ID_MARKER = "{project_id}"
 
 
 def _dependant_calls(dependant):
-    """Yield the `.call` of every dependency in a route's dependant tree,
-    recursively. A route's per-route `dependencies=[...]` (where the guard is
-    applied) and the router-level dependencies are both merged into
-    route.dependant when the route is added, so this sees the full picture."""
     for dep in dependant.dependencies:
         if dep.call is not None:
             yield dep.call
@@ -40,14 +16,6 @@ def _dependant_calls(dependant):
 
 
 def _walk_routes(routes, prefix=""):
-    """Yield (full_path, APIRoute) for every concrete route.
-
-    This app's FastAPI uses LAZY router inclusion: app.routes holds
-    `_IncludedRouter` wrappers, not flattened APIRoutes. Each wrapper exposes
-    `.original_router` (the real APIRouter) and `.include_context.prefix`. We
-    recurse through those to reach the actual APIRoutes and rebuild their full
-    paths. Falls back gracefully to standard flat APIRoutes if a plain FastAPI
-    ever materializes them directly."""
     for route in routes:
         if isinstance(route, APIRoute):
             yield prefix + route.path, route
@@ -61,7 +29,6 @@ def _walk_routes(routes, prefix=""):
 
 
 def collect_project_routes():
-    """All {project_id} routes with whether each is guarded — for reporting."""
     rows = []
     for full_path, route in _walk_routes(app.routes):
         if PROJECT_ID_MARKER not in full_path:
@@ -73,12 +40,10 @@ def collect_project_routes():
 
 
 def find_unguarded_routes():
-    """Return [(method, path)] for every {project_id} route missing the guard."""
     return [(m, p) for m, p, guarded in collect_project_routes() if not guarded]
 
 
 def test_all_project_routes_guarded():
-    """pytest entry point: every {project_id} route must carry the guard."""
     unguarded = find_unguarded_routes()
     assert not unguarded, f"Unguarded {{project_id}} routes: {unguarded}"
 

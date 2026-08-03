@@ -1,26 +1,3 @@
-"""MOZ PROVIDER - domain Authority & link metrics from the Moz API.
-
-This account has BOTH kinds of Moz credentials, so the provider supports both
-and picks automatically:
-
-  1. Links API v2 (Access ID + Secret Key) - HTTP Basic auth, the preferred path
-     when MOZ_ACCESS_ID + MOZ_SECRET_KEY are set:
-        POST https://lsapi.seomoz.com/v2/url_metrics
-        Authorization: Basic base64("<ACCESS_ID>:<SECRET_KEY>")
-        body: {"targets": ["<root domain>"]}
-
-  2. New JSON-RPC API (single token) - x-moz-token header, used when only
-     MOZ_API_TOKEN is set:
-        POST https://api.moz.com/jsonrpc  (method data.site.metrics.fetch)
-
-Credentials load from config (from .env). Quota is tiny, so this is NEVER called
-on page load - only on an explicit refresh. fetch_moz_metrics() is the single
-entry point and maps whichever response into the SAME flat dict defensively - any
-missing field becomes None. On HTTP/auth/transport failure it raises MozApiError
-with a readable message so the endpoint returns a friendly 502, never a 500.
-
-Uses urllib (no extra dependency), matching email_service / rank_provider.
-"""
 import base64
 import json
 import logging
@@ -35,16 +12,14 @@ logger = logging.getLogger(__name__)
 
 LINKS_API_URL = "https://lsapi.seomoz.com/v2/url_metrics"
 JSONRPC_URL = "https://api.moz.com/jsonrpc"
-_TIMEOUT = 20  # seconds - fail fast when Moz is unreachable
+_TIMEOUT = 20
 
 
 class MozApiError(Exception):
-    """Raised on any Moz API failure with a human-readable message."""
+    pass
 
 
 def normalize_domain(raw):
-    """ "https://www.InfyApp.com/about?x=1" -> "infyapp.com". Strip scheme, drop
-    "www.", strip path/query. Returns "" for empty/garbage input."""
     d = (raw or "").strip().lower()
     d = d.split("://")[-1]
     d = d.split("/")[0]
@@ -55,7 +30,6 @@ def normalize_domain(raw):
 
 
 def _request(url, headers):
-    """POST helper returning parsed JSON; classifies failures into MozApiError."""
     def do(body):
         req = urllib.request.Request(
             url, data=json.dumps(body).encode(),
@@ -85,7 +59,6 @@ def _request(url, headers):
 
 
 def _map_metrics(normalized, m, raw):
-    """Map either API's metric object into the shared flat dict."""
     linking_domains = (m.get("root_domains_to_root_domain")
                        or m.get("root_domains_to_subdomain")
                        or m.get("linking_root_domains"))
@@ -104,7 +77,6 @@ def _map_metrics(normalized, m, raw):
 
 
 def _fetch_links_api(normalized):
-    """Moz Links API v2 (Access ID + Secret Key, Basic auth)."""
     token = base64.b64encode(f"{MOZ_ACCESS_ID}:{MOZ_SECRET_KEY}".encode()).decode()
     body = _request(LINKS_API_URL, {"Authorization": f"Basic {token}"})({"targets": [normalized]})
     results = (body or {}).get("results") or []
@@ -112,7 +84,6 @@ def _fetch_links_api(normalized):
 
 
 def _fetch_jsonrpc(normalized):
-    """New Moz JSON-RPC API (single x-moz-token). Request id must be >= 24 chars."""
     payload_body = {"site_query": {"query": normalized, "scope": "domain"}}
     call = _request(JSONRPC_URL, {"x-moz-token": MOZ_API_TOKEN})
     body = call({"jsonrpc": "2.0", "id": uuid.uuid4().hex,
@@ -127,9 +98,6 @@ def _fetch_jsonrpc(normalized):
 
 @cached("fetch_moz_metrics")
 def fetch_moz_metrics(domain):
-    """Fetch Moz authority metrics for a domain, choosing the auth scheme by which
-    credentials are configured. Returns the shared flat dict; raises MozApiError
-    on failure."""
     normalized = normalize_domain(domain)
     if not normalized:
         raise MozApiError("This project has no domain to look up on Moz.")

@@ -1,6 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   AUTH SCREENS — sign in, and the forced first-time password change.
-   ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { KeyRound, LoaderCircle, Lock, Mail, ShieldCheck } from "lucide-react";
@@ -36,12 +33,6 @@ export function LoginView({ onLogin }) {
         <h1 className="text-xl font-bold text-stone-900 font-display">Sign in</h1>
         <p className="text-sm text-stone-500 mt-1 mb-5">Use the credentials from your invite email.</p>
 
-        {/* A REAL <form>. Chrome logs "[DOM] Password field is not contained in a
-            form" without one, and that warning is a symptom: outside a form,
-            password managers can't reliably detect the credential pair to offer
-            saving or autofill, and Enter has to be hand-wired per input.
-            onSubmit + preventDefault keeps this a SPA (no page navigation) while
-            restoring the semantics browsers expect. */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -58,8 +49,6 @@ export function LoginView({ onLogin }) {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@company.com"
             autoFocus
-            // "username" is the token password managers look for to pair with
-            // current-password below; "email" alone doesn't establish the pair.
             autoComplete="username"
             className={`${INPUT_CLS} mb-4`}
           />
@@ -78,8 +67,6 @@ export function LoginView({ onLogin }) {
 
           <ErrorNote>{error}</ErrorNote>
 
-          {/* type="submit" so Enter works from either field — the manual
-              onKeyDown handler on the password input is no longer needed. */}
           <button type="submit" disabled={!email || !password || busy} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
             {busy ? <LoaderCircle size={16} className="animate-spin" /> : "Sign in"}
           </button>
@@ -167,27 +154,18 @@ export function SetPasswordView({ user, onDone, onLogout }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   TWO-STEP VERIFICATION — the authenticator step after the password.
-   Enrollment (first time): scan the QR / enter the key, confirm a code,
-   save one-time backup codes. Returning: enter the current code (or a
-   backup code). On success the parent swaps the pending token for the
-   verified one via onVerified(token, user).
-   ════════════════════════════════════════════════════════════════════ */
 export function TwoFactorView({ user, enrolled, onVerified, onLogout }) {
-  const [mode, setMode] = useState(enrolled ? "verify" : "enroll"); // enroll | verify | backup | codes
-  const [setup, setSetup] = useState(null); // { secret, otpauthUri }
-  const [qr, setQr] = useState(null); // QR image data URL
+  const [mode, setMode] = useState(enrolled ? "verify" : "enroll");
+  const [setup, setSetup] = useState(null);
+  const [qr, setQr] = useState(null);
   const [code, setCode] = useState("");
   const [backupCodes, setBackupCodes] = useState(null);
-  const [pending, setPending] = useState(null); // { token, user, stage, emailSentTo } after enroll
-  const [emailSentTo, setEmailSentTo] = useState(null); // masked address for the email step
+  const [pending, setPending] = useState(null);
+  const [emailSentTo, setEmailSentTo] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const started = useRef(false);
 
-  // Begin enrollment once: fetch a provisional secret and render its QR here
-  // in the browser (the secret never touches a third-party QR service).
   useEffect(() => {
     if (enrolled || started.current) return;
     started.current = true;
@@ -197,15 +175,12 @@ export function TwoFactorView({ user, enrolled, onVerified, onLogout }) {
         try {
           setQr(await QRCode.toDataURL(d.otpauthUri, { margin: 1, width: 208 }));
         } catch {
-          setQr(null); // fall back to the manual key
+          setQr(null);
         }
       })
       .catch((err) => setError(err.message));
   }, [enrolled]);
 
-  // Route a verify/enroll response: an admin gets an email step (stage
-  // "email") — stash the intermediate token so the next call is authed — while
-  // everyone else is done.
   const goNext = (d) => {
     if (d.stage === "email") {
       setToken(d.token);
@@ -436,14 +411,8 @@ export function TwoFactorView({ user, enrolled, onVerified, onLogout }) {
   );
 }
 
-
-/* ════════════════════════════════════════════════════════════════════
-   FORGOT PASSWORD — pre-login reset. Enter your email → we email a
-   one-time code → enter the code + a new password. The server never
-   reveals whether an email exists.
-   ════════════════════════════════════════════════════════════════════ */
 export function ForgotPasswordView({ initialEmail = "", onBack }) {
-  const [phase, setPhase] = useState("email"); // email | reset | done
+  const [phase, setPhase] = useState("email");
   const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState("");
   const [pw1, setPw1] = useState("");

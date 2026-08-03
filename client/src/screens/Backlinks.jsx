@@ -1,15 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   BACKLINKS — per-project, maintained MONTH-WISE (sibling to the Rank Ledger).
-
-   The SEO team picks a month, pastes that month's backlink URLs (one per line,
-   copied straight out of their Excel column), and the page groups everything by
-   month (newest first) with per-month counts. Import + delete are AUTHOR-only
-   (Super Admin / Admin / Team); the Client role is view-only. Reads are visible
-   to anyone who can see the project.
-
-   `month` is "YYYY-MM" — the same key snapshots/reports use, so the report's
-   backlinks section can later filter by it.
-   ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from "react";
 import { AlertTriangle, ExternalLink, Link2, LoaderCircle, Plus, Trash2, Upload } from "lucide-react";
 import { api } from "../api";
@@ -21,16 +9,12 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-/** "2026-06" -> "June 2026" (falls back to the raw key). */
 function monthLabel(key) {
   const m = String(key).split("-");
   const idx = Number(m[1]) - 1;
   return m.length === 2 && idx >= 0 && idx < 12 ? `${MONTH_NAMES[idx]} ${m[0]}` : String(key);
 }
 
-/** The last `count` months as "YYYY-MM", newest first — the import month picker.
- *  Built from the browser clock; the server is the source of truth, this is only
- *  a convenient set of choices. */
 function recentMonths(count = 24) {
   const out = [];
   const d = new Date();
@@ -43,11 +27,10 @@ function recentMonths(count = 24) {
 }
 
 export function BacklinksView({ user, project }) {
-  const [groups, setGroups] = useState(null); // null = loading; [] = none
+  const [groups, setGroups] = useState(null);
   const [error, setError] = useState(null);
   const [monthFilter, setMonthFilter] = useState("all");
   const [showImport, setShowImport] = useState(false);
-  // The month group awaiting "delete all" confirmation ({month,label,count}), or null.
   const [confirmClear, setConfirmClear] = useState(null);
   const [clearing, setClearing] = useState(false);
 
@@ -80,8 +63,6 @@ export function BacklinksView({ user, project }) {
     }
   };
 
-  /* DELETE ALL for one month. Confirmed via the modal below — this wipes a whole
-     batch and there's no undo, so it never fires straight off the button. */
   const clearMonth = async (group) => {
     setClearing(true);
     setError(null);
@@ -89,8 +70,6 @@ export function BacklinksView({ user, project }) {
       const d = await api(`/projects/${project.id}/backlinks/month/${group.month}`, {
         method: "DELETE",
       });
-      // If the month we were filtered to is now gone, fall back to "all" —
-      // otherwise the page would sit on an empty, unselectable filter.
       if (monthFilter === group.month) setMonthFilter("all");
       await load();
       setConfirmClear(null);
@@ -237,8 +216,6 @@ export function BacklinksView({ user, project }) {
         />
       )}
 
-      {/* DELETE ALL confirmation — destructive and irreversible, so the count and
-          month are spelled out and the confirm button is the red one. */}
       {confirmClear && (
         <Modal title={`Delete all backlinks in ${confirmClear.label}?`} onClose={() => setConfirmClear(null)}>
           <div className="flex items-start gap-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
@@ -272,21 +249,15 @@ export function BacklinksView({ user, project }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   IMPORT — pick the batch's month, paste its URLs (one per line). The whole
-   batch is stamped with the ONE chosen month (no per-row columns). The server
-   de-dupes within project+month and reports added / skipped.
-   ════════════════════════════════════════════════════════════════════ */
 function BacklinkImportModal({ projectId, onClose, onImported }) {
   const months = recentMonths();
-  const [month, setMonth] = useState(months[0]); // default: current month
+  const [month, setMonth] = useState(months[0]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
   const toast = useToast();
 
-  // Count non-blank pasted lines for the button hint.
   const lineCount = text.split(/\r?\n/).filter((l) => l.trim()).length;
 
   const submit = async () => {
@@ -300,7 +271,7 @@ function BacklinkImportModal({ projectId, onClose, onImported }) {
         body: { month, urls },
       });
       setResult(d);
-      onImported(); // refresh the list behind the modal
+      onImported();
       toast.success(
         `Added ${d.added} backlink${d.added === 1 ? "" : "s"} to ${monthLabel(d.month)}.`
       );

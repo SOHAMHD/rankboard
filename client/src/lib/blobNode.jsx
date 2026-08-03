@@ -1,17 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   BLOB NODE — the atomic TipTap chip for an inserted data blob.
-
-   Built on @tiptap/extension-mention so we inherit its ATOMIC inline node
-   (deletes as one unit, cursor can't land mid-chip) and its suggestion plugin
-   (the "/" trigger; configured by the editor page). A chip stores only
-   { name, kind, format, label } — NEVER the resolved value — so resolution
-   stays dynamic against the frozen data and reopening restores the chip.
-
-   The chip's React node view shows the blob's LABEL (the field name) in the
-   editing surface — not the raw value (the live preview shows values). Clicking
-   a chip (when the editor is editable) opens a per-chip FORMAT picker whose
-   options are computed from the blob's real value.
-   ════════════════════════════════════════════════════════════════════ */
 import { useEffect, useRef, useState } from "react";
 import Mention from "@tiptap/extension-mention";
 import { mergeAttributes } from "@tiptap/core";
@@ -24,8 +10,6 @@ const CHIP_OK =
 const CHIP_BROKEN =
   "inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 text-sm font-medium text-red-700 align-baseline select-none";
 
-// The React node view. Closes over the resolved-blobs map (name -> blob) so it
-// can resolve + format without any external lookup or context plumbing.
 function makeChipView(blobsByName) {
   return function BlobChipView({ node, updateAttributes, editor }) {
     const { name, kind, format, label } = node.attrs;
@@ -98,16 +82,11 @@ function makeChipView(blobsByName) {
   };
 }
 
-/** Build the atomic "blob" node bound to a resolved-blobs map. Recreate it when
- *  the map changes (frozen per version, so effectively once). The suggestion
- *  config is supplied separately by the page via `.configure({ suggestion })`. */
 export function createBlobNode(blobsByName) {
   return Mention.extend({
     name: "blob",
 
     addAttributes() {
-      // Each attribute round-trips to a data-* attribute. renderHTML receives the
-      // full attrs object, so we capture each attribute's KEY in the closure.
       const make = (key, dataName, def) => ({
         default: def,
         parseHTML: (el) => el.getAttribute(dataName) ?? def,
@@ -130,7 +109,6 @@ export function createBlobNode(blobsByName) {
       return ["span", mergeAttributes({ "data-type": "blob" }, HTMLAttributes)];
     },
 
-    // Plain-text fallback (copy/paste, getText) — never the resolved value.
     renderText({ node }) {
       return `{{${node.attrs.name || ""}${node.attrs.kind === "delta" ? ":delta" : ""}}}`;
     },

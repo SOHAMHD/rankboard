@@ -1,10 +1,3 @@
-"""SNAPSHOT EXPORT — download a single saved snapshot as CSV.
-
-Lives at /api/snapshots/{id}/... (addressed by snapshot id alone, not nested
-under a project) because the menu in the UI downloads a snapshot by its id.
-Access is still per-project: we look up the snapshot's project and reuse the
-same rule as every /{project_id}/... route (user_can_access_project).
-"""
 import csv
 import io
 import sqlite3
@@ -25,9 +18,6 @@ def download_snapshot(
     user: sqlite3.Row = Depends(require_active_user),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """Return one snapshot's frozen rows as a CSV file. Same per-project
-    access rule as the rest of the snapshot endpoints; 404 if it doesn't
-    exist, 403 if the caller can't see its project."""
     snap = db.execute("SELECT * FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone()
     if snap is None:
         raise HTTPException(404, "Snapshot not found.")
@@ -35,13 +25,11 @@ def download_snapshot(
         raise HTTPException(403, "You don't have access to this project.")
 
     rows = db.execute(
-        # Same ordering as the detail view: ranked best-first, never-checked last.
         "SELECT term, rank, last_checked FROM snapshot_ranks WHERE snapshot_id = ?"
         " ORDER BY rank IS NULL, rank ASC, term",
         (snapshot_id,),
     ).fetchall()
 
-    # stdlib csv into an in-memory buffer — no new packages, no temp files.
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["Keyword", "Rank", "Last checked"])

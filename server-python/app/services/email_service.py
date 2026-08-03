@@ -1,16 +1,3 @@
-"""EMAIL SERVICE — one swappable transport, chosen by config (not code).
-
-Transport priority (first one configured wins):
-  SMTP_HOST set        -> real send via your own SMTP server (smtplib).
-  BREVO_API_KEY set    -> real send via Brevo's transactional email API.
-  neither set          -> dev outbox only (the `emails` table + console).
-
-Both the SMTP and Brevo transports carry the PDF attachment; only the dev
-outbox skips it (nothing is actually sent).
-
-Either way the email is logged to the outbox for an audit trail, and
-callers only ever know a "delivery" status ("sent" | "failed" | "outbox").
-"""
 import base64
 import json
 import smtplib
@@ -33,19 +20,12 @@ from ..config import (
 
 def _send_via_smtp(*, email: str, subject: str, body: str, html: str | None = None,
                    attachments=None) -> str:
-    """Send one message (optionally with an HTML alternative and attachments)
-    through the configured SMTP server. Returns "sent" or "failed"; never
-    raises."""
     try:
         msg = EmailMessage()
         msg["From"] = EMAIL_FROM
         msg["To"] = email
         msg["Subject"] = subject
         msg.set_content(body)
-        # ORDER MATTERS: set_content() writes the text/plain part, then
-        # add_alternative() promotes the message to multipart/alternative with
-        # the HTML LAST — mail clients render the last part they understand.
-        # add_attachment() below then wraps the whole thing in multipart/mixed.
         if html:
             msg.add_alternative(html, subtype="html")
         for att in attachments or []:
@@ -74,13 +54,7 @@ def _send_via_smtp(*, email: str, subject: str, body: str, html: str | None = No
 
 
 def _send_via_brevo(*, email: str, subject: str, body: str, html: str | None = None, attachments=None) -> str:
-    """Send one message through Brevo's transactional email API
-    (POST https://api.brevo.com/v3/smtp/email). Returns "sent" or "failed";
-    never raises. Brevo wants the sender as a {name, email} object and
-    attachments as base64 under `attachment` ({name, content})."""
     try:
-        # EMAIL_FROM is a header string ("SEO Dashboard <no-reply@x.com>"); Brevo
-        # needs it split into a sender object. parseaddr → (name, addr).
         from_name, from_addr = parseaddr(EMAIL_FROM)
         sender = {"email": from_addr}
         if from_name:
@@ -92,8 +66,6 @@ def _send_via_brevo(*, email: str, subject: str, body: str, html: str | None = N
             "subject": subject,
             "textContent": body,
         }
-        # Send BOTH parts: textContent is the fallback for clients that block
-        # HTML, and providing both improves deliverability.
         if html:
             payload["htmlContent"] = html
         if attachments:
@@ -121,10 +93,6 @@ def _send_via_brevo(*, email: str, subject: str, body: str, html: str | None = N
 
 def _deliver(db: sqlite3.Connection, *, email: str, subject: str, body: str,
              html: str | None = None, attachments=None) -> dict:
-    """Send one email via the configured transport (SMTP > Brevo > outbox) and
-    ALWAYS log it to the `emails` outbox. Returns the stored row + a `delivery`
-    status ("sent" | "failed" | "outbox"). Never raises — a provider outage must
-    not break sign-in, onboarding, or a report send."""
     if SMTP_HOST:
         delivery = _send_via_smtp(email=email, subject=subject, body=body, html=html,
                                   attachments=attachments)
@@ -138,10 +106,6 @@ def _deliver(db: sqlite3.Connection, *, email: str, subject: str, body: str,
         "INSERT INTO emails (to_email, subject, body) VALUES (?, ?, ?)", (email, subject, body)
     )
     row = db.execute("SELECT * FROM emails WHERE id = ?", (cur.lastrowid,)).fetchone()
-    # DEV convenience: with no email provider configured, print the message to
-    # the server console so local sign-in / password codes are readable without
-    # a real inbox. In production a transport is configured, so delivery isn't
-    # "outbox" and nothing is printed.
     if delivery == "outbox":
         note = " (+1 attachment)" if attachments else ""
         print("=" * 64)
@@ -153,8 +117,6 @@ def _deliver(db: sqlite3.Connection, *, email: str, subject: str, body: str,
 
 
 def _valid_email(addr: str) -> bool:
-    """Loose but practical check: exactly one @, non-empty local part, and a
-    dotted domain. Good enough to reject typos before we hand off to the MTA."""
     name, email = parseaddr(addr or "")
     if not email or email.count("@") != 1:
         return False
@@ -172,10 +134,6 @@ def send_report_email(
     pdf_filename: str,
     html: str | None = None,
 ) -> dict:
-    """Email a report PDF to a single recipient (the per-recipient unit the
-    /reports/{id}/send endpoint loops over). The PDF rides as an attachment,
-    which only the SMTP and Resend transports support — under the dev outbox the
-    message is logged without the file."""
     return _deliver(
         db,
         email=email,
@@ -205,7 +163,6 @@ def send_invite_email(db: sqlite3.Connection, *, name: str, email: str, role: st
 
 
 def send_password_code_email(db: sqlite3.Connection, *, name: str, email: str, code: str) -> dict:
-    """Code emailed when a signed-in user wants to change their password."""
     subject = "Your SEO Dashboard password-change code"
     body = "\n".join([
         f"Hi {name.split(' ')[0]},",
@@ -220,7 +177,6 @@ def send_password_code_email(db: sqlite3.Connection, *, name: str, email: str, c
 
 
 def send_login_code_email(db: sqlite3.Connection, *, name: str, email: str, code: str) -> dict:
-    """The Admin / Super Admin third-factor code, emailed at sign-in."""
     subject = "Your SEO Dashboard sign-in code"
     body = "\n".join([
         f"Hi {name.split(' ')[0]},",

@@ -1,11 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════
-   PROJECT DASHBOARD — fixed left rail + content area.
-
-   NAV_GROUPS is the extension point: the next SEO tool (backlinks,
-   site audit…) is one entry there plus one conditional block in
-   <main>. The Rank Ledger fetches its data from the API, derives its
-   stats at render time, and refetches after every mutation.
-   ════════════════════════════════════════════════════════════════════ */
 import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
@@ -65,23 +57,10 @@ import { BacklinksView } from "./Backlinks";
 import { KeywordsView } from "./Keywords";
 import { PostsView } from "./Posts";
 
-/* CODE-SPLIT: the Reports panel drags in the whole rich-text editor stack
-   (@tiptap/* + prosemirror-*), which is the single largest thing in this screen's
-   bundle. Statically imported it landed in the Dashboard chunk, so EVERY user
-   downloaded the editor on first open — including Clients, who can't author
-   reports at all. Lazily loaded it becomes its own chunk, fetched only when the
-   Reports tab is actually opened.
-
-   Prefetched on idle below for authors only, so the tab still opens instantly for
-   the people who use it without costing everyone else the download. */
 const ReportsPanel = lazy(() =>
   import("./ReportEditor").then((m) => ({ default: m.ReportsPanel }))
 );
 
-// Sidebar navigation, GA4-style: collapsible groups whose sub-items each select
-// a view in the main area. A group given no `children` becomes a plain clickable
-// nav item (single-view tool). The next SEO tool (backlinks, site audit…) is one
-// entry here plus one conditional block in <main>.
 const NAV_GROUPS = [
   {
     id: "traffic",
@@ -94,9 +73,6 @@ const NAV_GROUPS = [
       { id: "traffic-pages", label: "Pages" },
     ],
   },
-  // ONE page, no children. Rankings are entered by hand month by month, so there
-  // is no "Live rankings" (nothing is checked automatically) and no "Snapshots"
-  // (a hand-typed month IS the frozen record — there was nothing left to freeze).
   {
     id: "keywords",
     label: "Keyword Rankings",
@@ -111,41 +87,29 @@ const NAV_GROUPS = [
       { id: "posts-linkedin", label: "LinkedIn Posts" },
     ],
   },
-  // Childless group → the per-project Backlinks page (single-view tool), sibling
-  // to the Rank Ledger. Visible to anyone who can see the project; import/delete
-  // inside are author-only.
   {
     id: "backlinks",
     label: "Backlinks",
     icon: Link2,
   },
-  // Childless group → plain clickable single-view tool (its own page below).
   {
     id: "search-console",
     label: "Search Console",
     icon: SearchCheck,
   },
-  // Childless group → the Moz domain-authority overview (single-view tool).
   {
     id: "authority",
     label: "Authority",
     icon: ShieldCheck,
   },
-  // { id: "backlinks", label: "Backlinks", icon: Link2 },  ← next tool goes here
 ];
 
-// Author-only tool: the report content editor. Appended to the nav for authors
-// (team_member / manager / admin) only — the backend re-checks regardless.
 const REPORTS_GROUP = { id: "reports", label: "Reports", icon: FileText };
 
-// The nav group whose children include `navId` (used to default-expand it).
 function groupOf(navId) {
   return NAV_GROUPS.find((g) => (g.children || []).some((c) => c.id === navId));
 }
 
-// Heavy tool panels wrapped in memo so parent re-renders (expanding a nav
-// group, a project refresh, etc.) do not re-render the visible panel unless
-// its own props actually change. Each alias is used exactly once, below.
 const TrafficToolMemo = memo(TrafficTool);
 const SearchConsoleToolMemo = memo(SearchConsoleTool);
 
@@ -153,9 +117,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
   const [project, setProject] = useState(null);
   const [error, setError] = useState(null);
   const [activeNav, setActiveNav] = useState("traffic-overview");
-  const [showPw, setShowPw] = useState(false); // change-password modal
-  // Which collapsible nav groups are open. Default: the group holding the
-  // initial view, so Traffic starts expanded on Overview.
+  const [showPw, setShowPw] = useState(false);
   const [openGroups, setOpenGroups] = useState(() => {
     const g = groupOf("traffic-overview");
     return g ? [g.id] : [];
@@ -163,7 +125,6 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
   const toggleGroup = (id) =>
     setOpenGroups((open) => (open.includes(id) ? open.filter((x) => x !== id) : [...open, id]));
 
-  // Authors additionally see the Reports tool; everyone else sees the base nav.
   const navGroups = useMemo(
     () => (isAuthor(user) ? [...NAV_GROUPS, REPORTS_GROUP] : NAV_GROUPS),
     [user]
@@ -183,15 +144,11 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
     refresh();
   }, [projectId]);
 
-  // Warm the lazily-split Reports chunk (the TipTap editor) once the browser is
-  // idle — AUTHORS ONLY. Clients can't open Reports at all, so they never pay for
-  // it. This keeps the tab feeling instant for the people who use it while still
-  // keeping the editor out of the initial dashboard download.
   useEffect(() => {
     if (!isAuthor(user)) return;
     const warm = () => {
-      import("./ReportEditor").catch(() => {}); // best-effort; a failure just means
-    };                                          // the Suspense fallback shows later
+      import("./ReportEditor").catch(() => {});
+    };
     if (typeof requestIdleCallback === "function") {
       const id = requestIdleCallback(warm, { timeout: 4000 });
       return () => cancelIdleCallback(id);
@@ -219,7 +176,6 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
 
   return (
     <div className="min-h-screen bg-stone-100 lg:pl-64">
-      {/* ── Fixed sidebar (desktop) — light premium rail ── */}
       <aside className="hidden lg:flex fixed inset-y-0 left-0 w-64 bg-white border-r border-stone-200 flex-col">
         <div className="p-4 border-b border-stone-200">
           <button onClick={onBack} aria-label="Back to projects" title="Back to projects" className="block mb-4 cursor-pointer">
@@ -251,7 +207,6 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
           {navGroups.map((group) => {
             const children = group.children || null;
 
-            // Childless group → plain clickable nav item (single-view tool).
             if (!children) {
               return (
                 <button
@@ -334,7 +289,6 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
         </div>
       </aside>
 
-      {/* ── Compact header (mobile) — same nav, light theme ── */}
       <div className="lg:hidden bg-white border-b border-stone-200 sticky top-0 z-20">
         <div className="px-4 pt-3 flex justify-center border-b border-stone-100">
           <button onClick={onBack} aria-label="Back to projects" title="Back to projects" className="cursor-pointer">
@@ -371,10 +325,6 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
 
       {showPw && <ChangePasswordModal onClose={() => setShowPw(false)} />}
       <main className="px-6 py-6">
-        {/* ONE keywords page: the keywords x months grid. The old Live rankings
-            (automated check) and Snapshots (frozen copies) views are gone —
-            rankings are typed in by hand, so there is nothing to check and the
-            month itself is the frozen record. */}
         {activeNav === "keywords" && <KeywordsView user={user} project={project} />}
         {activeNav === "backlinks" && <BacklinksView user={user} project={project} />}
         {activeNav === "posts-blogs" && <PostsView user={user} project={project} kind="blog" />}
@@ -400,17 +350,6 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   RANK LEDGER — where each keyword stands now vs. the previous
-   lookup. Lower rank = better (#1 is the top result), so the delta
-   is previous − current: +5 means "moved up 5 spots".
-   ════════════════════════════════════════════════════════════════════ */
-
-/* RankLedger() removed with the automated rank check and snapshots.
-   Keyword rankings are now entered by hand — see screens/Keywords.jsx.
-   `git log` has the original if any of it is ever wanted back. */
-
-
 function groupByMonth(snapshots) {
   const order = [];
   const map = new Map();
@@ -424,8 +363,6 @@ function groupByMonth(snapshots) {
   return order.map((k) => map.get(k));
 }
 
-/* "2026-06-22 16:29:00" (UTC, no tz marker from SQLite) -> "Jun 22 · 4:29 PM"
-   in the viewer's local time. Falls back to the raw value if unparseable. */
 function snapshotTimeLabel(iso) {
   if (!iso) return "—";
   const raw = String(iso);
@@ -436,16 +373,10 @@ function snapshotTimeLabel(iso) {
   return `${date} · ${time}`;
 }
 
-/* Windows-style cascading menu: a "Snapshots" trigger → level-1 list of
-   months (each with a right-chevron) → hover a month to fly out a submenu
-   of that month's saves. Hover opens the submenu; leaving schedules a
-   ~150ms close that re-entering the submenu cancels. Outside-click / Escape
-   close the whole thing; the submenu flips to the left when it would spill
-   past the right edge of the viewport. No popover library — just state. */
 function SnapshotMenu({ groups, selectedId, onSelect, onDownload }) {
   const [open, setOpen] = useState(false);
-  const [openMonth, setOpenMonth] = useState(null); // periodKey of the open submenu
-  const [flip, setFlip] = useState(false); // submenu opens left instead of right
+  const [openMonth, setOpenMonth] = useState(null);
+  const [flip, setFlip] = useState(false);
   const rootRef = useRef(null);
   const closeTimer = useRef(null);
 
@@ -455,7 +386,6 @@ function SnapshotMenu({ groups, selectedId, onSelect, onDownload }) {
     setOpenMonth(null);
   };
 
-  // Outside click + Escape close the menu — only while it's open.
   useEffect(() => {
     if (!open) return;
     const onDown = (e) => {
@@ -470,10 +400,9 @@ function SnapshotMenu({ groups, selectedId, onSelect, onDownload }) {
     };
   }, [open]);
 
-  // Never leave a timer running after unmount.
   useEffect(() => () => clearTimeout(closeTimer.current), []);
 
-  const SUBMENU_W = 256; // matches w-64; used only to decide the flip
+  const SUBMENU_W = 256;
   const openSubmenu = (periodKey) => {
     clearTimeout(closeTimer.current);
     const rect = rootRef.current?.getBoundingClientRect();
@@ -579,39 +508,6 @@ function SnapshotMenu({ groups, selectedId, onSelect, onDownload }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   SNAPSHOTS — read-only freezes of the ledger.
-
-   On mount we load the list (newest first) and auto-select the latest.
-   "Save this month" always captures a NEW snapshot (snapshots are no
-   longer one-per-month — there's no overwrite or confirm). Saved
-   snapshots are browsed through a cascading Snapshots menu grouped by
-   month; picking one fetches its rows and renders a plain table that
-   REUSES the Live Ledger's table styling, trimmed to the three frozen
-   columns. Each snapshot can be downloaded as CSV. The save button is
-   gated by recordRank, the "supply the numbers" permission Team also has.
-   ════════════════════════════════════════════════════════════════════ */
-/* SnapshotsView() removed with the automated rank check and snapshots.
-   Keyword rankings are now entered by hand — see screens/Keywords.jsx.
-   `git log` has the original if any of it is ever wanted back. */
-
-
-/* ════════════════════════════════════════════════════════════════════
-   TRAFFIC (GA4) — per-project Google Analytics 4 traffic for a chosen
-   date range. A shared date-range picker sits at the top; each nav
-   sub-view (Overview / Audience / Technology / Pages) is then the FULL
-   Explore report builder, pre-set to that page's default dimension (see
-   VIEW_DEFAULT_DIMENSION) and managing its own dimensions / metrics /
-   filters. Overview additionally shows the headline metric cards (Active
-   Users, New Users, Returning Users, Avg Engagement Time) and the
-   "Users over time" trend above its builder, fed by /api/projects/:id/
-   analytics. When the project has no GA4 property ID — or the server says
-   GA4 isn't configured — we show a friendly empty state rather than an error.
-   ════════════════════════════════════════════════════════════════════ */
-
-// Each Traffic nav sub-view IS the full Explore report builder, pre-set to this
-// default GA4 dimension; the user can then change dimensions, metrics and
-// filters freely from there.
 const VIEW_DEFAULT_DIMENSION = {
   overview: "sessionDefaultChannelGroup",
   audience: "country",
@@ -619,19 +515,10 @@ const VIEW_DEFAULT_DIMENSION = {
   pages: "landingPagePlusQueryString",
 };
 
-// Default METRICS (columns) per Traffic view. Overview shows the fuller set —
-// users, events, key events and average engagement time — so the channel table
-// is richer out of the box (and fills the width). Other views fall back to the
-// two-metric default inside ExploreReport. Sessions is always appended by the
-// report request, so it stays the trailing column.
 const VIEW_DEFAULT_METRICS = {
   overview: ["activeUsers", "newUsers", "eventCount", "keyEvents", "averageEngagementTime"],
 };
 
-// Dimension picker, organised like GA4's own menu: category ->
-// [user-facing label, GA4 API name]. The API names match the backend's
-// ALLOWED_DIMENSIONS allowlist exactly; selecting one runs a breakdown
-// report for that dimension with our three standard metrics.
 const DIMENSION_GROUPS = {
   "Geography": [["Country", "country"], ["Region", "region"], ["City", "city"], ["Continent", "continent"], ["Language", "language"]],
   "Traffic source (session)": [["Default Channel Group", "sessionDefaultChannelGroup"], ["Source", "sessionSource"], ["Medium", "sessionMedium"], ["Source / Medium", "sessionSourceMedium"], ["Campaign", "sessionCampaignName"]],
@@ -644,8 +531,6 @@ const DIMENSION_GROUPS = {
   "Demographics (needs Google Signals)": [["Age", "userAgeBracket"], ["Gender", "userGender"], ["Interests", "brandingInterest"]],
 };
 
-// Metric picker for the report builder: user-facing label -> GA4 metric API
-// name. The API names match the backend's ALLOWED_METRICS allowlist exactly.
 const METRICS = {
   "Active Users": "activeUsers",
   "New Users": "newUsers",
@@ -664,8 +549,6 @@ const METRICS = {
   "Engaged Sessions / Active User": "engagedSessionsPerUser",
 };
 
-// The user-facing label for a GA4 API name (for the section title + table
-// column header). Falls back to the raw name if somehow not found.
 function dimensionLabel(apiName) {
   for (const items of Object.values(DIMENSION_GROUPS)) {
     for (const [label, name] of items) {
@@ -675,8 +558,6 @@ function dimensionLabel(apiName) {
   return apiName;
 }
 
-// The user-facing label for a GA4 metric API name (table header). Falls back
-// to the raw name if somehow not found.
 function metricLabel(apiName) {
   for (const [label, name] of Object.entries(METRICS)) {
     if (name === apiName) return label;
@@ -684,11 +565,7 @@ function metricLabel(apiName) {
   return apiName;
 }
 
-// Plain-English "what does this mean" text for each metric, shown as a hover
-// tooltip on the table column headers (GA4 + GSC). Keyed by GA4 API name and by
-// GSC column key (clicks / impressions / ctr / position) — the two never clash.
 const METRIC_HELP = {
-  // ── GA4 ──
   activeUsers: "The number of distinct people who visited your site in the selected period.",
   newUsers: "People who visited your site for the very first time in this period.",
   totalUsers: "All unique visitors in this period — new and returning combined.",
@@ -704,22 +581,16 @@ const METRIC_HELP = {
   keyEvents: "How many times visitors completed actions you've marked as important (conversions).",
   totalRevenue: "Total revenue from purchases, subscriptions, and advertising.",
   engagedSessionsPerUser: "The average number of engaged sessions per active user.",
-  // ── GSC (Search Console) ──
   clicks: "How many times people clicked through to your site from Google search results.",
   impressions: "How many times your site appeared in Google search results, whether clicked or not.",
   ctr: "Click-through rate — clicks ÷ impressions, shown as a percentage.",
   position: "Your site's average ranking position in search results (1 is the top; lower is better).",
 };
 
-// The "what does this mean" tooltip for a metric header. Falls back to the
-// human label so the header always has a helpful hover, even for a new metric
-// that isn't in the glossary yet.
 function metricHelp(key) {
   return METRIC_HELP[key] || metricLabel(key);
 }
 
-// Rate metrics are fractions (0–1) GA reports as percentages; duration metrics
-// are seconds. Everything else is a plain count. Used for the table cells.
 const RATE_METRICS = new Set(["engagementRate", "bounceRate"]);
 const DURATION_METRICS = new Set(["averageSessionDuration", "userEngagementDuration", "averageEngagementTime"]);
 
@@ -727,7 +598,6 @@ function formatMetric(name, value) {
   if (value == null) return "0";
   if (RATE_METRICS.has(name)) return `${(Number(value) * 100).toFixed(1)}%`;
   if (DURATION_METRICS.has(name)) return formatEngagement(value);
-  // Revenue as currency ("$0.00"); the engaged-sessions/user ratio as 2 dp.
   if (name === "totalRevenue") {
     return `$${(Number(value) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
@@ -736,8 +606,6 @@ function formatMetric(name, value) {
   return Number.isFinite(n) ? n.toLocaleString() : String(value);
 }
 
-// Demographics dimensions need Google Signals enabled in GA4 — used to add
-// a hint to the "not available" message for those.
 const DEMOGRAPHICS_NAMES = new Set(
   DIMENSION_GROUPS["Demographics (needs Google Signals)"].map(([, name]) => name)
 );
@@ -753,17 +621,11 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-// Chart palette — orange is the app accent; sky is the established second
-// series colour (see role styles / rank "New" badge).
-const COLOR_ACTIVE = "#00A693"; // brand purple — active users
-const COLOR_NEW = "#5B5BF7"; // sky-600 — new users
+const COLOR_ACTIVE = "#00A693";
+const COLOR_NEW = "#5B5BF7";
 
-// Categorical palette for composition donuts (Channels, Devices, Language…).
-// Leads with the two series colours, then distinct hues; greens/reds are left
-// out — those are reserved app-wide for rank movement. "Other" uses stone-400.
 const DONUT_COLORS = ["#5b5bf7", "#0284c7", "#f59e0b", "#7c3aed", "#0891b2", "#db2777", "#4f46e5", "#475569"];
 
-// Seconds → "1m 23s" (or "23s" under a minute), matching GA's display.
 function formatEngagement(seconds) {
   const total = Math.round(Number(seconds) || 0);
   const m = Math.floor(total / 60);
@@ -771,7 +633,6 @@ function formatEngagement(seconds) {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
-// Local YYYY-MM-DD (no UTC shift — GA ranges are calendar dates).
 function toYMD(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -779,15 +640,11 @@ function toYMD(d) {
   return `${y}-${m}-${day}`;
 }
 
-// "Last N days" ending YESTERDAY (today excluded), as concrete dates. Today is
-// left out on purpose: GA4 hasn't finished collecting the current day, so a
-// partial "today" would drag the numbers down. So "Last 7 days" = the 7 full
-// days before today (e.g. run on the 16th → the 9th through the 15th).
 function presetRange(days) {
   const end = new Date();
-  end.setDate(end.getDate() - 1); // yesterday — exclude the incomplete current day
+  end.setDate(end.getDate() - 1);
   const start = new Date(end);
-  start.setDate(start.getDate() - (days - 1)); // N full days ending yesterday
+  start.setDate(start.getDate() - (days - 1));
   return { start: toYMD(start), end: toYMD(end) };
 }
 
@@ -796,7 +653,6 @@ function parseYMD(s) {
   return new Date(y, m - 1, d);
 }
 
-// "May 1 – May 28, 2026" (year shown once when both ends share it).
 function formatRangeLabel(start, end) {
   const a = parseYMD(start);
   const b = parseYMD(end);
@@ -806,26 +662,21 @@ function formatRangeLabel(start, end) {
   return `${left} – ${right}`;
 }
 
-// Raw GA date "20260501" → "05/01" for chart axes/tooltips.
 function formatGADate(raw) {
   if (!raw || raw.length !== 8) return raw || "";
   return `${raw.slice(4, 6)}/${raw.slice(6, 8)}`;
 }
 
-// Month + From/To fields. Shares the pills' height (h-9), border, rounding,
-// padding and font so the whole control sits on one consistent baseline.
 const RANGE_FIELD_CLS =
   "h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-colors";
 
 function TrafficTool({ project, view }) {
-  const [range, setRange] = useState(() => presetRange(28)); // default: last 28 days
-  const [activePreset, setActivePreset] = useState(28); // highlighted preset, or null
-  const [data, setData] = useState(null); // null = still loading
+  const [range, setRange] = useState(() => presetRange(28));
+  const [activePreset, setActivePreset] = useState(28);
+  const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const toast = useToast();
 
-  // The Overview headline cards + trend follow the shared date range. (Each
-  // page's builder fetches its own filtered /report independently below.)
   useEffect(() => {
     let cancelled = false;
     setData(null);
@@ -841,13 +692,11 @@ function TrafficTool({ project, view }) {
     };
   }, [project.id, range.start, range.end]);
 
-  // Surface a GA4 error (returned in-band by the server) as a toast.
   useEffect(() => {
     if (data?.error) toast.error("We couldn't load traffic for this project. Check that the GA4 property ID is correct and that the SEO Dashboard service account has access to it.",
       { title: "Traffic" },[data?.error] );
   });
 
-  // No property ID set, or the server reports GA4 isn't configured → empty state.
   const notConfigured = !project.gaPropertyId || (data && data.configured === false);
 
   const applyPreset = (days) => {
@@ -855,11 +704,10 @@ function TrafficTool({ project, view }) {
     setRange(presetRange(days));
   };
 
-  // <input type="month"> "2026-05" → the whole calendar month.
   const applyMonth = (ym) => {
     if (!ym) return;
     const [y, m] = ym.split("-").map(Number);
-    const lastDay = new Date(y, m, 0).getDate(); // day 0 of next month = last of this
+    const lastDay = new Date(y, m, 0).getDate();
     setActivePreset(null);
     setRange({ start: `${ym}-01`, end: `${ym}-${String(lastDay).padStart(2, "0")}` });
   };
@@ -870,9 +718,6 @@ function TrafficTool({ project, view }) {
     setRange((r) => ({ ...r, [which]: value }));
   };
 
-  // Purely presentational: when the current range is exactly one calendar
-  // month, show it in the month picker (e.g. "June 2026") instead of the
-  // native blank field. Doesn't affect the dates, modes, or the fetch.
   const monthValue = (() => {
     if (activePreset !== null) return "";
     const s = parseYMD(range.start);
@@ -907,9 +752,7 @@ function TrafficTool({ project, view }) {
         </div>
       ) : (
         <>
-          {/* ── Date-range control ── */}
           <div className="bg-white rounded-xl border border-stone-200 p-4 mb-6">
-            {/* Presets — a tidy pill group; only the active mode is highlighted. */}
             <div className="flex flex-wrap items-center gap-2">
               {RANGE_PRESETS.map((p) => {
                 const active = activePreset === p.days;
@@ -930,8 +773,6 @@ function TrafficTool({ project, view }) {
               })}
             </div>
 
-            {/* Month + custom range — same baseline as the pills, own labelled
-                line, wraps gracefully on narrow screens. */}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-stone-100 mt-3 pt-3">
               <label className="flex items-center gap-2 text-sm text-stone-500">
                 <span className="font-medium text-stone-600">Month:</span>
@@ -973,14 +814,11 @@ function TrafficTool({ project, view }) {
               </div>
             </div>
 
-            {/* Summary — small, muted, beneath the controls. */}
             <p className="text-xs text-stone-400 mt-3">
               Showing <span className="font-medium text-stone-600">{formatRangeLabel(range.start, range.end)}</span>
             </p>
           </div>
 
-          {/* Overview only: the headline cards + trend, following the shared
-              date range. The other pages are just the builder below. */}
           {view === "overview" &&
             (data === null ? (
               <div className="flex justify-center py-16">
@@ -988,8 +826,6 @@ function TrafficTool({ project, view }) {
               </div>
             ) : (
               (() => {
-                // Sparklines come straight from the real per-day series — no
-                // invented comparison numbers. Returning = active − new per day.
                 const rows = data.byDate?.rows || [];
                 const active = rows.map((r) => Number(r.activeUsers) || 0);
                 const fresh = rows.map((r) => Number(r.newUsers) || 0);
@@ -1008,9 +844,6 @@ function TrafficTool({ project, view }) {
               })()
             ))}
 
-          {/* Every Traffic page IS the full Explore builder, pre-set to that
-              page's default dimension. key={view} gives each page its own
-              independent instance (fresh dimensions / metrics / filters). */}
           <ExploreReport
             key={view}
             projectId={project.id}
@@ -1024,29 +857,14 @@ function TrafficTool({ project, view }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   EXPLORE — ONE GA4-style report builder (mirrors GA4's Free-form
-   exploration / the Data API runReport). Each Traffic page renders its OWN
-   self-contained instance, pre-set via `defaultDimension` to that page's
-   default breakdown. The user picks one or more DIMENSIONS (removable chips
-   + a categorised DIMENSION_GROUPS menu), one or more METRICS, and N inline
-   filter conditions joined by AND/OR, and a SINGLE chart + table shows the
-   combined result. The chart type adapts to the selected dimension (donut /
-   line / bar — see ReportResult). It auto-runs whenever the dimensions,
-   metrics or filter list change, debouncing the filter value text (~500ms)
-   so it doesn't fire on every keystroke. GA4 rejects some combinations, so
-   the server returns {error} (HTTP 200) and we show a muted message in place
-   of the table — never a crash.
-   ════════════════════════════════════════════════════════════════════ */
 function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
   const [dimensions, setDimensions] = useState([defaultDimension || "sessionDefaultChannelGroup"]);
-  const [metrics, setMetrics] = useState(defaultMetrics || ["activeUsers", "newUsers"]); // defaults
-  const [result, setResult] = useState(null); // null = loading
-  const [error, setError] = useState(null); // transport/HTTP failure (api() threw)
-  const [runNonce, setRunNonce] = useState(0); // bumped by the Run button to force a fetch
-  const [openMenu, setOpenMenu] = useState(null); // "dimension" | "metric" | null
+  const [metrics, setMetrics] = useState(defaultMetrics || ["activeUsers", "newUsers"]);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [runNonce, setRunNonce] = useState(0);
+  const [openMenu, setOpenMenu] = useState(null);
 
-  // Fingerprints of everything that should re-run the report immediately.
   const dimsKey = dimensions.join(",");
   const metricsKey = metrics.join(",");
 
@@ -1054,9 +872,6 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
     let cancelled = false;
     setResult(null);
     setError(null);
-    // Sessions is a permanent column on every report — pin it onto the request
-    // even when the user hasn't picked it (appended last so it never changes
-    // the first metric the chart/ordering uses).
     const reportMetrics = metrics.includes("sessions") ? metrics : [...metrics, "sessions"];
     api(`/projects/${projectId}/analytics/report`, {
       method: "POST",
@@ -1070,7 +885,6 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, range.start, range.end, dimsKey, metricsKey, runNonce]);
 
-  // ── Dimension / metric chip helpers (always keep at least one of each) ──
   const addDimension = (name) => {
     setOpenMenu(null);
     setDimensions((d) => (d.includes(name) ? d : [...d, name]));
@@ -1082,8 +896,6 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
   };
   const removeMetric = (name) => setMetrics((m) => (m.length > 1 ? m.filter((x) => x !== name) : m));
 
-  // The server reports incompatible combinations / no data as {error}; a thrown
-  // api() error lands in `error`. Either way we show the same muted message.
   const failed = error || result?.error;
   const usesDemographics = dimensions.some((d) => DEMOGRAPHICS_NAMES.has(d));
 
@@ -1101,9 +913,7 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
         </button>
       </div>
 
-      {/* ── Builder ── */}
       <div className="bg-white rounded-xl border border-stone-200 p-4 mb-4 space-y-4">
-        {/* Dimensions */}
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Dimensions</p>
           <div className="flex flex-wrap items-center gap-2">
@@ -1153,7 +963,6 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
           </div>
         </div>
 
-        {/* Metrics */}
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Metrics</p>
           <div className="flex flex-wrap items-center gap-2">
@@ -1202,7 +1011,6 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
 
       </div>
 
-      {/* ── Result ── */}
       {result === null && !error ? (
         <div className="flex justify-center py-16">
           <LoaderCircle size={22} className="text-orange-600 animate-spin" />
@@ -1215,11 +1023,6 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
           </p>
         </div>
       ) : dimensions.includes(EVENT_DIMENSION) ? (
-        /* Event Name gets its OWN table. The generic report crosses every
-           selected dimension, so channel x event produced a row per PAIR —
-           7 events x 5 channels = 35 rows to read one number, which is what made
-           it unreadable. EventsReport shows one row per event with the channel
-           split tucked into an expandable sub-row. */
         <EventsReport projectId={projectId} range={range} runNonce={runNonce} />
       ) : (
         <ReportResult report={result} />
@@ -1228,37 +1031,15 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   EVENTS TABLE — the dedicated Event Name view.
-
-   Runs its OWN pair of requests rather than reshaping the generic report,
-   because the numbers have to be right:
-
-   • MAIN ROWS use eventName as the ONLY dimension. GA4 user metrics are not
-     additive across a dimension — one visitor who fires page_view from both
-     Direct and Organic Search is ONE active user but appears in BOTH rows of a
-     crossed report. Summing the crossed table would inflate every user count
-     (the same trap that made the report's channel donut read 164 against a real
-     total of 162). Asking GA4 for eventName alone returns de-duplicated counts.
-
-   • THE CHANNEL SPLIT uses [eventName, channel] but only reads eventCount.
-     Event counts ARE additive, so splitting them per channel is safe.
-
-   Columns are deliberately fewer than the generic table: "Key events" is 0 on
-   every row for most properties, and averageEngagementTime is 0s for everything
-   except engagement events (GA4 only attributes duration to those), so both are
-   noise here. New users shows an em dash rather than 0 where GA4 attributes none
-   — a column of zeros reads like missing data.
-   ════════════════════════════════════════════════════════════════════ */
 const EVENT_DIMENSION = "eventName";
 const EVENT_METRICS = ["eventCount", "activeUsers", "newUsers", "sessions"];
 const EVENT_CHANNEL_DIMENSION = "sessionDefaultChannelGroup";
 
 function EventsReport({ projectId, range, runNonce }) {
-  const [rows, setRows] = useState(null); // null = loading
-  const [byChannel, setByChannel] = useState({}); // eventName -> [{channel, count}]
+  const [rows, setRows] = useState(null);
+  const [byChannel, setByChannel] = useState({});
   const [error, setError] = useState(null);
-  const [expanded, setExpanded] = useState(null); // the event name whose split is open
+  const [expanded, setExpanded] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1274,8 +1055,6 @@ function EventsReport({ projectId, range, runNonce }) {
 
     Promise.all([
       post([EVENT_DIMENSION], EVENT_METRICS),
-      // Best-effort: the split is a nicety, so a failure here must not take the
-      // main table down with it.
       post([EVENT_DIMENSION, EVENT_CHANNEL_DIMENSION], ["eventCount"]).catch(() => null),
     ])
       .then(([main, split]) => {
@@ -1328,7 +1107,6 @@ function EventsReport({ projectId, range, runNonce }) {
 
   return (
     <div>
-      {/* Headline counts */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
         <div className="bg-white rounded-xl border border-stone-200 px-4 py-3">
           <p className="text-xs text-stone-400">Total events</p>
@@ -1397,8 +1175,6 @@ function EventsReport({ projectId, range, runNonce }) {
                       </td>
                       <td className="px-3 py-3 text-right font-data text-stone-700">{r.activeUsers.toLocaleString()}</td>
                       <td className="px-3 py-3 text-right font-data text-stone-700">
-                        {/* GA4 attributes new users only to first_visit; a zero
-                            here means "not applicable", not "no data". */}
                         {r.newUsers > 0 ? r.newUsers.toLocaleString() : <span className="text-stone-300">—</span>}
                       </td>
                       <td className="px-5 py-3 text-right font-data text-stone-700">{r.sessions.toLocaleString()}</td>
@@ -1432,8 +1208,6 @@ function EventsReport({ projectId, range, runNonce }) {
               <tr className="border-t-2 border-stone-200 bg-stone-50 font-semibold text-stone-900">
                 <td className="px-5 py-3 text-xs uppercase tracking-wider text-stone-500">Total</td>
                 <td className="px-3 py-3 text-right font-data">{totalEvents.toLocaleString()}</td>
-                {/* No user/session totals: summing them across events would
-                    double-count anyone who fired more than one event. */}
                 <td colSpan={3} className="px-5 py-3 text-right text-xs font-normal text-stone-400">
                   User and session totals aren&apos;t additive across events
                 </td>
@@ -1446,9 +1220,6 @@ function EventsReport({ projectId, range, runNonce }) {
   );
 }
 
-/* A small dropdown panel for the dimension/metric pickers: a transparent
-   full-screen backdrop closes it on an outside click; the panel floats below
-   its trigger. */
 function PickerMenu({ children, onClose }) {
   return (
     <>
@@ -1460,11 +1231,8 @@ function PickerMenu({ children, onClose }) {
   );
 }
 
-/* Headline time-series: active + new users per day, GA-style line chart. */
 function TrafficTrendChart({ byDate }) {
   const rows = byDate.rows || [];
-  // Memoized so the AreaChart only re-renders when the underlying rows change,
-  // not on every parent state change (filter typing, tab switches, etc.).
   const chartData = useMemo(
     () => rows.map((r) => ({ ...r, label: formatGADate(r.date) })),
     [rows]
@@ -1477,7 +1245,7 @@ function TrafficTrendChart({ byDate }) {
           <h2 className="text-sm font-semibold text-stone-900 font-display">Users over time</h2>
           <p className="text-xs text-stone-400 mt-0.5">Active vs. new users across the range</p>
         </div>
-        
+
       </div>
       {chartData.length === 0 ? (
         <p className="py-12 text-center text-sm text-stone-400">No data for this range.</p>
@@ -1508,8 +1276,6 @@ function TrafficTrendChart({ byDate }) {
   );
 }
 
-/* Donut tooltip: a colour swatch, the category, its value and its share of the
-   whole (e.g. "Organic Search: 1,234 (42.0%)"). */
 function DonutTooltip({ active, payload, total }) {
   if (!active || !payload || !payload.length) return null;
   const slice = payload[0];
@@ -1523,27 +1289,19 @@ function DonutTooltip({ active, payload, total }) {
   );
 }
 
-// A blank/whitespace dimension value reads as "(not set)" (matches GA).
 function cleanDimValue(v) {
   return v && String(v).trim() ? v : "(not set)";
 }
 
-// Join a row's dimension values into one label, each cleaned, with no dangling
-// separators — "Organic Search / India / Edge / (not set)", never "… / /".
 function joinDims(dimsValues) {
   const vals = (dimsValues || []).map(cleanDimValue);
   return vals.length ? vals.join(" / ") : "(not set)";
 }
 
-// Roughly how many characters fit on one Y-axis label line at the width/font
-// below (~6.5px per char in the ~240px gutter, less a little padding).
 const YAXIS_LABEL_WIDTH = 240;
 const YAXIS_MAX_CHARS = 34;
 const YAXIS_LINE_HEIGHT = 13;
 
-// Greedily wrap `text` onto up to `maxLines` lines of ~`maxChars`, breaking on
-// spaces (so the " / " separators wrap cleanly). Adds an ellipsis to the last
-// line only if the text still overflows; hard-trims any single overlong word.
 function wrapLabel(text, maxChars = YAXIS_MAX_CHARS, maxLines = 2) {
   const s = String(text).trim();
   if (!s) return ["(not set)"];
@@ -1559,7 +1317,7 @@ function wrapLabel(text, maxChars = YAXIS_MAX_CHARS, maxLines = 2) {
       lines.push(current);
       current = w;
     } else {
-      overflow = true; // more words than two lines can hold
+      overflow = true;
       break;
     }
   }
@@ -1569,13 +1327,9 @@ function wrapLabel(text, maxChars = YAXIS_MAX_CHARS, maxLines = 2) {
     const last = lines[lines.length - 1] || "";
     lines[lines.length - 1] = `${last.slice(0, maxChars - 1).replace(/\s+$/, "")}…`;
   }
-  // Hard-trim any line still too long (a single word with no break points).
   return lines.map((ln) => (ln.length > maxChars ? `${ln.slice(0, maxChars - 1)}…` : ln));
 }
 
-// Custom Y-axis tick: wraps the (possibly multi-dimension) category label onto
-// up to 2 lines instead of truncating on one, so combined "A / B / C" labels
-// stay readable. Block is vertically centred on the tick.
 function WrappedYAxisTick({ x, y, payload }) {
   const lines = wrapLabel(payload?.value);
   const firstDy = -((lines.length - 1) * YAXIS_LINE_HEIGHT) / 2 + 4;
@@ -1590,23 +1344,12 @@ function WrappedYAxisTick({ x, y, payload }) {
   );
 }
 
-// Composition dimensions read best as a share-of-total donut (a few named
-// categories). Time dimensions read best as a trend line. Everything else —
-// and any multi-dimension report — uses the horizontal bar.
 const COMPOSITION_DIMENSIONS = new Set([
   "sessionDefaultChannelGroup", "firstUserDefaultChannelGroup", "deviceCategory",
   "language", "platform", "operatingSystem", "continent", "newVsReturning", "userGender",
 ]);
 const TIME_DIMENSIONS = new Set(DIMENSION_GROUPS["Time"].map(([, name]) => name));
 
-/* Renders one combined report: a chart of the top rows by the FIRST selected
-   metric on top, then a full-width table with one column per selected dimension
-   + one per selected metric, plus a totals row. The chart type is chosen by the
-   selected dimension when exactly ONE is selected — a donut for composition, a
-   line for time series, a horizontal bar otherwise; multi-dimension reports
-   always use the bar. table-fixed + a colgroup gives the metric columns a fixed
-   width and lets the dimension columns take the rest and truncate (ellipsis +
-   title), so long values never push columns off-screen — no horizontal scroll. */
 function ReportResult({ report, onDrill }) {
   const dims = report?.dimensions || [];
   const mets = report?.metrics || [];
@@ -1614,7 +1357,6 @@ function ReportResult({ report, onDrill }) {
   const totals = report?.totals || {};
   const firstMetric = mets[0];
 
-  // Chart type by the single selected dimension (bar for 0 or many dimensions).
   const single = dims.length === 1 ? dims[0] : null;
   const chartType = !single
     ? "bar"
@@ -1624,25 +1366,17 @@ function ReportResult({ report, onDrill }) {
     ? "line"
     : "bar";
 
-  // All chart-shaping is memoized so the Bar/Donut/Line only re-render when the
-  // rows/metric/dimension actually change — not on unrelated parent re-renders.
   const { chartData, donutTotal, donutData, lineData } = useMemo(() => {
-    // Bar: top 15 rows by the first metric; label = cleaned dims joined by " / "
-    // (same label the table uses), wrapped onto 2 lines on the axis.
     const chartData = rows.slice(0, 15).map((r) => ({
       name: joinDims(r.dims),
       value: Number(r.metrics?.[firstMetric]) || 0,
     }));
 
-    // Donut: top 6 categories by the first metric + an "Other" slice; total
-    // spans ALL rows so the tooltip percentages are of the whole.
     const donutTotal = rows.reduce((s, r) => s + (Number(r.metrics?.[firstMetric]) || 0), 0);
     const donutTop = rows.slice(0, 6).map((r) => ({ name: joinDims(r.dims), value: Number(r.metrics?.[firstMetric]) || 0 }));
     const donutRest = rows.slice(6).reduce((s, r) => s + (Number(r.metrics?.[firstMetric]) || 0), 0);
     const donutData = donutRest > 0 ? [...donutTop, { name: "Other", value: donutRest }] : donutTop;
 
-    // Line: every row in chronological order by the raw dimension value (GA date
-    // strings sort chronologically); the "date" dimension shows as MM/DD.
     const lineData = rows
       .map((r) => ({ raw: String((r.dims || [])[0] ?? ""), value: Number(r.metrics?.[firstMetric]) || 0 }))
       .sort((a, b) => a.raw.localeCompare(b.raw))
@@ -1655,7 +1389,6 @@ function ReportResult({ report, onDrill }) {
 
   return (
     <div className="space-y-4">
-      {/* Chart of the first metric, matched to the dimension — on top */}
       <div className="bg-white rounded-xl border border-stone-200 p-4">
         {chartData.length === 0 ? (
           <p className="py-12 text-center text-sm text-stone-400">No data for this range.</p>
@@ -1702,10 +1435,6 @@ function ReportResult({ report, onDrill }) {
         )}
       </div>
 
-      {/* Combined table — one column per dimension + one per metric, + totals. */}
-      {/* overflow-x-auto + a content-width table (min-w-full, NOT table-fixed):
-          with many metric columns the table grows past the container and scrolls
-          horizontally instead of squeezing every column into the visible width. */}
       <div className="bg-white rounded-xl border border-stone-200 overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead>
@@ -1737,9 +1466,6 @@ function ReportResult({ report, onDrill }) {
                     const v = cleanDimValue(raw);
                     return (
                       <td key={d} className="px-5 py-3 font-medium text-stone-800 max-w-[16rem] truncate" title={v}>
-                        {/* Clickable drill-down: applies the RAW value as an EXACT
-                            filter on this dimension (same pattern as the GSC report).
-                            Plain text for "(not set)"/empty rows — nothing to filter on. */}
                         {onDrill && raw && String(raw).trim() ? (
                           <button
                             onClick={() => onDrill(d, raw)}
@@ -1783,19 +1509,6 @@ function ReportResult({ report, onDrill }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   SEARCH CONSOLE (GSC) — per-project Google Search Console performance
-   for a chosen date range, reusing the SAME service account as GA4. Its
-   own date-range control sits at the top (default last 28 days), then the
-   four headline cards (Total Clicks, Total Impressions, Average CTR, Avg
-   Position), a clicks/impressions trend chart, and the Queries + Pages
-   tables. Fed by GET /api/projects/:id/search-console. When the project
-   has no GSC site URL — or the server returns {error} (no access, API not
-   enabled, no data) — we show a friendly muted message instead of crashing.
-   ════════════════════════════════════════════════════════════════════ */
-
-// GSC CTR is a fraction (0–1) → one-decimal percentage; position is 1-based →
-// one decimal; clicks/impressions are plain counts → locale-formatted integers.
 function formatCtr(value) {
   return `${((Number(value) || 0) * 100).toFixed(1)}%`;
 }
@@ -1806,15 +1519,11 @@ function formatCount(value) {
   return (Number(value) || 0).toLocaleString();
 }
 
-// Raw GSC date "2026-06-01" → "06/01" for the trend chart axis/tooltip.
 function formatGSCDate(raw) {
   if (!raw || raw.length !== 10) return raw || "";
   return `${raw.slice(5, 7)}/${raw.slice(8, 10)}`;
 }
 
-// ── Performance report config ─────────────────────────────────────────
-// Search-type selector tabs: [label, API value]. Defaults to Web. (The API
-// also accepts googleNews; we expose the five GSC surfaces the UI shows.)
 const SC_SEARCH_TYPES = [
   ["Web", "web"],
   ["Image", "image"],
@@ -1823,8 +1532,6 @@ const SC_SEARCH_TYPES = [
   ["Discover", "discover"],
 ];
 
-// Dimension tabs below the chart: [label, API dimension, table column header].
-// Selecting a tab sets the active breakdown and refetches its rows.
 const SC_DIMENSION_TABS = [
   ["Queries", "query", "Query"],
   ["Pages", "page", "Page"],
@@ -1834,40 +1541,22 @@ const SC_DIMENSION_TABS = [
   ["Dates", "date", "Date"],
 ];
 
-// NOTE: SC_FILTER_DIMENSIONS / SC_TEXT_OPERATORS / SC_IS_OPERATORS /
-// scOperatorsFor / scValuePlaceholder lived here to drive the manual filter bar,
-// which has been removed. They went with it. The BACKEND still accepts the full
-// operator set (see its SC_OPERATORS allowlist), so restoring the bar is a
-// frontend-only job — `git log` has the originals.
-
-// The table column header for an active breakdown dimension.
 function scDimensionLabel(dimension) {
   const tab = SC_DIMENSION_TABS.find(([, name]) => name === dimension);
   return tab ? tab[2] : dimension;
 }
 
-// Filename-safe slug for an active dimension, from its tab label:
-// query → "queries", searchAppearance → "search-appearance".
 function scDimensionSlug(dimension) {
   const tab = SC_DIMENSION_TABS.find(([, name]) => name === dimension);
   return (tab ? tab[0] : dimension).toLowerCase().replace(/\s+/g, "-");
 }
 
-// One CSV field: wrap in double quotes and double any embedded quotes, so
-// commas (in queries / page URLs / locale-formatted numbers) stay contained.
-// Also neutralise CSV FORMULA INJECTION: Excel/Sheets evaluate a cell that
-// starts with = + - @ (or tab/CR) as a formula, so a value like
-// "=HYPERLINK(...)" surfaced as a search query could run on open. Prefix such
-// values with a single quote so they're treated as literal text.
 function csvField(value) {
   let s = String(value ?? "");
   if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
   return `"${s.replace(/"/g, '""')}"`;
 }
 
-// The four toggleable metrics, in card/legend order, each with its plotting
-// colour, chart Y-axis id and cell formatter. Clicks blue, Impressions purple,
-// CTR green, Position orange (each line matches its card).
 const SC_METRICS = [
   { key: "clicks", label: "Total Clicks", color: "#1a73e8", fmt: formatCount },
   { key: "impressions", label: "Total Impressions", color: "#7c3aed", fmt: formatCount },
@@ -1875,8 +1564,6 @@ const SC_METRICS = [
   { key: "position", label: "Average Position", color: "#ea8600", fmt: formatPosition },
 ];
 
-/* Chart tooltip: one colour-swatched line per plotted metric, each value
-   formatted to its own kind (counts, CTR %, position to 1 dp). */
 function SCChartTooltip({ active, payload, label }) {
   if (!active || !payload || !payload.length) return null;
   return (
@@ -1895,38 +1582,21 @@ function SCChartTooltip({ active, payload, label }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   SEARCH CONSOLE (GSC) — a faithful replica of Google Search Console's
-   Performance ("Search results") report. A search-type selector (Web /
-   Image / Video / News / Discover) and the shared date-range control sit
-   at the top; a stackable AND-joined filter bar follows. Below, four
-   TOGGLEABLE metric cards (Clicks, Impressions, CTR, Position) drive a
-   multi-axis time chart, then dimension tabs (Queries / Pages / Countries
-   / Devices / Search appearance / Dates) each render a sortable breakdown
-   table. Search type, date and filters all apply to the totals + chart +
-   active table together, fed by POST /api/projects/:id/search-console/
-   performance. When the project has no GSC site URL — or the server returns
-   {error} — we show a friendly muted message instead of crashing.
-   ════════════════════════════════════════════════════════════════════ */
 function SearchConsoleTool({ project }) {
-  const [range, setRange] = useState(() => presetRange(28)); // default: last 28 days
-  const [activePreset, setActivePreset] = useState(28); // highlighted preset, or null
-  const [searchType, setSearchType] = useState("web"); // Web by default
-  const [filters, setFilters] = useState([]); // {dimension, operator, expression}
-  const [dimension, setDimension] = useState("query"); // active table breakdown
-  const [enabled, setEnabled] = useState(["clicks", "impressions"]); // plotted metrics
-  const [data, setData] = useState(null); // null = first load
-  const [error, setError] = useState(null); // transport/HTTP failure (api() threw)
-  const [busy, setBusy] = useState(false); // a fetch is in flight (incl. refetches after the first load)
-  const [pendingPick, setPendingPick] = useState(null); // raw key of the row the user just clicked to drill into
+  const [range, setRange] = useState(() => presetRange(28));
+  const [activePreset, setActivePreset] = useState(28);
+  const [searchType, setSearchType] = useState("web");
+  const [filters, setFilters] = useState([]);
+  const [dimension, setDimension] = useState("query");
+  const [enabled, setEnabled] = useState(["clicks", "impressions"]);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [pendingPick, setPendingPick] = useState(null);
   const toast = useToast();
 
-  // No site URL set → friendly empty state, no fetch.
   const notConfigured = !project.gscSiteUrl;
 
-  // Debounce the filter VALUE text so typing doesn't fire a request per
-  // keystroke (~500ms). Structural changes (search type, date, dimension,
-  // adding/removing rows, a row's dimension/operator) re-run immediately.
   const exprKey = filters.map((f) => f.expression).join(" ");
   const [debouncedExprKey, setDebouncedExprKey] = useState(exprKey);
   useEffect(() => {
@@ -1939,11 +1609,8 @@ function SearchConsoleTool({ project }) {
   useEffect(() => {
     if (notConfigured) return;
     let cancelled = false;
-    // Keep the previous view on refetch (only the first load shows the big
-    // loader) so switching tabs / typing filters doesn't blank the page.
     setError(null);
     setBusy(true);
-    // Drop half-built rows (no value yet) so we never send a contains "".
     const activeFilters = filters
       .filter((f) => f.expression.trim() !== "")
       .map((f) => ({ dimension: f.dimension, operator: f.operator, expression: f.expression }));
@@ -1953,10 +1620,6 @@ function SearchConsoleTool({ project }) {
     })
       .then((d) => !cancelled && setData(d))
       .catch((err) => !cancelled && setError(err.message))
-      // Only clear busy for the request that's still current — a superseded
-      // fetch (cancelled) must not switch the loader off while its replacement
-      // is still running. Also drop the clicked-row highlight now the new
-      // (drilled-down) rows are in.
       .finally(() => {
         if (!cancelled) {
           setBusy(false);
@@ -1982,20 +1645,9 @@ function SearchConsoleTool({ project }) {
     setRange((r) => ({ ...r, [which]: value }));
   };
 
-  // ── Metric toggles (a card click shows/hides its line) ──
   const toggleMetric = (key) =>
     setEnabled((m) => (m.includes(key) ? m.filter((x) => x !== key) : [...m, key]));
 
-  // (addFilter / updateFilter / removeFilter removed with the filter bar. The
-  // only remaining writer of `filters` is the drill-down below.)
-
-  // Clicking a dimension-table row applies that value as an "equals" filter on
-  // the current tab's dimension — the GSC drill-down (click a query, switch to
-  // Pages, see only that query's pages; stack more to narrow further). Uses the
-  // RAW key the API returned (not a display value) so the filter matches, and
-  // skips adding a duplicate of an identical {dimension, operator, expression}.
-  // Clicking a row: remember which key was clicked (so we can flag that row as
-  // pending while the drill-down request runs), then apply the filter.
   const pickRow = (filterDimension, expression) => {
     setPendingPick(expression);
     addFilterValue(filterDimension, expression);
@@ -2009,25 +1661,12 @@ function SearchConsoleTool({ project }) {
         : [...f, { dimension: filterDimension, operator: "equals", expression }]
     );
 
-  // Switch the active breakdown tab AND clear any drill-down (equals) filter on
-  // that same dimension. Fixes the "can't go back" bug: after clicking a query
-  // to drill in, clicking the Queries tab again now shows the full list right
-  // away — no page refresh needed to shake off the single-query filter.
   const selectDimension = (name) => {
     setDimension(name);
     setFilters((f) => f.filter((x) => !(x.dimension === name && x.operator === "equals")));
   };
 
-  // (exportCsv removed with the filter bar — that card held the only Export
-  // button. It was pure client-side CSV assembly, no backend involved, so
-  // reinstating it is a copy-paste from git plus a button anywhere on screen.)
-
-  // The server reports no access / no data / a misconfigured property as
-  // {error}; a thrown api() error lands in `error`. Either way we show the
-  // same muted message in place of the data.
   const failed = error || data?.error;
-  // Memoized so toggling a metric or unrelated state doesn't rebuild the trend
-  // series (and force the chart to re-render) from scratch each time.
   const trendData = useMemo(
     () => (data?.trend || []).map((r) => ({ ...r, label: formatGSCDate(r.date) })),
     [data?.trend]
@@ -2058,9 +1697,7 @@ function SearchConsoleTool({ project }) {
         </div>
       ) : (
         <>
-          {/* ── Search type + date range ── */}
           <div className="bg-white rounded-xl border border-stone-200 p-4 mb-4">
-            {/* Search type selector */}
             <div className="flex flex-wrap items-center gap-2 mb-3">
               <span className="text-xs font-semibold uppercase tracking-wider text-stone-400 mr-1">Search type</span>
               {SC_SEARCH_TYPES.map(([label, value]) => {
@@ -2082,7 +1719,6 @@ function SearchConsoleTool({ project }) {
               })}
             </div>
 
-            {/* Date presets */}
             <div className="flex flex-wrap items-center gap-2 border-t border-stone-100 pt-3">
               {RANGE_PRESETS.map((p) => {
                 const active = activePreset === p.days;
@@ -2134,29 +1770,6 @@ function SearchConsoleTool({ project }) {
             </p>
           </div>
 
-          {/* The manual Filters card (dimension/operator/value rows, Add filter,
-              Reset, Export) was REMOVED by request — it read as clutter, since
-              it sat empty most of the time.
-
-              What still works: clicking a table row drills down (pickRow ->
-              addFilterValue appends an "equals" filter), and clicking a
-              breakdown tab clears that dimension's drill-down
-              (selectDimension). So the `filters` state is still live and still
-              sent with every query.
-
-              What you give up: an active drill-down filter is no longer
-              DISPLAYED anywhere, so the only way back to the unfiltered list is
-              re-clicking the tab. If that becomes confusing, the smallest fix is
-              a single "Filtered by X · clear" chip above the table rather than
-              restoring this whole card. */}
-
-          {/* Refetch indicator: the first load shows the big spinner below, but
-              a click-to-drill / filter / date change keeps the old table on
-              screen while the (slow, ~10-20s) request runs. Without a signal the
-              user thinks nothing happened, so show a top progress bar plus a
-              viewport-fixed badge whenever a fetch is in flight AND we already
-              have data on screen. Both are `fixed`, so they stay visible even
-              after scrolling down to the table. */}
           {busy && data !== null && (
             <>
               <div className="fixed inset-x-0 top-0 z-50 h-1 overflow-hidden bg-orange-100">
@@ -2186,7 +1799,6 @@ function SearchConsoleTool({ project }) {
               }`}
               aria-busy={busy}
             >
-              {/* Toggleable metric cards — a click shows/hides that line. */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {SC_METRICS.map((m) => {
                   const on = enabled.includes(m.key);
@@ -2220,9 +1832,6 @@ function SearchConsoleTool({ project }) {
                 })}
               </div>
 
-              {/* Time chart — each enabled metric on its own scale (counts, CTR %,
-                  position rank). The position axis is reversed so a better
-                  (lower) position sits higher, matching GSC. */}
               <div className="bg-white rounded-xl border border-stone-200 p-4">
                 {trendData.length === 0 || plotted.length === 0 ? (
                   <p className="py-12 text-center text-sm text-stone-400">
@@ -2233,8 +1842,6 @@ function SearchConsoleTool({ project }) {
                     <LineChart data={trendData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                       <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#a8a29e" }} tickLine={false} axisLine={{ stroke: "#e7e5e4" }} minTickGap={24} />
-                      {/* One hidden axis per metric so each has its own scale; the
-                          position axis is reversed (lower = better = higher). */}
                       <YAxis yAxisId="clicks" hide allowDecimals={false} />
                       <YAxis yAxisId="impressions" hide allowDecimals={false} />
                       <YAxis yAxisId="ctr" hide domain={[0, "auto"]} />
@@ -2258,7 +1865,6 @@ function SearchConsoleTool({ project }) {
                 )}
               </div>
 
-              {/* Dimension tabs + the active breakdown table. */}
               <div>
                 <div className="flex flex-wrap gap-2 mb-3">
                   {SC_DIMENSION_TABS.map(([label, name]) => {
@@ -2294,17 +1900,9 @@ function SearchConsoleTool({ project }) {
   );
 }
 
-/* The active breakdown table: the dimension column + Clicks, Impressions, CTR,
-   Avg Position, SORTABLE (click a header to re-sort; default Clicks desc).
-   table-fixed + a colgroup pins the four metric columns at a fixed width
-   (always visible, never wrap); the label column takes the rest and truncates
-   with an ellipsis + title, so long queries/URLs never push columns
-   off-screen. */
 function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
-  const [sort, setSort] = useState({ col: "clicks", dir: "desc" }); // default: Clicks desc
+  const [sort, setSort] = useState({ col: "clicks", dir: "desc" });
 
-  // Click a header: same column → flip direction; new column → its default
-  // (text key ascending, metrics descending).
   const sortBy = (col) =>
     setSort((s) =>
       s.col === col
@@ -2380,10 +1978,6 @@ function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
               return (
                 <tr key={i} className={pending ? "bg-orange-50" : "hover:bg-stone-50"}>
                   <td className="px-5 py-3 font-medium truncate" title={cell}>
-                    {/* Clickable when the tab is a filterable dimension AND the row
-                        has a real key — applies the RAW key as a filter (GSC drill-down).
-                        While its drill-down request is in flight the row shows a
-                        spinner and is disabled so it can't be clicked twice. */}
                     {onPick && r.key ? (
                       <button
                         onClick={() => onPick(r.key)}
@@ -2416,10 +2010,6 @@ function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
   );
 }
 
-/* KPI card — premium analytics tile: a soft-purple icon chip, a colored
-   comparison pill, the headline value, and an optional sparkline. Every
-   prop beyond label/value is optional, so the simpler Rank Ledger stats
-   (which pass only label + value, sometimes a `tone`) render cleanly too. */
 function Stat({ label, value, tone, icon: Icon, delta, deltaDown, spark, onClick, active, title }) {
   const valueClass = tone === "up" ? "text-emerald-600" : tone === "down" ? "text-red-500" : "text-stone-900";
   const clickable = typeof onClick === "function";
@@ -2462,8 +2052,6 @@ function Stat({ label, value, tone, icon: Icon, delta, deltaDown, spark, onClick
   );
 }
 
-/* Dependency-free SVG sparkline — a soft area under a 2px line. Purple for an
-   upward/neutral series, red when the card is flagged as declining. */
 function Sparkline({ data, down }) {
   const w = 120;
   const h = 32;
@@ -2487,7 +2075,6 @@ function Sparkline({ data, down }) {
   );
 }
 
-/* Green/red are reserved app-wide for exactly this: rank movement. */
 function RankChange({ current, previous }) {
   if (current == null) return <span className="text-stone-300 font-data">—</span>;
   if (previous == null) {
@@ -2570,8 +2157,6 @@ function AddKeywordModal({ projectId, onClose, onAdded }) {
     </Modal>
   );
 }
-/* Records a new lookup: the server rotates current -> previous and
-   stamps last_checked. Same write path a future rank-API job will use. */
 function RecordRankModal({ projectId, keyword, onClose, onSaved }) {
   const [newRank, setNewRank] = useState("");
   const [error, setError] = useState(null);
@@ -2625,15 +2210,6 @@ function RecordRankModal({ projectId, keyword, onClose, onSaved }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   BULK IMPORT — download the sample, fill it, upload it.
-
-   File uploads can't go through our normal api() helper (it sends
-   JSON). The browser's FormData sends the file as multipart form data
-   instead, with the auth token attached by hand. The server validates
-   every row and returns a summary we display: how many imported, how
-   many were duplicates, and a per-row reason for each rejected one.
-   ════════════════════════════════════════════════════════════════════ */
 function BulkImportModal({ projectId, onClose, onImported }) {
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -2641,8 +2217,6 @@ function BulkImportModal({ projectId, onClose, onImported }) {
   const [result, setResult] = useState(null);
 
   const downloadTemplate = async () => {
-    // Fetch with the auth header, then trigger a browser download from
-    // the returned blob — you can't put headers on a plain <a href>.
     try {
       const res = await fetch(`${BASE}/api/projects/keywords/sample-template`, {
         headers: { Authorization: `Bearer ${getToken()}` },
@@ -2670,13 +2244,13 @@ function BulkImportModal({ projectId, onClose, onImported }) {
       form.append("file", file);
       const res = await fetch(`${BASE}/api/projects/${projectId}/keywords/bulk-import`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${getToken()}` }, // no Content-Type: the browser sets the multipart boundary
+        headers: { Authorization: `Bearer ${getToken()}` },
         body: form,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Import failed.");
       setResult(data);
-      onImported(); // refresh the ledger behind the modal
+      onImported();
     } catch (err) {
       setError(err.message);
     } finally {
