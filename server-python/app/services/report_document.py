@@ -531,10 +531,12 @@ def _key_metrics_grid(ga4, ga4_present, ga4_reason, moz, moz_present, moz_reason
     da_delta = moz_deltas.get("domain_authority")
     da_prev = (da - da_delta) if (_is_num(da) and _is_num(da_delta)) else None
 
+    # Order matters: this list is the render order of the Key Metrics cards.
+    # People (total, then new, then returning) read before visit counts.
     metrics = [
-        _metric("sessions", "Sessions", "count", cur.get("sessions"), prev.get("sessions")),
         _metric("totalUsers", "Total users", "count", cur.get("totalUsers"), prev.get("totalUsers")),
         _metric("newUsers", "New users", "count", cur.get("newUsers"), prev.get("newUsers")),
+        _metric("sessions", "Sessions", "count", cur.get("sessions"), prev.get("sessions")),
         _metric("returningUsers", "Returning users", "count", cur.get("returningUsers"), prev.get("returningUsers")),
         _metric("domain_authority", "Domain Authority", "count", da, da_prev, da_delta),
         _metric("new_backlinks", "New backlinks", "count", bl_count, None, None),
