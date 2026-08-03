@@ -6,9 +6,8 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from ..access import accessible_project_ids
-from ..config import DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD, RANK_LOCATION_CODE
 from ..db import get_db
-from ..security import require_active_user, require_permission, require_project_access, require_roles
+from ..security import require_active_user, require_permission, require_project_access
 from ..services.analytics_provider import (
     ALLOWED_DIMENSIONS,
     ALLOWED_MATCH_TYPES,
@@ -18,7 +17,6 @@ from ..services.analytics_provider import (
     get_returning_users,
     run_custom_report,
 )
-from ..services.rank_provider import check_ranks
 from ..services.search_console_provider import get_search_console, query_performance
 from ..services.excel_service import build_sample_workbook, parse_keyword_workbook
 from ..services import keyword_rank_service
@@ -31,6 +29,7 @@ def row_to_project(p: sqlite3.Row, keyword_count: int | None = None) -> dict:
     out = {
         "id": p["id"],
         "name": p["name"],
+        "clientName": p["client_name"],
         "domain": p["domain"],
         "locationCode": p["location_code"],
         "countryCode": p["country_code"],
@@ -349,6 +348,12 @@ def normalize_domain(raw: str | None) -> str | None:
     return d or None
 
 
+def normalize_client_name(raw: str | None) -> str | None:
+    if not raw or not raw.strip():
+        return None
+    return " ".join(raw.split())[:120]
+
+
 def normalize_ga_property_id(raw: str | None) -> str | None:
     if not raw or not raw.strip():
         return None
@@ -431,6 +436,7 @@ def _geo_from_body(db: sqlite3.Connection, body) -> tuple:
 
 class ProjectIn(BaseModel):
     name: str
+    clientName: str | None = None
     domain: str | None = None
     countryCode: int | None = None
     regionCode: int | None = None
@@ -447,10 +453,12 @@ def create_project(body: ProjectIn, db: sqlite3.Connection = Depends(get_db)):
         raise HTTPException(400, "Project name is required.")
     location_code, country_code, region_code, city_code, label = _geo_from_body(db, body)
     cur = db.execute(
-        "INSERT INTO projects (name, domain, location_code, country_code, region_code, city_code,"
-        " location_label, ga_property_id, gsc_site_url, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+        "INSERT INTO projects (name, client_name, domain, location_code, country_code, region_code,"
+        " city_code, location_label, ga_property_id, gsc_site_url, active)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
         (
             name,
+            normalize_client_name(body.clientName),
             normalize_domain(body.domain),
             location_code,
             country_code,
@@ -467,6 +475,7 @@ def create_project(body: ProjectIn, db: sqlite3.Connection = Depends(get_db)):
 
 class ProjectUpdateIn(BaseModel):
     active: bool | None = None
+    clientName: str | None = None
     domain: str | None = None
     countryCode: int | None = None
     regionCode: int | None = None
@@ -485,6 +494,10 @@ def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connectio
     if body.domain is not None:
         fields.append("domain = ?")
         values.append(normalize_domain(body.domain))
+    # Keyed off model_fields_set, not "is not None", so sending null clears it.
+    if "clientName" in body.model_fields_set:
+        fields.append("client_name = ?")
+        values.append(normalize_client_name(body.clientName))
     geo_keys = {"countryCode", "regionCode", "cityCode", "locationCode"} & body.model_fields_set
     if geo_keys:
         location_code, country_code, region_code, city_code, label = _geo_from_body(db, body)
@@ -515,101 +528,6 @@ def delete_project(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     if cur.rowcount == 0:
         raise HTTPException(404, "Project not found.")
     return {"ok": True}
-
-
-RANK_CHECK_ROLES = ("Super Admin", "Admin")
-RANK_CHECK_LIMIT = 3
-RANK_CHECK_WINDOW_DAYS = 14
-
-
-@router.post(
-    "/{project_id}/check-ranks",
-    dependencies=[Depends(require_project_access)],
-)
-def check_project_ranks(
-    project_id: int,
-    user: sqlite3.Row = Depends(require_roles(*RANK_CHECK_ROLES)),
-    db: sqlite3.Connection = Depends(get_db),
-):
-    from datetime import datetime, timedelta, timezone
-
-    project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-    if project is None:
-        raise HTTPException(404, "Project not found.")
-
-    kws = db.execute(
-        "SELECT * FROM keywords WHERE project_id = ? ORDER BY created_at, id", (project_id,)
-    ).fetchall()
-    if not kws:
-        raise HTTPException(400, "No keywords to check yet.")
-
-    now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(days=RANK_CHECK_WINDOW_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
-    recent = db.execute(
-        """SELECT created_at FROM rank_check_log
-           WHERE user_id = ? AND project_id = ? AND created_at >= ?
-           ORDER BY created_at ASC""",
-        (user["id"], project_id, cutoff),
-    ).fetchall()
-    if len(recent) >= RANK_CHECK_LIMIT:
-        try:
-            oldest = datetime.strptime(recent[0]["created_at"], "%Y-%m-%d %H:%M:%S")
-            resets_on = (oldest + timedelta(days=RANK_CHECK_WINDOW_DAYS)).strftime("%b %d, %Y")
-            when = f" You can check again on {resets_on}."
-        except (ValueError, TypeError):
-            when = ""
-        raise HTTPException(
-            429,
-            f"Rank-check limit reached: {RANK_CHECK_LIMIT} checks per project every "
-            f"{RANK_CHECK_WINDOW_DAYS} days.{when}",
-        )
-
-    real_mode = bool(DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD)
-    if real_mode and not project["domain"]:
-        raise HTTPException(
-            400,
-            "This project has no domain set, so the checker doesn't know which site to look for. "
-            "Add one when creating the project, or via PATCH /api/projects/:id {\"domain\": \"yoursite.com\"}.",
-        )
-
-    location_code = project["location_code"] if project["location_code"] is not None else RANK_LOCATION_CODE
-
-    try:
-        ranks, source = check_ranks(
-            project["domain"],
-            [{"term": k["term"], "currentRank": k["current_rank"]} for k in kws],
-            location_code,
-        )
-    except Exception as exc:
-        raise HTTPException(502, f"Rank check failed: {exc}")
-
-    updated, not_found = 0, []
-    for k in kws:
-        rank = ranks.get(k["term"])
-        if rank is None:
-            not_found.append(k["term"])
-            continue
-        db.execute(
-            "UPDATE keywords SET previous_rank = current_rank, current_rank = ?, last_checked = date('now') WHERE id = ?",
-            (rank, k["id"]),
-        )
-        updated += 1
-
-    db.execute(
-        "INSERT INTO rank_check_log (user_id, project_id) VALUES (?, ?)",
-        (user["id"], project_id),
-    )
-    checks_remaining = max(0, RANK_CHECK_LIMIT - (len(recent) + 1))
-
-    return {
-        "source": source,
-        "checked": len(kws),
-        "updated": updated,
-        "notFound": not_found,
-        "checksRemaining": checks_remaining,
-        "checksLimit": RANK_CHECK_LIMIT,
-        "windowDays": RANK_CHECK_WINDOW_DAYS,
-    }
 
 
 @router.get("/keywords/sample-template")

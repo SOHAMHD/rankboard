@@ -158,9 +158,10 @@ def send_report(
     filename = report_pdf.pdf_filename(version)
 
     proj = db.execute(
-        "SELECT name, domain FROM projects WHERE id = ?", (version["projectId"],)
+        "SELECT name, client_name, domain FROM projects WHERE id = ?", (version["projectId"],)
     ).fetchone()
-    project_name = proj["name"] if proj else "your project"
+    # Prefer the explicit client name; fall back to the project name.
+    project_name = (proj["client_name"] or proj["name"]) if proj else "your project"
     client_domain = (proj["domain"] if proj else "") or ""
     period = version.get("periodKey") or ""
 

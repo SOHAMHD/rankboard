@@ -70,7 +70,7 @@ function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) 
             ? "No regions loaded yet — run `python -m scripts.import_locations` on the server."
             : "No region matches that."
         }
-        hint="Narrows the city list below, and can be the rank-check target on its own."
+        hint="Narrows the city list below, and can be the project's location on its own."
       />
 
       <SmartSearch
@@ -215,8 +215,7 @@ export function ProjectsView({ user, onOpenProject, onPeople, onLogout }) {
           )}
         </div>
 
-        <ErrorNote>{error}</ErrorNote>
-
+      
         {loading ? (
           <div className="py-20 flex justify-center">
             <LoaderCircle size={22} className="text-orange-600 animate-spin" />
@@ -304,6 +303,7 @@ function ProjectCard({ project, user, confirming, onOpen, onEdit, onToggle, onDe
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="font-semibold text-stone-900 truncate font-display">{project.name}</h3>
+          {project.clientName && <p className="text-xs text-stone-600 truncate mt-0.5">{project.clientName}</p>}
           {project.domain && <p className="text-xs text-stone-500 font-data truncate mt-0.5">{project.domain}</p>}
           <p className="text-xs text-stone-400 mt-0.5">
             {country ? `${country} · ` : ""}Added {project.createdAt?.slice(0, 10)}
@@ -364,6 +364,7 @@ function ProjectCard({ project, user, confirming, onOpen, onEdit, onToggle, onDe
 
 function AddProjectModal({ onClose, onAdded }) {
   const [name, setName] = useState("");
+  const [clientName, setClientName] = useState("");
   const [domain, setDomain] = useState("");
   const [gaPropertyId, setGaPropertyId] = useState("");
   const [gscSiteUrl, setGscSiteUrl] = useState("");
@@ -385,6 +386,7 @@ function AddProjectModal({ onClose, onAdded }) {
         method: "POST",
         body: {
           name: name.trim(),
+          clientName: clientName.trim() || null,
           domain: domain.trim() || null,
           ...geoBody(geo.country, geo.region, geo.city),
           gaPropertyId: gaPropertyId.trim() || null,
@@ -401,15 +403,32 @@ function AddProjectModal({ onClose, onAdded }) {
   return (
     <Modal title="Add project" onClose={onClose} wide>
       <p className="text-sm text-stone-500 mb-4">One website or client you're doing SEO for.</p>
+
+      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+        Project name
+      </label>
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
         placeholder="e.g. Sattva Connect"
         autoFocus
-        className={`${INPUT_CLS} mb-4`}
+        className={INPUT_CLS}
       />
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+
+      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
+        Client name <span className="normal-case font-normal">(optional)</span>
+      </label>
+      <input
+        value={clientName}
+        onChange={(e) => setClientName(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        placeholder="e.g. John Jacobs"
+        className={INPUT_CLS}
+      />
+      <p className="text-xs text-stone-400 mt-2">Who the work is for — the person or company behind this project.</p>
+
+      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         Website domain <span className="normal-case font-normal">(optional)</span>
       </label>
       <input
@@ -419,7 +438,7 @@ function AddProjectModal({ onClose, onAdded }) {
         placeholder="e.g. sattvaconnect.com"
         className={INPUT_CLS}
       />
-      <p className="text-xs text-stone-400 mt-2">Needed for automatic rank checks — the site the checker looks for in Google results.</p>
+      <p className="text-xs text-stone-400 mt-2">The client's website — used for Moz Authority, Search Console and Analytics.</p>
 
       <div className="mt-4">
         <LocationPicker {...geo} />
@@ -449,7 +468,7 @@ function AddProjectModal({ onClose, onAdded }) {
       />
       <p className="text-xs text-stone-400 mt-2">URL-prefix property like "https://www.example.com/" (with trailing slash), or domain property like "sc-domain:example.com".</p>
 
-      <ErrorNote>{error}</ErrorNote>
+
       <button onClick={submit} disabled={!name.trim() || busy} className={`${BTN_PRIMARY} w-full mt-4 py-2.5`}>
         {busy ? <LoaderCircle size={15} className="animate-spin" /> : "Create project"}
       </button>
@@ -458,6 +477,7 @@ function AddProjectModal({ onClose, onAdded }) {
 }
 
 function EditProjectModal({ project, onClose, onSaved }) {
+  const [clientName, setClientName] = useState(project.clientName || "");
   const [domain, setDomain] = useState(project.domain || "");
   const [gaPropertyId, setGaPropertyId] = useState(project.gaPropertyId || "");
   const [gscSiteUrl, setGscSiteUrl] = useState(project.gscSiteUrl || "");
@@ -477,6 +497,7 @@ function EditProjectModal({ project, onClose, onSaved }) {
       await api(`/projects/${project.id}`, {
         method: "PATCH",
         body: {
+          clientName: clientName.trim() || null,
           domain: domain.trim() || null,
           ...geoBody(geo.country, geo.region, geo.city),
           gaPropertyId: gaPropertyId.trim() || null,
@@ -497,6 +518,19 @@ function EditProjectModal({ project, onClose, onSaved }) {
       </p>
 
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+        Client name <span className="normal-case font-normal">(optional)</span>
+      </label>
+      <input
+        value={clientName}
+        onChange={(e) => setClientName(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        placeholder="e.g. John Jacobs"
+        autoFocus
+        className={INPUT_CLS}
+      />
+      <p className="text-xs text-stone-400 mt-2">Who the work is for — the person or company behind this project.</p>
+
+      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         Website domain <span className="normal-case font-normal">(optional)</span>
       </label>
       <input
@@ -504,10 +538,9 @@ function EditProjectModal({ project, onClose, onSaved }) {
         onChange={(e) => onDomainChange(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
         placeholder="e.g. sattvaconnect.com"
-        autoFocus
         className={INPUT_CLS}
       />
-      <p className="text-xs text-stone-400 mt-2">The site the checker looks for in Google results.</p>
+      <p className="text-xs text-stone-400 mt-2">The client's website — used for Moz Authority, Search Console and Analytics.</p>
 
       <div className="mt-4">
         <LocationPicker {...geo} />

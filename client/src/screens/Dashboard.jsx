@@ -2135,8 +2135,8 @@ function AddKeywordModal({ projectId, onClose, onAdded }) {
   return (
     <Modal title="Add keyword" onClose={onClose}>
       <p className="text-sm text-stone-500 mb-4">
-        Track a new search term for this project. Its position fills in the next
-        time you run a rank check (or record one by hand).
+        Track a new search term for this project. Record its monthly position
+        in the Keywords grid.
       </p>
 
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Keyword</label>

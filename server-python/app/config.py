@@ -43,12 +43,12 @@ MOZ_API_TOKEN = os.environ.get("MOZ_API_TOKEN", "")
 MOZ_ACCESS_ID = os.environ.get("MOZ_ACCESS_ID", "").strip()
 MOZ_SECRET_KEY = os.environ.get("MOZ_SECRET_KEY", "").strip()
 
+# DataForSEO — used ONLY by scripts/import_locations.py, which refreshes the
+# `locations` table from DataForSEO's geo-target list. The app itself does not
+# call DataForSEO; keyword ranks are entered by hand (see keyword_rank_service).
 DATAFORSEO_LOGIN = os.environ.get("DATAFORSEO_LOGIN", "")
 DATAFORSEO_PASSWORD = os.environ.get("DATAFORSEO_PASSWORD", "")
 DATAFORSEO_BASE = os.environ.get("DATAFORSEO_BASE", "https://api.dataforseo.com")
-RANK_LOCATION_CODE = int(os.environ.get("RANK_LOCATION_CODE", 2356))
-RANK_LANGUAGE = os.environ.get("RANK_LANGUAGE", "en")
-RANK_CHECK_DEPTH = int(os.environ.get("RANK_CHECK_DEPTH", 30))
 
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "seo-dashboard-499607-25e8ccaf16ad.json")
 
