@@ -3,7 +3,12 @@ import threading
 from ..config import GOOGLE_SERVICE_ACCOUNT_JSON
 from .response_cache import cached
 
-_METRICS = ["activeUsers", "newUsers", "userEngagementDuration", "sessions"]
+# NOTE: positional order matters — _rows() and _totals() read these by index.
+# totalUsers is appended at the END so the existing indices stay valid.
+# activeUsers is still requested because GA4 defines "average engagement time
+# per active user" against it; swapping that denominator to totalUsers would
+# stop the engagement figure matching GA4.
+_METRICS = ["activeUsers", "newUsers", "userEngagementDuration", "sessions", "totalUsers"]
 
 _BREAKDOWNS = [
     ("byChannel", "sessionPrimaryChannelGroup", None),
@@ -250,7 +255,7 @@ def get_analytics(
     )
     bydate_req = RunReportRequest(
         property=resource, dimensions=[Dimension(name="date")],
-        metrics=[Metric(name="activeUsers"), Metric(name="newUsers")],
+        metrics=[Metric(name="activeUsers"), Metric(name="newUsers"), Metric(name="totalUsers")],
         date_ranges=date_ranges,
         order_bys=[OrderBy(dimension=OrderBy.DimensionOrderBy(dimension_name="date"))],
         dimension_filter=dimension_filter,
@@ -606,9 +611,11 @@ def _rows(response) -> list[dict]:
         new = _as_int(_metric(row, 1))
         duration = _as_float(_metric(row, 2))
         sessions = _as_int(_metric(row, 3))
+        total = _as_int(_metric(row, 4))
         rows.append({
             "value": value,
             "activeUsers": active,
+            "totalUsers": total,
             "newUsers": new,
             "sessions": sessions,
             "avgEngagementSeconds": _avg_engagement(duration, active),
@@ -624,34 +631,46 @@ def _date_rows(response) -> list[dict]:
             "date": date,
             "activeUsers": _as_int(_metric(row, 0)),
             "newUsers": _as_int(_metric(row, 1)),
+            "totalUsers": _as_int(_metric(row, 2)),
         })
     return rows
 
 
 def _summary(response) -> dict:
+    # Indices follow _METRICS: 0 activeUsers, 1 newUsers, 2 userEngagementDuration,
+    # 3 sessions, 4 totalUsers.
     if not response.rows:
-        return {"activeUsers": 0, "newUsers": 0, "avgEngagementSeconds": 0}
+        return {"activeUsers": 0, "totalUsers": 0, "newUsers": 0, "sessions": 0,
+                "avgEngagementSeconds": 0}
     row = response.rows[0]
     active = _as_int(_metric(row, 0))
     new = _as_int(_metric(row, 1))
     duration = _as_float(_metric(row, 2))
+    sessions = _as_int(_metric(row, 3))
+    total = _as_int(_metric(row, 4))
     return {
         "activeUsers": active,
+        "totalUsers": total,
         "newUsers": new,
+        "sessions": sessions,
+        # GA4 divides engagement by ACTIVE users ("per active user"), so this
+        # denominator stays activeUsers even though the headline is totalUsers.
         "avgEngagementSeconds": _avg_engagement(duration, active),
     }
 
 
 def _totals(response) -> dict:
     if not getattr(response, "totals", None):
-        return {"activeUsers": 0, "newUsers": 0, "sessions": 0, "avgEngagementSeconds": 0}
+        return {"activeUsers": 0, "totalUsers": 0, "newUsers": 0, "sessions": 0, "avgEngagementSeconds": 0}
     values = response.totals[0].metric_values
     active = _as_int(values[0].value if len(values) > 0 else "0")
     new = _as_int(values[1].value if len(values) > 1 else "0")
     duration = _as_float(values[2].value if len(values) > 2 else "0")
     sessions = _as_int(values[3].value if len(values) > 3 else "0")
+    total = _as_int(values[4].value if len(values) > 4 else "0")
     return {
         "activeUsers": active,
+        "totalUsers": total,
         "newUsers": new,
         "sessions": sessions,
         "avgEngagementSeconds": _avg_engagement(duration, active),

@@ -528,7 +528,9 @@ const VIEW_DEFAULT_DIMENSION = {
 };
 
 const VIEW_DEFAULT_METRICS = {
-  overview: ["activeUsers", "newUsers", "eventCount", "keyEvents", "averageEngagementTime"],
+  // Total Users, not Active Users: totalUsers is what GA4's acquisition
+  // reports show, so this column reconciles with the GA4 UI directly.
+  overview: ["totalUsers", "newUsers", "eventCount", "keyEvents", "averageEngagementTime"],
 };
 
 const DIMENSION_GROUPS = {
@@ -737,8 +739,12 @@ function TrafficTool({ project, view }) {
     const rows = data?.byDate?.rows || [];
     const active = rows.map((r) => Number(r.activeUsers) || 0);
     const fresh = rows.map((r) => Number(r.newUsers) || 0);
+    // Falls back to activeUsers so a cached response from before totalUsers was
+    // requested still renders a sparkline instead of a flat line at zero.
+    const total = rows.map((r, i) => Number(r.totalUsers) || active[i] || 0);
     return {
       active,
+      total,
       fresh,
       returning: rows.map((_, i) => Math.max(0, active[i] - fresh[i])),
     };
@@ -875,11 +881,11 @@ function TrafficTool({ project, view }) {
                 // arrays in the render body handed <Stat> a new `spark` array
                 // every render, which forced all three Sparklines to recompute
                 // their min/max and rebuild their SVG paths on any state change.
-                const { active, fresh, returning } = sparkSeries;
+                const { total, fresh, returning } = sparkSeries;
                 return (
                   <div className="space-y-6 mb-6">
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-                      <Stat label="Active users" value={(data.summary?.activeUsers ?? 0).toLocaleString()} icon={Users} spark={active} />
+                      <Stat label="Total users" value={(data.summary?.totalUsers ?? 0).toLocaleString()} icon={Users} spark={total} />
                       <Stat label="New users" value={(data.summary?.newUsers ?? 0).toLocaleString()} icon={UserPlus} spark={fresh} />
                       <Stat label="Returning users" value={(data.summary?.returningUsers ?? 0).toLocaleString()} icon={UserCheck} spark={returning} />
                       <Stat label="Avg. engagement time" value={formatEngagement(data.summary?.avgEngagementSeconds)} icon={Clock} />
