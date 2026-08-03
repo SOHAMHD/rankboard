@@ -6,97 +6,176 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
-import { COUNTRIES } from "../locations";
-import { TopBar, Modal, ErrorNote, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
+import { locationsStatus, resolveLocation, searchLocations } from "../locations";
+import { TopBar, Modal, ErrorNote, SmartSearch, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
 
-/* Per-project Google target for rank checks → DataForSEO location_code.
-   COUNTRIES is the bundled seed (server-python/app/locations.json) — the
-   single source of truth the API also validates against. A project stores
-   ONE integer: null = "Server default" (falls back to RANK_LOCATION_CODE),
-   a country code = whole country, or a city code = that metro. */
+/* ── GEO PICKER ───────────────────────────────────────────────────────────────
+   Where a project's rankings are checked, as three search-as-you-type inputs:
+   Country → Region → City. Not dropdowns — the lists are every country, region
+   and city DataForSEO supports (~100k rows), which no <select> can hold. Each
+   keystroke queries our own `locations` table via /api/locations/search (see
+   client/src/locations.js), and each input narrows the one below it.
+
+   Region and city are optional; the project stores whichever is most specific,
+   because city-level codes are what make local rankings accurate. All three
+   empty = the server-wide default (RANK_LOCATION_CODE).                        */
 
 // Best-effort country guess from a domain's TLD; null when there's no confident
 // match (e.g. .com), so the caller leaves the current selection alone.
-function codeFromDomain(domain) {
+const TLD_COUNTRIES = {
+  ".au": { code: 2036, name: "Australia" },
+  ".in": { code: 2356, name: "India" },
+  ".uk": { code: 2826, name: "United Kingdom" },
+  ".ca": { code: 2124, name: "Canada" },
+  ".ae": { code: 2784, name: "United Arab Emirates" },
+  ".nz": { code: 2554, name: "New Zealand" },
+  ".sg": { code: 2702, name: "Singapore" },
+  ".za": { code: 2710, name: "South Africa" },
+};
+
+function countryFromDomain(domain) {
   const d = (domain || "").trim().toLowerCase();
-  if (d.endsWith(".au")) return 2036; // covers .au and .com.au
-  if (d.endsWith(".in")) return 2356;
-  if (d.endsWith(".uk")) return 2826; // covers .uk and .co.uk
-  if (d.endsWith(".ca")) return 2124;
-  return null;
+  // Matches ".au" and ".com.au" alike — we only look at how the host ends.
+  const hit = Object.keys(TLD_COUNTRIES).find((tld) => d.endsWith(tld));
+  return hit ? { ...TLD_COUNTRIES[hit], kind: "country" } : null;
 }
 
-// Human label for a stored location_code: "Australia", "Australia · Perth",
-// or null when unset. "Code N" for an unrecognised (legacy) code.
-function describeLocation(code) {
-  if (code == null) return null;
-  const country = COUNTRIES.find((c) => c.locationCode === code);
-  if (country) return country.name;
-  for (const c of COUNTRIES) {
-    const city = c.cities.find((ci) => ci.locationCode === code);
-    if (city) return `${c.name} · ${city.name}`;
-  }
-  return `Code ${code}`;
-}
+// Three cascading SmartSearch inputs. State lives in the parent as three items
+// ({ code, name } or null) so the form can submit the codes and show the names.
+function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) {
+  const [status, setStatus] = useState(null); // { regions, imported } — see below
 
-// Split a stored location_code back into the two-dropdown UI state.
-function resolveLocation(code) {
-  if (code == null) return { countryCode: null, cityCode: null };
-  if (COUNTRIES.some((c) => c.locationCode === code)) return { countryCode: code, cityCode: null };
-  for (const c of COUNTRIES) {
-    if (c.cities.some((ci) => ci.locationCode === code)) return { countryCode: c.locationCode, cityCode: code };
-  }
-  return { countryCode: code, cityCode: null }; // unknown/legacy — keep visible
-}
+  useEffect(() => {
+    // Only to explain an EMPTY region list: a database that hasn't had
+    // `python -m scripts.import_locations` run yet holds countries and verified
+    // metros, but no regions at all. Without this the input looks broken.
+    locationsStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  }, []);
 
-// Country dropdown + an optional Metro-city dropdown that populates from the
-// chosen country. Three valid states: server default (country blank) / whole
-// country (city blank) / country + city.
-function LocationSelect({ countryCode, cityCode, onCountry, onCity }) {
-  const country = COUNTRIES.find((c) => c.locationCode === countryCode);
-  const cities = country?.cities ?? [];
-  const knownCountry = countryCode == null || !!country;
+  // Suggestions carry the parent chain as the dimmed right-hand hint, so two
+  // cities called Springfield are told apart at a glance.
+  const decorate = (rows, self) =>
+    rows.map((r) => ({
+      ...r,
+      hint: r.fullName && r.fullName !== self(r) ? r.fullName.split(",").slice(1).join(", ").trim() : null,
+    }));
+
   return (
-    <>
-      <select
-        value={countryCode ?? ""}
-        onChange={(e) => onCountry(e.target.value === "" ? null : Number(e.target.value))}
-        className={INPUT_CLS}
-      >
-        <option value="">Server default</option>
-        {COUNTRIES.map((c) => (
-          <option key={c.locationCode} value={c.locationCode}>
-            {c.name}
-          </option>
-        ))}
-        {!knownCountry && <option value={countryCode}>{`Code ${countryCode}`}</option>}
-      </select>
-      <p className="text-xs text-stone-400 mt-2">
-        Which Google country to check rankings in. "Server default" uses the server-wide setting.
-      </p>
+    <div className="space-y-4">
+      <SmartSearch
+        label="Country"
+        value={country}
+        onChange={onCountry}
+        onSearch={(q) => searchLocations("country", q).then((rows) => decorate(rows, (r) => r.name))}
+        placeholder="Type a country — e.g. Aus…"
+        emptyText="No country matches that."
+        hint='Which Google to check in. Leave all three empty to use the server default.'
+      />
 
-      {countryCode != null && cities.length > 0 && (
-        <>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
-            Metro city <span className="normal-case font-normal">(optional)</span>
-          </label>
-          <select
-            value={cityCode ?? ""}
-            onChange={(e) => onCity(e.target.value === "" ? null : Number(e.target.value))}
-            className={INPUT_CLS}
-          >
-            <option value="">Whole country</option>
-            {cities.map((ci) => (
-              <option key={ci.locationCode} value={ci.locationCode}>
-                {ci.name}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-stone-400 mt-2">Narrow rank checks to a specific metro, or leave "Whole country".</p>
-        </>
-      )}
-    </>
+      <SmartSearch
+        label="Region / State"
+        optional
+        value={region}
+        onChange={onRegion}
+        onSearch={(q) => searchLocations("region", q, { country: country?.code }).then((rows) => decorate(rows, (r) => r.name))}
+        disabled={!country}
+        disabledHint="Pick a country first"
+        placeholder={`Type a region${country ? ` in ${country.name}` : ""}…`}
+        emptyText={
+          status && !status.imported
+            ? "No regions loaded yet — run `python -m scripts.import_locations` on the server."
+            : "No region matches that."
+        }
+        hint="Narrows the city list below, and can be the rank-check target on its own."
+      />
+
+      <SmartSearch
+        label="City"
+        optional
+        value={city}
+        onChange={onCity}
+        onSearch={(q) =>
+          searchLocations("city", q, { country: country?.code, region: region?.code }).then((rows) =>
+            decorate(rows, (r) => r.name),
+          )
+        }
+        disabled={!country}
+        disabledHint="Pick a country first"
+        placeholder={`Type a city${region ? ` in ${region.name}` : country ? ` in ${country.name}` : ""}…`}
+        emptyText="No city matches that."
+        hint="The most accurate target for local SEO — set it whenever the client is a local business."
+      />
+    </div>
   );
+}
+
+/* The picker's three values as one API payload. Sent on both create and update,
+   so clearing a field genuinely clears it server-side. */
+const geoBody = (country, region, city) => ({
+  countryCode: country?.code ?? null,
+  regionCode: region?.code ?? null,
+  cityCode: city?.code ?? null,
+});
+
+/* Shared by both modals: hold the three picker values, seed the country from
+   the domain's TLD until the user picks one by hand, and (when editing) load the
+   saved code back into the three inputs. */
+function useGeoPicker(project) {
+  const [country, setCountry] = useState(null);
+  const [region, setRegion] = useState(null);
+  const [city, setCity] = useState(null);
+  // A project that already HAS a target counts as touched from the start, so
+  // editing its domain can never quietly overwrite a deliberate choice.
+  const [touched, setTouched] = useState(project?.locationCode != null);
+
+  useEffect(() => {
+    // Editing: one request turns the stored location_code back into the three
+    // rows the inputs display. New project: nothing to load.
+    if (project?.locationCode == null) return;
+    let live = true;
+    resolveLocation(project.locationCode)
+      .then((d) => {
+        if (!live) return;
+        setCountry(d.country);
+        setRegion(d.region);
+        setCity(d.city);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [project?.locationCode]);
+
+  const onCountry = (item) => {
+    setTouched(true);
+    setCountry(item);
+    setRegion(null); // a new country invalidates both narrower choices
+    setCity(null);
+  };
+  const onRegion = (item) => {
+    setTouched(true);
+    setRegion(item);
+    setCity(null); // ditto: the city must sit inside the chosen region
+  };
+  const onCity = (item) => {
+    setTouched(true);
+    setCity(item);
+  };
+
+  // Pre-fill from the domain's TLD, unless the user has touched the picker.
+  const guessFromDomain = (domain) => {
+    if (touched) return;
+    const guess = countryFromDomain(domain);
+    if (guess) {
+      setCountry(guess);
+      setRegion(null);
+      setCity(null);
+    }
+  };
+
+  return { country, region, city, onCountry, onRegion, onCity, guessFromDomain };
 }
 
 export function ProjectsView({ user, onOpenProject, onPeople, onLogout }) {
@@ -247,7 +326,9 @@ function ProjectCard({ project, user, confirming, onOpen, onEdit, onToggle, onDe
   const showToggle = can(user, "toggleProject");
   const showEdit = can(user, "toggleProject"); // same "manage settings" right the API uses
   const showDelete = can(user, "deleteProject");
-  const country = describeLocation(project.locationCode);
+  // The server stores a ready-made label ("Australia · Western Australia ·
+  // Perth"), so the card needs no lookup. Older rows may only have the code.
+  const country = project.locationLabel || (project.locationCode ? `Code ${project.locationCode}` : null);
 
   return (
     <div
@@ -286,7 +367,7 @@ function ProjectCard({ project, user, confirming, onOpen, onEdit, onToggle, onDe
               <button
                 onClick={onEdit}
                 aria-label={`Edit ${project.name}`}
-                title="Edit project (domain & country)"
+                title="Edit project (domain, location & integrations)"
                 className="p-1.5 rounded-md text-stone-300 hover:text-orange-600 hover:bg-orange-50 transition-colors"
               >
                 <Pencil size={16} />
@@ -320,21 +401,15 @@ function ProjectCard({ project, user, confirming, onOpen, onEdit, onToggle, onDe
 function AddProjectModal({ onClose, onAdded }) {
   const [name, setName] = useState("");
   const [domain, setDomain] = useState("");
-  const [locationCode, setLocationCode] = useState(null); // null = server default
   const [gaPropertyId, setGaPropertyId] = useState("");
   const [gscSiteUrl, setGscSiteUrl] = useState("");
-  const [countryTouched, setCountryTouched] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const geo = useGeoPicker(null);
 
-  // Pre-fill the country from the domain's TLD, unless the user already
-  // picked one by hand (then we leave their choice alone).
   const onDomainChange = (val) => {
     setDomain(val);
-    if (!countryTouched) {
-      const guess = codeFromDomain(val);
-      if (guess !== null) setLocationCode(guess);
-    }
+    geo.guessFromDomain(val);
   };
 
   const submit = async () => {
@@ -347,7 +422,7 @@ function AddProjectModal({ onClose, onAdded }) {
         body: {
           name: name.trim(),
           domain: domain.trim() || null,
-          locationCode,
+          ...geoBody(geo.country, geo.region, geo.city),
           gaPropertyId: gaPropertyId.trim() || null,
           gscSiteUrl: gscSiteUrl.trim() || null,
         },
@@ -359,10 +434,8 @@ function AddProjectModal({ onClose, onAdded }) {
     }
   };
 
-  const { countryCode, cityCode } = resolveLocation(locationCode);
-
   return (
-    <Modal title="Add project" onClose={onClose}>
+    <Modal title="Add project" onClose={onClose} wide>
       <p className="text-sm text-stone-500 mb-4">One website or client you're doing SEO for.</p>
       <input
         value={name}
@@ -384,16 +457,9 @@ function AddProjectModal({ onClose, onAdded }) {
       />
       <p className="text-xs text-stone-400 mt-2">Needed for automatic rank checks — the site the checker looks for in Google results.</p>
 
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">Country</label>
-      <LocationSelect
-        countryCode={countryCode}
-        cityCode={cityCode}
-        onCountry={(v) => {
-          setLocationCode(v);
-          setCountryTouched(true);
-        }}
-        onCity={(v) => setLocationCode(v ?? countryCode)}
-      />
+      <div className="mt-4">
+        <LocationPicker {...geo} />
+      </div>
 
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         GA4 Property ID <span className="normal-case font-normal">(optional)</span>
@@ -429,19 +495,15 @@ function AddProjectModal({ onClose, onAdded }) {
 
 function EditProjectModal({ project, onClose, onSaved }) {
   const [domain, setDomain] = useState(project.domain || "");
-  const [locationCode, setLocationCode] = useState(project.locationCode ?? null);
   const [gaPropertyId, setGaPropertyId] = useState(project.gaPropertyId || "");
   const [gscSiteUrl, setGscSiteUrl] = useState(project.gscSiteUrl || "");
-  const [countryTouched, setCountryTouched] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const geo = useGeoPicker(project); // loads the saved code back into the inputs
 
   const onDomainChange = (val) => {
     setDomain(val);
-    if (!countryTouched) {
-      const guess = codeFromDomain(val);
-      if (guess !== null) setLocationCode(guess);
-    }
+    geo.guessFromDomain(val);
   };
 
   const submit = async () => {
@@ -452,7 +514,9 @@ function EditProjectModal({ project, onClose, onSaved }) {
         method: "PATCH",
         body: {
           domain: domain.trim() || null,
-          locationCode,
+          // Always sent, so clearing the picker really does reset the project
+          // to the server default (the old API ignored a null locationCode).
+          ...geoBody(geo.country, geo.region, geo.city),
           gaPropertyId: gaPropertyId.trim() || null,
           gscSiteUrl: gscSiteUrl.trim() || null,
         },
@@ -464,10 +528,8 @@ function EditProjectModal({ project, onClose, onSaved }) {
     }
   };
 
-  const { countryCode, cityCode } = resolveLocation(locationCode);
-
   return (
-    <Modal title="Edit project" onClose={onClose}>
+    <Modal title="Edit project" onClose={onClose} wide>
       <p className="text-sm text-stone-500 mb-4">
         Settings for <span className="font-medium text-stone-800">{project.name}</span>.
       </p>
@@ -485,16 +547,9 @@ function EditProjectModal({ project, onClose, onSaved }) {
       />
       <p className="text-xs text-stone-400 mt-2">The site the checker looks for in Google results.</p>
 
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">Country</label>
-      <LocationSelect
-        countryCode={countryCode}
-        cityCode={cityCode}
-        onCountry={(v) => {
-          setLocationCode(v);
-          setCountryTouched(true);
-        }}
-        onCity={(v) => setLocationCode(v ?? countryCode)}
-      />
+      <div className="mt-4">
+        <LocationPicker {...geo} />
+      </div>
 
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         GA4 Property ID <span className="normal-case font-normal">(optional)</span>

@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from .config import CORS_ORIGINS, DEBUG, JWT_SECRET
 from .db import get_connection, init_db
 from .permissions import READ_ONLY_ROLES
-from .routers import auth, backlinks, moz, posts, projects, reports, snapshots, users
+from .routers import auth, backlinks, locations, moz, posts, projects, reports, snapshots, users
 
 init_db()
 
@@ -150,6 +150,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
+app.include_router(locations.router, prefix="/api/locations", tags=["locations"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(moz.router, prefix="/api/projects", tags=["moz"])
 app.include_router(backlinks.router, prefix="/api/projects", tags=["backlinks"])

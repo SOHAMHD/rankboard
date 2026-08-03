@@ -6,8 +6,8 @@
    to navigate and review. The rule of thumb: split when a file has
    more than one reason to change.
    ════════════════════════════════════════════════════════════════════ */
-import { useEffect, useState } from "react";
-import { Eye, KeyRound, LoaderCircle, LogOut, Mail, Users, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Eye, KeyRound, LoaderCircle, LogOut, Mail, Search, Users, X } from "lucide-react";
 import { api } from "./api";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
@@ -209,6 +209,215 @@ export function Toggle({ on, onClick }) {
         }`}
       />
     </button>
+  );
+}
+
+
+/* ════════════════════════════════════════════════════════════════════
+   SMART SEARCH — a text input that suggests as you type.
+
+   Built for lists far too long to be a <select> (every country, every region,
+   every city), and used three times over in the project geo picker. The user
+   types a few letters; `onSearch(query)` fetches the matches; picking one calls
+   `onChange(item)` with the whole row (not just an id), so the caller keeps the
+   label for free.
+
+   Deliberate behaviours, each one a papercut we'd otherwise hit:
+     • Debounced (180ms) so typing "united kingdom" is ~2 requests, not 14.
+     • Stale responses are dropped by sequence number, so a slow reply for "de"
+       can never overwrite the results for "delh".
+     • Focusing an empty input searches "" — the API returns the first page, so
+       it still feels like a dropdown when you don't know what to type.
+     • Full keyboard control: ↑ ↓ Enter Escape, and the highlighted row is
+       scrolled into view.
+     • Clearing the text clears the selection, so there's no way to leave a
+       stale label sitting over an unset value.
+
+   Props:
+     value      the selected item ({ code, name, … }) or null
+     onChange   called with an item, or null when cleared
+     onSearch   async (query) => items;  each item needs { code, name } and may
+                add `hint` (shown dimmed on the right)
+     label / hint / placeholder / disabled / disabledHint / autoFocus
+   ════════════════════════════════════════════════════════════════════ */
+export function SmartSearch({
+  label,
+  optional,
+  value,
+  onChange,
+  onSearch,
+  placeholder = "Start typing to search…",
+  hint,
+  disabled,
+  disabledHint,
+  emptyText = "No matches.",
+  autoFocus,
+}) {
+  const [text, setText] = useState("");
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [active, setActive] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const boxRef = useRef(null);
+  const listRef = useRef(null);
+  const seq = useRef(0);        // newest request wins
+  const query = useRef("");     // what the open list is showing
+
+  // The input mirrors the selection unless the user is actively typing.
+  const shown = open ? text : value?.name ?? "";
+
+  const run = (q) => {
+    const mine = ++seq.current;
+    query.current = q;
+    setBusy(true);
+    Promise.resolve(onSearch(q))
+      .then((rows) => {
+        if (mine !== seq.current) return; // a newer keystroke already won
+        setItems(rows || []);
+        setActive(0);
+      })
+      .catch(() => {
+        if (mine === seq.current) setItems([]);
+      })
+      .finally(() => {
+        if (mine === seq.current) setBusy(false);
+      });
+  };
+
+  // Debounce the typing, but not the first open (that should feel instant).
+  useEffect(() => {
+    if (!open) return;
+    if (text === query.current) return;
+    const t = setTimeout(() => run(text), 180);
+    return () => clearTimeout(t);
+  }, [text, open]);
+
+  // Click outside closes and restores the selected label.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => {
+      if (!boxRef.current?.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [open]);
+
+  // Keep the highlighted row visible while arrowing through a long list.
+  useEffect(() => {
+    listRef.current?.children[active]?.scrollIntoView({ block: "nearest" });
+  }, [active, items]);
+
+  const openWith = () => {
+    if (disabled) return;
+    setText("");
+    setOpen(true);
+    run("");
+  };
+
+  const pick = (item) => {
+    onChange(item);
+    setText("");
+    setOpen(false);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) return openWith();
+      setActive((i) => Math.min(items.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1))));
+    } else if (e.key === "Enter") {
+      if (open && items[active]) {
+        e.preventDefault();
+        e.stopPropagation(); // don't let the modal's Enter-to-submit fire too
+        pick(items[active]);
+      }
+    } else if (e.key === "Escape") {
+      if (open) {
+        e.stopPropagation();
+        setOpen(false);
+      }
+    }
+  };
+
+  return (
+    <div ref={boxRef} className="relative">
+      {label && (
+        <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+          {label} {optional && <span className="normal-case font-normal">(optional)</span>}
+        </label>
+      )}
+      <div className="relative">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 pointer-events-none" />
+        <input
+          value={shown}
+          disabled={disabled}
+          autoFocus={autoFocus}
+          onFocus={openWith}
+          onChange={(e) => {
+            setOpen(true);
+            setText(e.target.value);
+            if (e.target.value === "" && value) onChange(null);
+          }}
+          onKeyDown={onKeyDown}
+          placeholder={disabled ? disabledHint || placeholder : placeholder}
+          aria-autocomplete="list"
+          aria-expanded={open}
+          role="combobox"
+          className={`${INPUT_CLS} pl-8 ${value && !open ? "font-medium" : ""} disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed`}
+        />
+        {(value || busy) && !disabled && (
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
+            {busy ? (
+              <LoaderCircle size={14} className="text-stone-400 animate-spin" />
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  onChange(null);
+                  setText("");
+                  setOpen(false);
+                }}
+                aria-label={`Clear ${label || "selection"}`}
+                className="p-1 rounded text-stone-400 hover:text-stone-600 hover:bg-stone-100"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </span>
+        )}
+      </div>
+
+      {open && (
+        <ul
+          ref={listRef}
+          role="listbox"
+          className="absolute z-20 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-lg border border-stone-200 bg-white shadow-lg py-1"
+        >
+          {items.length === 0 ? (
+            <li className="px-3 py-2 text-xs text-stone-400">{busy ? "Searching…" : emptyText}</li>
+          ) : (
+            items.map((item, i) => (
+              <li
+                key={item.code}
+                role="option"
+                aria-selected={i === active}
+                onMouseEnter={() => setActive(i)}
+                onMouseDown={(e) => e.preventDefault()} // keep focus so blur can't beat the click
+                onClick={() => pick(item)}
+                className={`px-3 py-1.5 cursor-pointer flex items-baseline justify-between gap-3 ${
+                  i === active ? "bg-orange-50 text-stone-900" : "text-stone-700"
+                }`}
+              >
+                <span className="text-sm truncate">{item.name}</span>
+                {item.hint && <span className="text-xs text-stone-400 truncate shrink-0 max-w-[55%]">{item.hint}</span>}
+              </li>
+            ))
+          )}
+        </ul>
+      )}
+
+      {hint && <p className="text-xs text-stone-400 mt-2">{hint}</p>}
+    </div>
   );
 }
 

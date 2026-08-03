@@ -12,7 +12,6 @@ from pydantic import BaseModel
 from ..access import accessible_project_ids
 from ..config import DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD, RANK_LOCATION_CODE
 from ..db import get_db
-from ..locations import VALID_LOCATION_CODES
 from ..security import require_active_user, require_permission, require_project_access, require_roles
 from ..services.analytics_provider import (
     ALLOWED_DIMENSIONS,
@@ -37,7 +36,16 @@ def row_to_project(p: sqlite3.Row, keyword_count: int | None = None) -> dict:
         "id": p["id"],
         "name": p["name"],
         "domain": p["domain"],
-        "locationCode": p["location_code"],  # None = use the server default
+        # The EFFECTIVE DataForSEO target: the most specific of country/region/
+        # city. None = use the server default (RANK_LOCATION_CODE).
+        "locationCode": p["location_code"],
+        # What was actually picked in the three-input geo picker, plus a
+        # ready-made label ("Australia · Western Australia · Perth") so the
+        # project list needs no lookup to render it.
+        "countryCode": p["country_code"],
+        "regionCode": p["region_code"],
+        "cityCode": p["city_code"],
+        "locationLabel": p["location_label"],
         "gaPropertyId": p["ga_property_id"],  # None = GA4 traffic panel disabled
         "gscSiteUrl": p["gsc_site_url"],  # None = Search Console panel disabled
         "active": bool(p["active"]),
@@ -474,20 +482,103 @@ def normalize_gsc_site_url(raw: str | None) -> str | None:
     return raw.strip()
 
 
-def _validate_location_code(code: int | None) -> None:
-    """Reject any location_code not present in the seed (app/locations.json).
-    None = server default, always allowed. This is the trust boundary: the
-    client bundles the same seed, but the server never relies on that."""
-    if code is not None and code not in VALID_LOCATION_CODES:
-        raise HTTPException(
-            400,
-            f"Unknown location code {code}. Choose a country or metro city from the list.",
-        )
+def _lookup_location(db: sqlite3.Connection, code: int, kind: str) -> sqlite3.Row:
+    """Fetch one row of the expected kind from our geo table, or 400.
+
+    This is the trust boundary. The picker is a free-text search, so the client
+    sends back whatever code it was given — the server re-reads it here and never
+    takes the client's word for the kind or the parent."""
+    row = db.execute(
+        "SELECT location_code, name, full_name, kind, country_code, region_code"
+        " FROM locations WHERE location_code = ?",
+        (code,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(400, f"Unknown location code {code}. Pick a suggestion from the list.")
+    if row["kind"] != kind:
+        raise HTTPException(400, f'"{row["name"]}" is a {row["kind"]}, not a {kind}.')
+    return row
+
+
+def _resolve_geo(
+    db: sqlite3.Connection,
+    country: int | None,
+    region: int | None,
+    city: int | None,
+) -> tuple[int | None, int | None, int | None, int | None, str | None]:
+    """Validate the country/region/city trio and reduce it to what we store:
+        (location_code, country_code, region_code, city_code, location_label)
+
+    Rules, all enforced server-side:
+      • Each code must exist and be of its own kind.
+      • A region must belong to the chosen country; a city to the chosen region
+        (and country) — so a mismatched combination can never be saved.
+      • Region and city are optional. `location_code` — the single value the rank
+        checker sends DataForSEO — is the most specific one given, because that
+        is what makes local rankings accurate.
+      • All three empty = NULL = fall back to the server-wide default.
+    """
+    if region is not None and country is None:
+        raise HTTPException(400, "Choose a country before a region.")
+    if city is not None and country is None:
+        raise HTTPException(400, "Choose a country before a city.")
+
+    label_parts: list[str] = []
+    if country is not None:
+        label_parts.append(_lookup_location(db, country, "country")["name"])
+
+    if region is not None:
+        row = _lookup_location(db, region, "region")
+        if row["country_code"] != country:
+            raise HTTPException(400, f'"{row["name"]}" is not in the country you chose.')
+        label_parts.append(row["name"])
+
+    if city is not None:
+        row = _lookup_location(db, city, "city")
+        if row["country_code"] != country:
+            raise HTTPException(400, f'"{row["name"]}" is not in the country you chose.')
+        if region is not None and row["region_code"] not in (None, region):
+            raise HTTPException(400, f'"{row["name"]}" is not in the region you chose.')
+        label_parts.append(row["name"])
+
+    effective = city if city is not None else (region if region is not None else country)
+    label = " · ".join(label_parts) or None
+    return effective, country, region, city, label
+
+
+def _geo_from_body(db: sqlite3.Connection, body) -> tuple:
+    """Accept EITHER the three-input trio (countryCode/regionCode/cityCode) or a
+    bare locationCode from an older client, and return the storable tuple. When
+    only locationCode arrives we look the code up and split it ourselves, so the
+    old contract keeps working unchanged."""
+    if body.countryCode is not None or body.regionCode is not None or body.cityCode is not None:
+        return _resolve_geo(db, body.countryCode, body.regionCode, body.cityCode)
+
+    if body.locationCode is None:
+        return None, None, None, None, None
+
+    row = db.execute(
+        "SELECT location_code, name, full_name, kind, country_code, region_code"
+        " FROM locations WHERE location_code = ?",
+        (body.locationCode,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(400, f"Unknown location code {body.locationCode}. Pick a suggestion from the list.")
+    if row["kind"] == "country":
+        return _resolve_geo(db, row["location_code"], None, None)
+    if row["kind"] == "region":
+        return _resolve_geo(db, row["country_code"], row["location_code"], None)
+    return _resolve_geo(db, row["country_code"], row["region_code"], row["location_code"])
 
 
 class ProjectIn(BaseModel):
     name: str
     domain: str | None = None
+    # The geo picker's three inputs. locationCode is still accepted on its own
+    # for backward compatibility (see _geo_from_body).
+    countryCode: int | None = None
+    regionCode: int | None = None
+    cityCode: int | None = None
     locationCode: int | None = None
     gaPropertyId: str | None = None
     gscSiteUrl: str | None = None
@@ -498,13 +589,18 @@ def create_project(body: ProjectIn, db: sqlite3.Connection = Depends(get_db)):
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "Project name is required.")
-    _validate_location_code(body.locationCode)
+    location_code, country_code, region_code, city_code, label = _geo_from_body(db, body)
     cur = db.execute(
-        "INSERT INTO projects (name, domain, location_code, ga_property_id, gsc_site_url, active) VALUES (?, ?, ?, ?, ?, 1)",
+        "INSERT INTO projects (name, domain, location_code, country_code, region_code, city_code,"
+        " location_label, ga_property_id, gsc_site_url, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
         (
             name,
             normalize_domain(body.domain),
-            body.locationCode,
+            location_code,
+            country_code,
+            region_code,
+            city_code,
+            label,
             normalize_ga_property_id(body.gaPropertyId),
             normalize_gsc_site_url(body.gscSiteUrl),
         ),
@@ -516,6 +612,9 @@ def create_project(body: ProjectIn, db: sqlite3.Connection = Depends(get_db)):
 class ProjectUpdateIn(BaseModel):
     active: bool | None = None
     domain: str | None = None
+    countryCode: int | None = None
+    regionCode: int | None = None
+    cityCode: int | None = None
     locationCode: int | None = None
     gaPropertyId: str | None = None
     gscSiteUrl: str | None = None
@@ -533,10 +632,18 @@ def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connectio
     if body.domain is not None:
         fields.append("domain = ?")
         values.append(normalize_domain(body.domain))
-    if body.locationCode is not None:
-        _validate_location_code(body.locationCode)
-        fields.append("location_code = ?")
-        values.append(body.locationCode)
+    # Geo: rewrite all five columns together, since they're one choice. Keyed on
+    # the fields the client actually SENT (model_fields_set), not on non-null —
+    # that's what lets "Server default" clear a saved country back to NULL, which
+    # the old `is not None` check silently ignored.
+    geo_keys = {"countryCode", "regionCode", "cityCode", "locationCode"} & body.model_fields_set
+    if geo_keys:
+        location_code, country_code, region_code, city_code, label = _geo_from_body(db, body)
+        fields += [
+            "location_code = ?", "country_code = ?", "region_code = ?",
+            "city_code = ?", "location_label = ?",
+        ]
+        values += [location_code, country_code, region_code, city_code, label]
     if body.gaPropertyId is not None:
         fields.append("ga_property_id = ?")
         values.append(normalize_ga_property_id(body.gaPropertyId))

@@ -1,16 +1,3 @@
-"""POST ROUTES - per-project content links: blog posts + LinkedIn posts.
-
-Mounted under /api/projects (like moz/backlinks), so paths nest as
-/api/projects/{project_id}/posts...
-
-Auth:
-  - READS (list)          - any signed-in user who can see the project.
-  - WRITES (add, delete)  - AUTHOR roles only (Super Admin / Admin / Team);
-                            Clients are view-only.
-
-Posts are kept MONTH-WISE (like backlinks): each post carries a "YYYY-MM"
-month, so a report for a given period shows only that month's posts.
-"""
 import re
 import sqlite3
 from datetime import datetime, timezone
