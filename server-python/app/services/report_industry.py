@@ -688,7 +688,7 @@ def render_document(version, blobs=None, part="all") -> str:
     if bl:
         cnt = bl.get("count", len(bl_items))
         body.append(section(8, "New Backlinks", True)
-                    + f'<p style="max-width:38em">This month added <strong>{esc(cnt)}</strong> new backlinks.</p>')
+                    + f'<p style="max-width:38em">This month, we acquired <strong>{esc(cnt)}</strong> backlinks.</p>')
         if bl_items:
             body.append('<h4 style="margin-top:var(--space-6)">Backlink placements</h4>')
             rows = [[i + 1, it.get("url")] for i, it in enumerate(bl_items)]
