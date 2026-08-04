@@ -631,6 +631,18 @@ function metricHelp(key) {
   return METRIC_HELP[key] || metricLabel(key);
 }
 
+// GA4 dimensions that are PAGE-VIEW scoped. Session- and user-scoped metrics
+// (sessions, newUsers, returningUsers) cannot be combined with these — the API
+// returns a 400 naming the incompatible field. Landing-page dimensions are NOT
+// in this set: a landing page is a property of the session, so sessions work fine.
+const SESSION_INCOMPATIBLE_DIMENSIONS = new Set([
+  "pagePathPlusScreenClass",
+  "pagePath",
+  "pagePathPlusQueryString",
+  "pageTitle",
+  "fullPageUrl",
+]);
+
 const RATE_METRICS = new Set(["engagementRate", "bounceRate"]);
 // Anything measured in seconds, so formatMetric renders it as "24s" / "1m 10s"
 // rather than a raw float. Adding a duration metric without listing it here
@@ -952,7 +964,14 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
     let cancelled = false;
     setResult(null);
     setError(null);
-    const reportMetrics = metrics.includes("sessions") ? metrics : [...metrics, "sessions"];
+    // `sessions` used to be appended unconditionally. GA4 rejects it alongside a
+    // page-VIEW dimension — a session spans many pages, so it can't be attributed
+    // to one — and the whole request 400s. (Landing-page dimensions are fine:
+    // those are session-scoped.) Strip it rather than append it in that case.
+    const sessionSafe = !dimensions.some((d) => SESSION_INCOMPATIBLE_DIMENSIONS.has(d));
+    const reportMetrics = sessionSafe
+      ? (metrics.includes("sessions") ? metrics : [...metrics, "sessions"])
+      : metrics.filter((m) => m !== "sessions");
     api(`/projects/${projectId}/analytics/report`, {
       method: "POST",
       body: { start: range.start, end: range.end, preset: range.preset ?? null, dimensions, metrics: reportMetrics, filters: [], match: "AND", limit: 250 },
@@ -977,6 +996,18 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
   const removeMetric = (name) => setMetrics((m) => (m.length > 1 ? m.filter((x) => x !== name) : m));
 
   const failed = error || result?.error;
+
+  // Name the actual problem instead of leaving "combination isn't available" to
+  // be interpreted as "no data".
+  const pageScoped = dimensions.filter((d) => SESSION_INCOMPATIBLE_DIMENSIONS.has(d));
+  const clashing = metrics.filter((m) => ["sessions", "newUsers", "returningUsers"].includes(m));
+  const incompatibleHint =
+    failed && pageScoped.length && clashing.length
+      ? `GA4 can't combine ${clashing.map(metricLabel).join(", ")} with a page dimension ` +
+        `(${pageScoped.map(dimensionLabel).join(", ")}) — a session or user spans several pages, ` +
+        `so it can't be attributed to one. Remove ${clashing.map(metricLabel).join(", ")}, or switch ` +
+        `the dimension to Landing Page.`
+      : null;
   const usesDemographics = dimensions.some((d) => DEMOGRAPHICS_NAMES.has(d));
 
   return (
@@ -1097,10 +1128,21 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
         </div>
       ) : failed ? (
         <div className="bg-white rounded-xl border border-stone-200 p-6">
-          <p className="text-sm text-stone-400">
+          <p className="text-sm text-stone-600">
             This combination isn&apos;t available, or has no data for this range.
             {usesDemographics && " Demographics require Google Signals to be enabled on the property."}
           </p>
+          {/* GA4 names the offending field in its error. Hiding it behind a generic
+              message meant an incompatible dimension/metric pair looked identical to
+              "no data", with nothing to act on. */}
+          {typeof failed === "string" && (
+            <p className="text-xs text-stone-500 mt-2 font-data break-words">{failed}</p>
+          )}
+          {incompatibleHint && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mt-3">
+              {incompatibleHint}
+            </p>
+          )}
         </div>
       ) : dimensions.includes(EVENT_DIMENSION) ? (
         <EventsReport projectId={projectId} range={range} runNonce={runNonce} />
