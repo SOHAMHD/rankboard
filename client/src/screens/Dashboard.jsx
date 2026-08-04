@@ -1741,7 +1741,7 @@ function SearchConsoleTool({ project }) {
       .map((f) => ({ dimension: f.dimension, operator: f.operator, expression: f.expression }));
     api(`/projects/${project.id}/search-console/performance`, {
       method: "POST",
-      body: { start: range.start, end: range.end, searchType, dimension, filters: activeFilters },
+      body: { start: range.start, end: range.end, preset: range.preset ?? null, searchType, dimension, filters: activeFilters },
     })
       .then((d) => !cancelled && setData(d))
       .catch((err) => !cancelled && setError(err.message))

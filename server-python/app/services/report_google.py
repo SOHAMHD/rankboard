@@ -341,7 +341,15 @@ def _gsc_query(service, site_url: str, body: dict) -> list[dict]:
 
 
 def _gsc_collect(service, site_url: str, date_range: tuple[str, str]) -> dict:
-    body = {"startDate": date_range[0], "endDate": date_range[1]}
+    # dataState "all" includes the freshest, still-incomplete days, matching what
+    # the GSC UI shows. The API default is "final", which silently omitted the
+    # last two to three days and made every report figure read low.
+    body = {
+        "startDate": date_range[0],
+        "endDate": date_range[1],
+        "dataState": "all",
+        "type": "web",
+    }
 
     # Left sequential on purpose: `service` is a googleapiclient resource, which
     # is not thread-safe (hence the threading.local cache in _build_service), so

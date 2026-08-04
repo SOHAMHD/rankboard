@@ -1,13 +1,53 @@
+from datetime import date, datetime, timedelta, timezone
+
 from ..config import GOOGLE_SERVICE_ACCOUNT_JSON
 from .response_cache import cached
 
 _SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
 
-_ROW_LIMIT = 25
+#: Rows fetched per dimension for the summary panels. Was 25, which silently
+#: truncated the queries and pages lists well below what the GSC UI shows.
+_ROW_LIMIT = 1000
+
+#: Hard cap the Search Analytics API allows in one request.
+_API_MAX_ROWS = 25000
+
+#: Search Console reports in Pacific time regardless of the property or the
+#: viewer, and its data lags. Using the server's or the browser's "today" as the
+#: end date asks for days that do not exist yet, so those days come back empty
+#: and every total reads low.
+_GSC_TZ_OFFSET_HOURS = -8  # America/Los_Angeles, without a tzdata dependency
+_GSC_LAG_DAYS = 3
+
+#: "all" includes the most recent, still-incomplete days — which is what the GSC
+#: UI's Performance report shows. The API default is "final", so omitting this
+#: silently dropped the last two to three days from every figure.
+_DATA_STATE = "all"
 
 import threading
 
 _local = threading.local()
+
+
+def gsc_today() -> date:
+    """Today in Search Console's reporting timezone (Pacific)."""
+    return (datetime.now(timezone.utc) + timedelta(hours=_GSC_TZ_OFFSET_HOURS)).date()
+
+
+def gsc_last_available_date() -> date:
+    """The most recent date GSC is likely to have data for."""
+    return gsc_today() - timedelta(days=_GSC_LAG_DAYS)
+
+
+def default_range(days: int = 28) -> tuple[str, str]:
+    """A `days`-long window ending at the last date GSC should have data for.
+
+    Mirrors how the GSC UI builds "Last 28 days" — it ends at the newest date
+    with data, not at today.
+    """
+    end = gsc_last_available_date()
+    start = end - timedelta(days=days - 1)
+    return start.isoformat(), end.isoformat()
 
 
 def _build_service():
@@ -58,8 +98,28 @@ def _construct_service(Credentials, build):
 
 
 def _query(service, site_url: str, body: dict) -> list[dict]:
-    response = service.searchanalytics().query(siteUrl=site_url, body=body).execute()
-    return response.get("rows", []) or []
+    """Run one Search Analytics query, following startRow pagination.
+
+    Every body gets dataState so the freshest days are included. Without
+    pagination a request stopped at rowLimit and the table could never show as
+    much as the GSC UI's export.
+    """
+    body = {"dataState": _DATA_STATE, **body}
+    wanted = int(body.get("rowLimit") or _ROW_LIMIT)
+    page_size = min(wanted, _API_MAX_ROWS)
+
+    rows: list[dict] = []
+    start_row = 0
+    while True:
+        page_body = {**body, "rowLimit": page_size, "startRow": start_row}
+        response = service.searchanalytics().query(siteUrl=site_url, body=page_body).execute()
+        page = response.get("rows", []) or []
+        rows.extend(page)
+        # A short page means there is nothing more to fetch.
+        if len(page) < page_size or len(rows) >= wanted:
+            break
+        start_row += len(page)
+    return rows[:wanted]
 
 
 def _metrics(row: dict) -> dict:
@@ -83,11 +143,11 @@ def get_search_console(
     site_url = str(site_url).strip()
 
     if not start_date or not end_date:
-        from datetime import date, timedelta
-
-        today = date.today()
-        end_date = end_date or today.isoformat()
-        start_date = start_date or (today - timedelta(days=27)).isoformat()
+        # Was date.today() in the SERVER's timezone, with end = today — a date
+        # Search Console never has data for.
+        default_start, default_end = default_range(28)
+        end_date = end_date or default_end
+        start_date = start_date or default_start
 
     service, err = _build_service()
     if err:

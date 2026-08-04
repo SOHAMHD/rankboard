@@ -17,7 +17,11 @@ from ..services.analytics_provider import (
     get_returning_users,
     run_custom_report,
 )
-from ..services.search_console_provider import get_search_console, query_performance
+from ..services.search_console_provider import (
+    default_range as sc_default_range,
+    get_search_console,
+    query_performance,
+)
 from ..services.excel_service import build_sample_workbook, parse_keyword_workbook
 from ..services import keyword_rank_service
 from ..services.snapshot_service import create_snapshot
@@ -252,7 +256,16 @@ def project_analytics_report(
     if not body.metrics:
         return {"report": {"error": "Pick at least one metric."}}
     if any(d not in ALLOWED_DIMENSIONS for d in body.dimensions):
-        return {"report": {"error": "Unsupported dimension"}}
+        # Name the offending value. A bare "Unsupported dimension" is
+        # indistinguishable from a GA4 error, and it hides the common cause:
+        # the frontend was rebuilt but this process wasn't restarted, so the
+        # two disagree about which dimensions exist.
+        bad = [d for d in body.dimensions if d not in ALLOWED_DIMENSIONS]
+        return {"report": {"error": (
+            f"Unsupported dimension: {', '.join(bad)}. This server accepts "
+            f"{len(ALLOWED_DIMENSIONS)} dimensions; if you expect this one to work, "
+            "the API process may need restarting to pick up a newer allowlist."
+        )}}
     if any(m not in REPORT_METRICS for m in body.metrics):
         return {"report": {"error": "Unsupported metric"}}
     err = _validate_filters(body.filters, body.match)
@@ -302,6 +315,10 @@ class SearchConsoleFilterIn(BaseModel):
 class SearchConsolePerformanceIn(BaseModel):
     start: str | None = None
     end: str | None = None
+    # Preset window length. GSC reports in Pacific time and lags a few days, so
+    # the server rebuilds the range from this rather than trusting dates the
+    # browser computed in the viewer's timezone. start/end remain for display.
+    preset: int | None = None
     searchType: str = "web"
     dimension: str = "query"
     filters: list[SearchConsoleFilterIn] = []
@@ -328,14 +345,20 @@ def project_search_console_performance(
     if not project["gsc_site_url"]:
         return {"error": "No Search Console property configured"}
 
+    # Search Console reports in Pacific time and its data lags a few days, so a
+    # window ending at the browser's or server's "today" asks for days that do
+    # not exist and reads low. For preset windows, rebuild the range the way the
+    # GSC UI does: N days ending at the last date with data. Explicit custom
+    # dates are respected as given.
     end = body.end
     start = body.start
-    if not start or not end:
-        from datetime import date, timedelta
-
-        today = date.today()
-        end = end or today.isoformat()
-        start = start or (today - timedelta(days=27)).isoformat()
+    preset_days = getattr(body, "preset", None)
+    if isinstance(preset_days, int) and 1 <= preset_days <= _MAX_PRESET_DAYS:
+        start, end = sc_default_range(preset_days)
+    elif not start or not end:
+        default_start, default_end = sc_default_range(28)
+        end = end or default_end
+        start = start or default_start
 
     site_url = project["gsc_site_url"]
     filters = [f.model_dump() for f in body.filters]
