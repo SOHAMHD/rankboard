@@ -39,7 +39,9 @@ ALLOWED_DIMENSIONS = {
     "deviceCategory", "operatingSystem", "operatingSystemWithVersion",
     "browser", "platform", "screenResolution", "mobileDeviceModel",
     "mobileDeviceBranding",
-    "landingPagePlusQueryString", "pagePath", "pagePathPlusQueryString",
+    # pagePathPlusScreenClass is what GA4's "Pages and screens" report uses.
+    "pagePathPlusScreenClass",
+    "landingPage", "landingPagePlusQueryString", "pagePath", "pagePathPlusQueryString",
     "pageTitle", "fullPageUrl", "hostName",
     "eventName",
     "newVsReturning", "signedInWithUserId", "audienceName",
@@ -76,6 +78,12 @@ DERIVED_METRICS = {
     "averageEngagementTimePerSession": {
         "label": "Avg Engagement Time / Session",
         "helpers": ["userEngagementDuration", "sessions"],
+        "op": "ratio",
+    },
+    # GA4's "Views per active user" column in the Pages and screens report.
+    "viewsPerActiveUser": {
+        "label": "Views / Active User",
+        "helpers": ["screenPageViews", "activeUsers"],
         "op": "ratio",
     },
 }

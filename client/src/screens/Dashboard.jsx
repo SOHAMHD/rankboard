@@ -525,7 +525,12 @@ const VIEW_DEFAULT_DIMENSION = {
   overview: "firstUserPrimaryChannelGroup",
   audience: "country",
   technology: "deviceCategory",
-  pages: "landingPagePlusQueryString",
+  // pagePathPlusScreenClass = GA4's "Pages and screens" report, which is what
+  // this is reconciled against. Landing Page stays selectable but answers a
+  // different question: where sessions STARTED (once per session) rather than
+  // every page view. /thank-you/ is the giveaway — heavily viewed, almost
+  // never landed on.
+  pages: "pagePathPlusScreenClass",
 };
 
 const VIEW_DEFAULT_METRICS = {
@@ -537,7 +542,7 @@ const VIEW_DEFAULT_METRICS = {
   // Total Users, not Active Users, in overview: totalUsers is what GA4's
   // acquisition reports show, so that column reconciles with the GA4 UI directly.
   overview: ["totalUsers", "newUsers", "eventCount", "keyEvents", "averageEngagementTime"],
-  pages: ["sessions", "activeUsers", "newUsers", "averageEngagementTimePerSession", "keyEvents"],
+  pages: ["screenPageViews", "activeUsers", "viewsPerActiveUser", "averageEngagementTime", "eventCount", "keyEvents"],
   audience: ["totalUsers", "newUsers", "sessions", "averageEngagementTime"],
   technology: ["totalUsers", "newUsers", "sessions", "averageEngagementTime"],
 };
@@ -550,7 +555,7 @@ const DIMENSION_GROUPS = {
   "Traffic source (session)": [["Primary Channel Group", "sessionPrimaryChannelGroup"], ["Default Channel Group (legacy)", "sessionDefaultChannelGroup"], ["Source", "sessionSource"], ["Medium", "sessionMedium"], ["Source / Medium", "sessionSourceMedium"], ["Campaign", "sessionCampaignName"]],
   "Traffic source (first user)": [["Primary Channel Group", "firstUserPrimaryChannelGroup"], ["Default Channel Group (legacy)", "firstUserDefaultChannelGroup"], ["Source", "firstUserSource"], ["Medium", "firstUserMedium"], ["Campaign", "firstUserCampaignName"]],
   "Platform / device": [["Device Category", "deviceCategory"], ["Operating System", "operatingSystem"], ["OS + Version", "operatingSystemWithVersion"], ["Browser", "browser"], ["Platform", "platform"], ["Screen Resolution", "screenResolution"], ["Device Model", "mobileDeviceModel"], ["Device Brand", "mobileDeviceBranding"]],
-  "Page / screen": [["Landing Page", "landingPagePlusQueryString"], ["Page Path", "pagePath"], ["Page Path + Query", "pagePathPlusQueryString"], ["Page Title", "pageTitle"], ["Full Page URL", "fullPageUrl"], ["Hostname", "hostName"]],
+  "Page / screen": [["Page path and screen class", "pagePathPlusScreenClass"], ["Landing Page", "landingPage"], ["Landing Page + Query", "landingPagePlusQueryString"], ["Page Path", "pagePath"], ["Page Path + Query", "pagePathPlusQueryString"], ["Page Title", "pageTitle"], ["Full Page URL", "fullPageUrl"], ["Hostname", "hostName"]],
   "Events": [["Event Name", "eventName"]],
   "User": [["New vs Returning", "newVsReturning"], ["Signed In With User ID", "signedInWithUserId"], ["Audience", "audienceName"]],
   "Time": [["Date", "date"], ["Date + Hour", "dateHour"], ["Hour", "hour"], ["Day of Week", "dayOfWeekName"], ["Week", "week"], ["Month", "month"], ["Year", "year"]],
@@ -574,6 +579,7 @@ const METRICS = {
   // per-active-user one. Different denominator, different number.
   "Avg Engagement Time / Session": "averageEngagementTimePerSession",
   "Views": "screenPageViews",
+  "Views / Active User": "viewsPerActiveUser",
   "Event Count": "eventCount",
   "Bounce Rate": "bounceRate",
   "Key Events": "keyEvents",
@@ -607,6 +613,8 @@ const METRIC_HELP = {
   averageSessionDuration: "The average length of a session, from first to last activity.",
   userEngagementDuration: "The total time users spent actively engaged with your site.",
   averageEngagementTime: "The average time your site was open and in focus per active user.",
+  averageEngagementTimePerSession:
+    "The average time your site was open and in focus per session. This is the figure GA4's Landing page and Pages reports show.",
   screenPageViews: "The total number of pages viewed, including repeat views of the same page.",
   eventCount: "The total number of events (page views, clicks, scrolls, etc.) that were triggered.",
   bounceRate: "The share of sessions that were NOT engaged — the opposite of engagement rate.",
@@ -624,7 +632,15 @@ function metricHelp(key) {
 }
 
 const RATE_METRICS = new Set(["engagementRate", "bounceRate"]);
-const DURATION_METRICS = new Set(["averageSessionDuration", "userEngagementDuration", "averageEngagementTime"]);
+// Anything measured in seconds, so formatMetric renders it as "24s" / "1m 10s"
+// rather than a raw float. Adding a duration metric without listing it here
+// makes the column print e.g. 24.551 instead of 24s.
+const DURATION_METRICS = new Set([
+  "averageSessionDuration",
+  "userEngagementDuration",
+  "averageEngagementTime",
+  "averageEngagementTimePerSession",
+]);
 
 function formatMetric(name, value) {
   if (value == null) return "0";
