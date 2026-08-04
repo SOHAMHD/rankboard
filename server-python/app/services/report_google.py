@@ -30,9 +30,12 @@ GA4_SECTIONS = (
     {"key": "users_trend", "dimensions": ["date"],
      "metrics": ["activeUsers", "newUsers"],
      "limit": None, "order_by_dim": True},
-    # sessionPrimaryChannelGroup, not sessionDefaultChannelGroup: the "primary"
-    # model is what the GA4 UI reports, so reports now reconcile with it.
-    {"key": "by_channel", "dimensions": ["sessionPrimaryChannelGroup"],
+    # firstUserPrimaryChannelGroup — deliberately first-user scope, matching the
+    # GA4 User acquisition report the team reconciles reports against. Note this
+    # answers "where were these users originally acquired", not "where did this
+    # month's visits come from"; session scope is the other option if that
+    # changes. "Primary" (not "Default") is GA4's current grouping model.
+    {"key": "by_channel", "dimensions": ["firstUserPrimaryChannelGroup"],
      "metrics": ["totalUsers", "newUsers", "activeUsers", "engagedSessions", "userEngagementDuration"],
      "limit": None},
     {"key": "by_country_city", "dimensions": ["country", "region", "city"],

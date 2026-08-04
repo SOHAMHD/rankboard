@@ -521,7 +521,8 @@ function SnapshotMenu({ groups, selectedId, onSelect, onDownload }) {
 }
 
 const VIEW_DEFAULT_DIMENSION = {
-  overview: "sessionPrimaryChannelGroup",
+  // firstUser scope: matches GA4's User acquisition report figure for figure.
+  overview: "firstUserPrimaryChannelGroup",
   audience: "country",
   technology: "deviceCategory",
   pages: "landingPagePlusQueryString",
@@ -910,7 +911,7 @@ function TrafficTool({ project, view }) {
 }
 
 function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
-  const [dimensions, setDimensions] = useState([defaultDimension || "sessionPrimaryChannelGroup"]);
+  const [dimensions, setDimensions] = useState([defaultDimension || "firstUserPrimaryChannelGroup"]);
   const [metrics, setMetrics] = useState(defaultMetrics || ["activeUsers", "newUsers"]);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -1085,7 +1086,7 @@ function ExploreReport({ projectId, range, defaultDimension, defaultMetrics }) {
 
 const EVENT_DIMENSION = "eventName";
 const EVENT_METRICS = ["eventCount", "activeUsers", "newUsers", "sessions"];
-const EVENT_CHANNEL_DIMENSION = "sessionPrimaryChannelGroup";
+const EVENT_CHANNEL_DIMENSION = "firstUserPrimaryChannelGroup";
 
 function EventsReport({ projectId, range, runNonce }) {
   const [rows, setRows] = useState(null);

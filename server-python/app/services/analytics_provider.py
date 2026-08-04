@@ -11,7 +11,10 @@ from .response_cache import cached
 _METRICS = ["activeUsers", "newUsers", "userEngagementDuration", "sessions", "totalUsers"]
 
 _BREAKDOWNS = [
-    ("byChannel", "sessionPrimaryChannelGroup", None),
+    # firstUser* to mirror GA4's User acquisition report, which is what the
+    # team reconciles against. Session scope stays available in the dimension
+    # picker ("Traffic source (session)").
+    ("byChannel", "firstUserPrimaryChannelGroup", None),
     ("byCountry", "country", 25),
     ("byCity", "city", 25),
     ("byLandingPage", "landingPagePlusQueryString", 25),
