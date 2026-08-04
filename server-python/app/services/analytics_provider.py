@@ -68,6 +68,16 @@ DERIVED_METRICS = {
         "helpers": ["userEngagementDuration", "activeUsers"],
         "op": "ratio",
     },
+    # GA4 uses TWO different engagement averages depending on the report, and they
+    # are not interchangeable:
+    #   per active user -> User/Traffic acquisition  (divides by activeUsers)
+    #   per session     -> Landing page & Pages      (divides by sessions)
+    # Landing-page figures only reconcile with GA4 using the per-session form.
+    "averageEngagementTimePerSession": {
+        "label": "Avg Engagement Time / Session",
+        "helpers": ["userEngagementDuration", "sessions"],
+        "op": "ratio",
+    },
 }
 
 #: GA4 exposes no returningUsers metric, and it CANNOT be derived arithmetically.

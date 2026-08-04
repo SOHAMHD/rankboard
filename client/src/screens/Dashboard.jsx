@@ -529,9 +529,17 @@ const VIEW_DEFAULT_DIMENSION = {
 };
 
 const VIEW_DEFAULT_METRICS = {
-  // Total Users, not Active Users: totalUsers is what GA4's acquisition
-  // reports show, so this column reconciles with the GA4 UI directly.
+  // One entry per view, each mirroring the column set of the GA4 report it
+  // corresponds to. Without a per-view entry the table fell back to just
+  // ["activeUsers", "newUsers"], which is why Landing pages showed no Sessions
+  // column at all — Sessions is the primary metric of GA4's Landing page report.
+  //
+  // Total Users, not Active Users, in overview: totalUsers is what GA4's
+  // acquisition reports show, so that column reconciles with the GA4 UI directly.
   overview: ["totalUsers", "newUsers", "eventCount", "keyEvents", "averageEngagementTime"],
+  pages: ["sessions", "activeUsers", "newUsers", "averageEngagementTimePerSession", "keyEvents"],
+  audience: ["totalUsers", "newUsers", "sessions", "averageEngagementTime"],
+  technology: ["totalUsers", "newUsers", "sessions", "averageEngagementTime"],
 };
 
 const DIMENSION_GROUPS = {
@@ -562,6 +570,9 @@ const METRICS = {
   "Avg Session Duration": "averageSessionDuration",
   "User Engagement Duration": "userEngagementDuration",
   "Avg Engagement Time": "averageEngagementTime",
+  // GA4's Landing page / Pages reports use the per-SESSION average, not the
+  // per-active-user one. Different denominator, different number.
+  "Avg Engagement Time / Session": "averageEngagementTimePerSession",
   "Views": "screenPageViews",
   "Event Count": "eventCount",
   "Bounce Rate": "bounceRate",
