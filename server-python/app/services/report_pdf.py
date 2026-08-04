@@ -158,6 +158,29 @@ def _num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def _rank_tone(previous, current):
+    """Row tone ("row-up" / "row-down" / "") for a keyword's rank change.
+
+    Deliberately compares the two ranks rather than reading `rank_delta`.
+    Breaking into the results from nowhere is the largest possible improvement,
+    and falling out of them entirely is the largest possible decline, but both
+    leave `rank_delta` as None because one side isn't a number — so a delta-based
+    check silently renders the two most significant movements as no change.
+    """
+    has_prev, has_cur = _num(previous), _num(current)
+    if has_prev and has_cur:
+        if current < previous:
+            return "row-up"
+        if current > previous:
+            return "row-down"
+        return ""
+    if has_cur:            # wasn't ranking before, is now
+        return "row-up"
+    if has_prev:           # was ranking, has dropped out
+        return "row-down"
+    return ""              # never ranked in either period
+
+
 def _human_duration(seconds, signed: bool = False) -> str:
     total = int(round(abs(seconds)))
     minutes, secs = divmod(total, 60)
@@ -458,11 +481,7 @@ def _keyword_pages(block: dict) -> list:
         body_rows = []
         for r in chunk:
             cells = (r or {}).get("cells") or {}
-            delta = cells.get("rank_delta")
-            if _num(delta) and delta != 0:
-                row_tone = "row-up" if delta < 0 else "row-down"
-            else:
-                row_tone = ""
+            row_tone = _rank_tone(cells.get("previous_rank"), cells.get("current_rank"))
             tds = "".join(_table_cell_html(c, cells.get(c.get("key"))) for c in columns)
             body_rows.append(f'<tr class="{row_tone}">{tds}</tr>')
         cont = f" (cont. {i}/{total})" if total > 1 else ""
@@ -992,8 +1011,7 @@ def _data_table_inline(b: dict) -> str:
         cells = (r or {}).get("cells") or {}
         tone = ""
         if is_kw:
-            d = cells.get("rank_delta")
-            tone = "row-up" if (_num(d) and d < 0) else ("row-down" if (_num(d) and d > 0) else "")
+            tone = _rank_tone(cells.get("previous_rank"), cells.get("current_rank"))
         tds = "".join(_table_cell_html(c, cells.get(c.get("key"))) for c in columns)
         body_rows.append(f'<tr class="{tone}">{tds}</tr>' if is_kw else f"<tr>{tds}</tr>")
     return head + f'<table class="{cls}">{thead}<tbody>{"".join(body_rows)}</tbody></table>'

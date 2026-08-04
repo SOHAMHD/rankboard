@@ -140,7 +140,6 @@ def _posts_table(items) -> str:
 
 
 def _keyword_table_html(block):
-    from . import report_pdf
     cols = [c for c in (block.get("columns") or []) if c.get("kind") != "delta"]
     th = '<th>Sr No.</th>' + "".join(f"<th>{esc(c.get('label'))}</th>" for c in cols)
     trs = []
@@ -150,13 +149,11 @@ def _keyword_table_html(block):
             continue
         i += 1
         cells = r.get("cells") or {}
-        # Shared with the other report designs so a keyword is shaded the same way
-        # everywhere. Notably this treats "wasn't ranking -> ranking" as improved
-        # and "was ranking -> gone" as declined; the old local comparison required
-        # both ranks to be numbers and so left both cases unshaded.
-        tone = report_pdf._rank_tone(cells.get("previous_rank"), cells.get("current_rank"))
-        style = (' style="background:rgba(22,163,74,0.16)"' if tone == "row-up"
-                 else ' style="background:rgba(220,38,38,0.14)"' if tone == "row-down" else "")
+        pv, cv = _num(cells.get("previous_rank")), _num(cells.get("current_rank"))
+        improved = pv is not None and cv is not None and cv < pv
+        declined = pv is not None and cv is not None and cv > pv
+        style = (' style="background:rgba(22,163,74,0.16)"' if improved
+                 else ' style="background:rgba(220,38,38,0.14)"' if declined else "")
         tds = [f'<td>{i}</td>']
         for c in cols:
             v = cells.get(c.get("key"))
@@ -321,43 +318,11 @@ def _metric_cards(block, prev_label="Prev"):
         return ""
     out = []
     for m in block.get("metrics") or []:
-        if m.get("currentValue") is None:
-            # Don't print an empty tile. A metric with no value (e.g. Domain
-            # Authority when Moz is not configured) previously rendered as a
-            # lone em-dash sitting next to prose that quoted a real figure.
-            continue
         cur = _fmt(m.get("type"), m.get("currentValue"))
         prev = m.get("previousValue")
         meta = f"{prev_label}: {_fmt(m.get('type'), prev)}" if prev is not None else ""
         out.append(card(kicker=m.get("label"), title=cur, meta=meta))
     return "".join(out)
-
-
-def _with_manual_fallbacks(metrics_block, targets_block):
-    """Backfill Key Metrics values the automated sources couldn't supply.
-
-    Domain Authority comes from Moz, but the operator also types it into the
-    Targets & Goals grid. When Moz is unavailable the tile went blank while the
-    Targets table showed the real number two pages later. Prefer the API value
-    and fall back to the figure the operator entered.
-    """
-    if not metrics_block:
-        return metrics_block
-    manual = ((targets_block or {}).get("values") or {}).get("previous") or {}
-    if not manual:
-        return metrics_block
-    metrics = []
-    changed = False
-    for m in metrics_block.get("metrics") or []:
-        if m.get("currentValue") is None:
-            fallback = manual.get(m.get("key"))
-            if fallback not in (None, ""):
-                m = {**m, "currentValue": _num(fallback) if _num(fallback) is not None else fallback}
-                changed = True
-        metrics.append(m)
-    if not changed:
-        return metrics_block
-    return {**metrics_block, "metrics": metrics}
 
 
 def _table_block(block):
@@ -545,7 +510,7 @@ def render_document(version, blobs=None, part="all") -> str:
         body.append(f'<p class="text-muted" style="font-style:italic;font-size:12.5px;max-width:38em">{esc(maturing)}</p>')
     if _rich(g("progress-summary")):
         body.append(f'<div style="font-size:16px;max-width:38em;margin-top:var(--space-3)">{_rich(g("progress-summary"))}</div>')
-    cards = _metric_cards(_with_manual_fallbacks(g("key-metrics"), g("targets")), prev_label)
+    cards = _metric_cards(g("key-metrics"), prev_label)
     if cards:
         body.append(f'<div style="margin-top:var(--space-6)"><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-3)">{cards}</div></div>')
     pairs = _list_items(g("achievements"))
@@ -601,6 +566,8 @@ def render_document(version, blobs=None, part="all") -> str:
             f'<span style="flex:1">{esc(s["label"])}</span><span class="text-muted">{round(s["value"]/total*100)}%</span></div>'
             for s, c in zip(slices, _PIE_COLORS * 3))
         channel_notes = _rich(g("ga4-channel-notes"))
+        notes_html = (f'<div style="max-width:34em;margin-bottom:var(--space-3)">{channel_notes}</div>'
+                      if channel_notes.strip() else "")
         body.append(
             (f'<div style="max-width:44em;margin-bottom:var(--space-4)">{channel_notes}</div>'
              if channel_notes.strip() else "")
@@ -632,21 +599,16 @@ def render_document(version, blobs=None, part="all") -> str:
                 'event, or included 2 or more page views; Engagement rate is the share of sessions that were '
                 'engaged; Avg. engagement is the average engagement time per active user.)</p>')
         if land or _rich(g("ga4-landing-notes")):
-            # No hard page break here. A forced break used to leave the geographic
-            # table's footnote stranded alone on its own page whenever the table ran
-            # long enough to push the note past the page boundary. Keeping the whole
-            # landing-pages block together with break-inside:avoid lets it move to the
-            # next page only when it genuinely doesn't fit, which also saves a page.
-            landing = ['<h4 style="margin-top:var(--space-6)">Top landing pages</h4>']
+            body.append('<div style="break-before:page;height:10px"></div>'
+                        '<h4 style="margin-top:var(--space-2)">Top landing pages</h4>')
             if _rich(g("ga4-landing-notes")):
-                landing.append(f'<div style="max-width:38em;margin-bottom:var(--space-3)">{_rich(g("ga4-landing-notes"))}</div>')
+                body.append(f'<div style="max-width:38em;margin-bottom:var(--space-3)">{_rich(g("ga4-landing-notes"))}</div>')
             if land:
-                landing.append(_table_block(land).replace('class="table"', 'class="table table-left"', 1))
-                landing.append(
+                body.append(_table_block(land).replace('class="table"', 'class="table table-left"', 1))
+                body.append(
                     '<p class="text-muted" style="font-size:11.5px;line-height:1.5;margin-top:var(--space-3);max-width:48em">'
                     '(<strong>Note:</strong> “/” is the website home page; other rows show the page path — '
                     'e.g. /contact-us/ is the Contact Us page.)</p>')
-            body.append('<div style="break-inside:avoid">' + "".join(landing) + '</div>')
         body.append(ex(4))
 
     quad = [("By device", g("ga4-by_device")), ("By language", g("ga4-by_language")),

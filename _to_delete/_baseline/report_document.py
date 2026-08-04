@@ -239,13 +239,8 @@ def _moz_grid(moz, present, reason):
 
 
 def _keyword_table(kw, present, reason, period_label, prev_label, prev2_label=""):
-    items = (kw or {}).get("items", []) if present else []
-    # Only offer the two-months-back column when at least one keyword actually has a
-    # rank that far back. Tracking that begins mid-history otherwise yields a column
-    # of em-dashes on every row, which reads as missing data rather than no history.
-    has_prev2 = any(_is_num(it.get("previous2_rank")) for it in items)
     columns = [{"key": "term", "label": "Keyword", "kind": "dim", "type": "text"}]
-    if prev2_label and has_prev2:
+    if prev2_label:
         columns.append({"key": "previous2_rank", "label": f"Rank · {prev2_label}",
                         "kind": "metric", "type": "rank"})
     columns += [
@@ -254,7 +249,7 @@ def _keyword_table(kw, present, reason, period_label, prev_label, prev2_label=""
     ]
     rows = []
     if present:
-        for it in items:
+        for it in (kw or {}).get("items", []):
             rows.append({"cells": {
                 "term": it.get("term"),
                 "previous2_rank": it.get("previous2_rank"),

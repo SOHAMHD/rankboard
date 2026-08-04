@@ -6,47 +6,6 @@
 <meta name="color-scheme" content="light dark">
 <meta name="supported-color-schemes" content="light dark">
 <title>Your Monthly SEO Report</title>
-<!--
-  PLACEHOLDERS — substituted by routers/reports.py send_report(). Names must
-  match EXACTLY. An unrecognised placeholder is NOT an error: it is left in the
-  markup as literal text, and inside an img src that renders as a broken image
-  with nothing in the logs. That is the failure mode this comment exists for.
-
-  The full, and only, set available (written here without braces on purpose, so
-  a grep for a real placeholder never matches this comment):
-      client_name        client_domain
-      report_month       period_range
-      cover_image_url    - the FULL cover URL, built from REPORT_ASSET_BASE_URL
-      cover_filename     - just the file name, for a hardcoded base URL
-      logo_url           - derived from EMAIL_LOGO_URL / APP_URL
-      unsubscribe_url    year
-
-  The cover: page 1 of the PDF, rendered to a PNG at send time. Its file name is
-  RANDOM per send (secrets.token_urlsafe), so it can never be hardcoded. Use one
-  of these two forms and nothing else:
-
-      src="{{cover_image_url}}"                      <- base URL from .env
-      src="https://your-domain/api/reports/covers/{{cover_filename}}"
-
-  NOTE: the cover thumbnail is currently REMOVED from this template. It was a
-  remote image, and Cloudflare (in front of this domain) blocks the fetch made by
-  mail-client image proxies, so it rendered as a broken picture. The placeholders
-  above still work — re-add an <img> using one of the two forms if that is ever
-  resolved. The cover is page 1 of the attached PDF either way, so nothing is
-  actually missing from the report.
-  Pointing the src at the directory with no file name yields a 403 and a broken
-  image — that was a real bug here.
-
-  Whichever form you use, keep the placeholder INSIDE the <img> tag: when there
-  is no cover, reports.py strips the whole tag by matching on it, so an <img>
-  without a placeholder would survive and render broken.
-
-  Common mistake: the placeholder is logo_url, NOT EMAIL_LOGO_URL — the latter
-  is the ENVIRONMENT VARIABLE's name, which the template never sees.
--->
-<!--[if mso]>
-<style>body,table,td,a,h1,p,span{font-family:Arial,Helvetica,sans-serif !important;}</style>
-<![endif]-->
 <style>
   @media only screen and (max-width:620px){
     .wrap{width:100% !important;}
@@ -98,7 +57,7 @@
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr>
             <td class="px" style="padding:38px 44px 0 44px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:27px;mso-line-height-rule:exactly;color:#4A5568;">
-              <p style="margin:0 0 16px 0;color:#00304D;font-size:17px;font-weight:bold;">Dear {{client_name}} team,</p>
+              <p style="margin:0 0 16px 0;color:#00304D;font-size:17px;font-weight:bold;">Dear  team,</p>
               <p style="margin:0 0 14px 0;">Please find attached the SEO performance report for {{report_month}}, covering the period {{period_range}}.</p>
               <p style="margin:0;">The complete report is enclosed as a PDF attachment to this email. Should you have any questions about the findings, we would be glad to discuss them with you.</p>
             </td>
@@ -109,7 +68,7 @@
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                 <tr>
                   <td valign="top" style="padding:0;">
-                    <p style="margin:0 0 16px 0;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;mso-line-height-rule:exactly;letter-spacing:1.8px;text-transform:uppercase;color:#3D8FC0;">
+                      <p style="margin:0 0 16px 0;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;mso-line-height-rule:exactly;letter-spacing:1.8px;text-transform:uppercase;color:#3D8FC0;">
                       What&rsquo;s inside
                     </p>
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
