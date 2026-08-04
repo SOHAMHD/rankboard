@@ -41,8 +41,15 @@ GA4_SECTIONS = (
     {"key": "by_country_city", "dimensions": ["country", "region", "city"],
      "metrics": ["activeUsers", "newUsers", "engagedSessions", "engagementRate", "userEngagementDuration"],
      "limit": 50},
-    {"key": "by_landing_page", "dimensions": ["landingPagePlusQueryString"],
-     "metrics": ["sessions", "activeUsers", "newUsers", "userEngagementDuration"],
+    # landingPage, NOT landingPagePlusQueryString: GA4's Landing page report merges
+    # query strings, so "/" and "/?utm_source=x" are one row there. Splitting them
+    # undercounted the homepage badly (158 sessions vs GA4's 187) while deep pages
+    # that carry no UTMs matched exactly.
+    # sessions + userEngagementDuration are requested so _derive can produce the
+    # per-SESSION engagement average, which is what GA4 shows for landing pages.
+    {"key": "by_landing_page", "dimensions": ["landingPage"],
+     "metrics": ["screenPageViews", "activeUsers", "eventCount", "keyEvents",
+                 "sessions", "userEngagementDuration"],
      "limit": 25},
     {"key": "by_browser", "dimensions": ["browser"],
      "metrics": ["activeUsers", "newUsers"], "limit": 25},

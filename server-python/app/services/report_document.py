@@ -14,7 +14,9 @@ _GA4_METRIC_META = {
     "avgEngagementSeconds": ("Avg. engagement / user", "duration"),
     "avgEngagementSecondsPerSession": ("Avg. engagement / session", "duration"),
     "engagementRate": ("Engagement rate", "percent"),
-    "screenPageViews": ("Page views", "count"),
+    "screenPageViews": ("Views", "count"),
+    "eventCount": ("Event count", "count"),
+    "keyEvents": ("Key events", "count"),
 }
 
 _GA4_TABLES = (
@@ -23,7 +25,8 @@ _GA4_TABLES = (
     ("by_country_city", "Users by Country & City", ["Country", "Region", "City"],
      ["activeUsers", "newUsers", "engagedSessions", "engagementRate", "avgEngagementSeconds"]),
     ("by_landing_page", "Top Landing Pages", ["Landing page"],
-     ["sessions", "activeUsers", "newUsers", "avgEngagementSecondsPerSession"]),
+     ["screenPageViews", "activeUsers", "eventCount", "keyEvents",
+      "avgEngagementSecondsPerSession"]),
     ("by_device", "Users by Device", ["Device"],
      ["activeUsers", "newUsers"]),
     ("by_browser", "Users by Browser", ["Browser"],
