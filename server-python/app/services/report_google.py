@@ -139,11 +139,21 @@ def _num(raw):
 
 
 def _derive(metrics: dict) -> dict:
+    """Add the derived engagement figures GA4 reports but doesn't return.
+
+    GA4 uses TWO different engagement averages and they are not interchangeable:
+      per active user -> User / Traffic acquisition reports
+      per session     -> Landing page and Pages reports
+    Both are emitted here so each section can use the one GA4 shows for it.
+    """
     out = dict(metrics)
     active = metrics.get("activeUsers")
+    sessions = metrics.get("sessions")
     dur = metrics.get("userEngagementDuration")
     if dur is not None and "activeUsers" in metrics:
         out["avgEngagementSeconds"] = round(dur / active, 1) if active else 0
+    if dur is not None and "sessions" in metrics:
+        out["avgEngagementSecondsPerSession"] = round(dur / sessions, 1) if sessions else 0
     es = metrics.get("engagedSessions")
     if es is not None and "activeUsers" in metrics:
         out["engagedSessionsPerUser"] = round(es / active, 4) if active else 0

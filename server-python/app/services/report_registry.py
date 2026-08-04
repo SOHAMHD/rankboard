@@ -43,9 +43,14 @@ REPORT_FIELDS = (
     {"name": "ga4.total_users", "source": SOURCE_GA4,
      "column": None, "type": TYPE_COUNT, "deferred": False,
      "label": "Total users"},
+    # Name kept for backwards compatibility with saved report documents, but the
+    # value is avgEngagementSeconds — engagement time per active user, NOT session
+    # duration. Those are different GA4 metrics: session duration includes idle
+    # time and reads far higher. The label is corrected so nobody compares it
+    # against GA4's "Average session duration" and concludes the app is wrong.
     {"name": "ga4.avg_session_duration", "source": SOURCE_GA4,
      "column": None, "type": TYPE_DURATION, "deferred": False,
-     "label": "Avg. session duration"},
+     "label": "Avg. engagement time / user"},
 
     {"name": "gsc.clicks", "source": SOURCE_GSC,
      "column": None, "type": TYPE_COUNT, "deferred": False,
