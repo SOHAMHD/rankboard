@@ -103,6 +103,10 @@ def get_report(
     return {"version": version}
 
 
+class _SkipCover(Exception):
+    """Raised to skip cover rendering when the template has no <img> for it."""
+
+
 #: Cover filenames are secrets.token_urlsafe(16) + ".png". Anchored and
 #: character-restricted so nothing resembling a path can get through — no "..",
 #: no slashes, no absolute paths.
@@ -235,7 +239,25 @@ def send_report(
 
     cover_url = ""
     _cover_name = ""   # initialised here: the render below can raise before it's set
+
+    # Only render the cover PNG if the template actually uses it. Rendering costs
+    # a Chromium page load and writes a file to disk, and with no <img> in the
+    # template nothing would ever fetch it. Driven by the template rather than a
+    # setting so re-adding the <img> is the only step needed to switch it back on.
     try:
+        _template_src = _EMAIL_TEMPLATE.read_text(encoding="utf-8")
+    except OSError:
+        _template_src = ""
+    # HTML comments stripped first: the template's own documentation quotes both
+    # placeholders as examples, which would otherwise read as "yes, wants a cover".
+    _live_markup = re.sub(r"<!--.*?-->", "", _template_src, flags=re.S)
+    _wants_cover = (
+        "{{cover_image_url}}" in _live_markup or "{{cover_filename}}" in _live_markup
+    )
+
+    try:
+        if not _wants_cover:
+            raise _SkipCover()
         _png = report_pdf.render_cover_png(version, blobs)
         Path(REPORT_ASSET_DIR).mkdir(parents=True, exist_ok=True)
         _cover_name = f"{secrets.token_urlsafe(16)}.png"
@@ -243,6 +265,8 @@ def send_report(
         _cover_path.write_bytes(_png)
         os.chmod(_cover_path, 0o644)
         cover_url = f"{REPORT_ASSET_BASE_URL}/{_cover_name}"
+    except _SkipCover:
+        pass
     except Exception as exc:
         print("report cover thumbnail failed:", exc)
 
