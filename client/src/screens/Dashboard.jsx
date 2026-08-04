@@ -525,12 +525,12 @@ const VIEW_DEFAULT_DIMENSION = {
   overview: "firstUserPrimaryChannelGroup",
   audience: "country",
   technology: "deviceCategory",
-  // pagePathPlusScreenClass = GA4's "Pages and screens" report, which is what
+  // pagePath = GA4's "Pages and screens" report, which is what
   // this is reconciled against. Landing Page stays selectable but answers a
   // different question: where sessions STARTED (once per session) rather than
   // every page view. /thank-you/ is the giveaway — heavily viewed, almost
   // never landed on.
-  pages: "pagePathPlusScreenClass",
+  pages: "pagePath",
 };
 
 const VIEW_DEFAULT_METRICS = {
@@ -555,7 +555,7 @@ const DIMENSION_GROUPS = {
   "Traffic source (session)": [["Primary Channel Group", "sessionPrimaryChannelGroup"], ["Default Channel Group (legacy)", "sessionDefaultChannelGroup"], ["Source", "sessionSource"], ["Medium", "sessionMedium"], ["Source / Medium", "sessionSourceMedium"], ["Campaign", "sessionCampaignName"]],
   "Traffic source (first user)": [["Primary Channel Group", "firstUserPrimaryChannelGroup"], ["Default Channel Group (legacy)", "firstUserDefaultChannelGroup"], ["Source", "firstUserSource"], ["Medium", "firstUserMedium"], ["Campaign", "firstUserCampaignName"]],
   "Platform / device": [["Device Category", "deviceCategory"], ["Operating System", "operatingSystem"], ["OS + Version", "operatingSystemWithVersion"], ["Browser", "browser"], ["Platform", "platform"], ["Screen Resolution", "screenResolution"], ["Device Model", "mobileDeviceModel"], ["Device Brand", "mobileDeviceBranding"]],
-  "Page / screen": [["Page path and screen class", "pagePathPlusScreenClass"], ["Landing Page", "landingPage"], ["Landing Page + Query", "landingPagePlusQueryString"], ["Page Path", "pagePath"], ["Page Path + Query", "pagePathPlusQueryString"], ["Page Title", "pageTitle"], ["Full Page URL", "fullPageUrl"], ["Hostname", "hostName"]],
+  "Page / screen": [["Page Path (GA4 Pages report)", "pagePath"], ["Page path and screen class", "unifiedPagePathScreen"], ["Landing Page", "landingPage"], ["Landing Page + Query", "landingPagePlusQueryString"], ["Page Path + Query", "pagePathPlusQueryString"], ["Page Title", "pageTitle"], ["Full Page URL", "fullPageUrl"], ["Hostname", "hostName"]],
   "Events": [["Event Name", "eventName"]],
   "User": [["New vs Returning", "newVsReturning"], ["Signed In With User ID", "signedInWithUserId"], ["Audience", "audienceName"]],
   "Time": [["Date", "date"], ["Date + Hour", "dateHour"], ["Hour", "hour"], ["Day of Week", "dayOfWeekName"], ["Week", "week"], ["Month", "month"], ["Year", "year"]],
@@ -636,7 +636,9 @@ function metricHelp(key) {
 // returns a 400 naming the incompatible field. Landing-page dimensions are NOT
 // in this set: a landing page is a property of the session, so sessions work fine.
 const SESSION_INCOMPATIBLE_DIMENSIONS = new Set([
-  "pagePathPlusScreenClass",
+  "unifiedPagePathScreen",
+  "unifiedScreenClass",
+  "unifiedScreenName",
   "pagePath",
   "pagePathPlusQueryString",
   "pageTitle",

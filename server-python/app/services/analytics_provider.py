@@ -39,8 +39,11 @@ ALLOWED_DIMENSIONS = {
     "deviceCategory", "operatingSystem", "operatingSystemWithVersion",
     "browser", "platform", "screenResolution", "mobileDeviceModel",
     "mobileDeviceBranding",
-    # pagePathPlusScreenClass is what GA4's "Pages and screens" report uses.
-    "pagePathPlusScreenClass",
+    # GA4's UI calls its Pages-report dimension "Page path and screen class"; the
+    # Data API name for that is unifiedPagePathScreen (NOT pagePathPlusScreenClass,
+    # which does not exist and 400s). For a web-only property it is equivalent to
+    # pagePath, since screen class only applies to app streams.
+    "unifiedPagePathScreen", "unifiedScreenClass", "unifiedScreenName",
     "landingPage", "landingPagePlusQueryString", "pagePath", "pagePathPlusQueryString",
     "pageTitle", "fullPageUrl", "hostName",
     "eventName",
