@@ -16,13 +16,28 @@
   a grep for a real placeholder never matches this comment):
       client_name        client_domain
       report_month       period_range
-      cover_image_url    - page 1 of the PDF, rendered to PNG
+      cover_image_url    - the FULL cover URL, built from REPORT_ASSET_BASE_URL
+      cover_filename     - just the file name, for a hardcoded base URL
       logo_url           - derived from EMAIL_LOGO_URL / APP_URL
       unsubscribe_url    year
 
+  The cover: page 1 of the PDF, rendered to a PNG at send time. Its file name is
+  RANDOM per send (secrets.token_urlsafe), so it can never be hardcoded. Use one
+  of these two forms and nothing else:
+
+      src="{{cover_image_url}}"                      <- base URL from .env
+      src="https://your-domain/api/reports/covers/{{cover_filename}}"
+
+  This template uses the second form, with the domain hardcoded on purpose.
+  Pointing the src at the directory with no file name yields a 403 and a broken
+  image — that was a real bug here.
+
+  Whichever form you use, keep the placeholder INSIDE the <img> tag: when there
+  is no cover, reports.py strips the whole tag by matching on it, so an <img>
+  without a placeholder would survive and render broken.
+
   Common mistake: the placeholder is logo_url, NOT EMAIL_LOGO_URL — the latter
-  is the ENVIRONMENT VARIABLE's name, which the template never sees. Likewise
-  the cover is cover_image_url, not REPORT_ASSET_BASE_URL.
+  is the ENVIRONMENT VARIABLE's name, which the template never sees.
 -->
 <!--[if mso]>
 <style>body,table,td,a,h1,p,span{font-family:Arial,Helvetica,sans-serif !important;}</style>
@@ -88,7 +103,7 @@
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                 <tr>
                   <td class="stack stack-pad" valign="top" width="200" style="width:200px;padding:0 24px 0 0;">
-                    <img src=" https://infyappseodashboard.website/report-covers/" alt="{{report_month}} SEO Report cover" width="200" style="display:block;width:200px;height:auto;border:1px solid #D6E6F2;">
+                    <img src="https://infyappseodashboard.website/api/reports/covers/{{cover_filename}}" alt="{{report_month}} SEO Report cover" width="200" style="display:block;width:200px;height:auto;border:1px solid #D6E6F2;">
                   </td>
                   <td class="stack" valign="top" style="padding:0;">
                     <p style="margin:0 0 16px 0;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;mso-line-height-rule:exactly;letter-spacing:1.8px;text-transform:uppercase;color:#3D8FC0;">

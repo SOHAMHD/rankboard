@@ -103,6 +103,52 @@ def get_report(
     return {"version": version}
 
 
+#: Cover filenames are secrets.token_urlsafe(16) + ".png". Anchored and
+#: character-restricted so nothing resembling a path can get through — no "..",
+#: no slashes, no absolute paths.
+_COVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}\.png$")
+
+
+@router.get("/covers/{name}")
+def get_report_cover(name: str):
+    """Serve a report cover PNG.
+
+    Deliberately unauthenticated: the recipient's mail client fetches this with
+    no cookies or headers from us. The 22-character random filename is the access
+    control, which is the same protection the file had when Apache served it
+    directly out of public_html.
+
+    Serving through the API rather than as an Apache static file removes the
+    dependency on document-root layout, .htaccess rules, hotlink protection and
+    mod_security — any of which can silently 403 the image and leave a broken
+    picture in a client's inbox.
+    """
+    if not _COVER_NAME_RE.match(name):
+        raise HTTPException(404, "Not found.")
+
+    path = Path(REPORT_ASSET_DIR) / name
+    try:
+        # resolve() then containment check: belt and braces against traversal.
+        base = Path(REPORT_ASSET_DIR).resolve()
+        resolved = path.resolve()
+        if base not in resolved.parents:
+            raise HTTPException(404, "Not found.")
+        data = resolved.read_bytes()
+    except (OSError, ValueError):
+        raise HTTPException(404, "Not found.")
+
+    return Response(
+        content=data,
+        media_type="image/png",
+        headers={
+            # Immutable: a cover is written once under a random name and never
+            # rewritten, so both mail proxies and browsers can cache it hard.
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Content-Length": str(len(data)),
+        },
+    )
+
+
 @router.get("/{version_id}/pdf")
 def download_report_pdf(
     version_id: int,
@@ -188,6 +234,7 @@ def send_report(
         ])
 
     cover_url = ""
+    _cover_name = ""   # initialised here: the render below can raise before it's set
     try:
         _png = report_pdf.render_cover_png(version, blobs)
         Path(REPORT_ASSET_DIR).mkdir(parents=True, exist_ok=True)
@@ -202,9 +249,17 @@ def send_report(
     html_body = None
     try:
         html_body = _EMAIL_TEMPLATE.read_text(encoding="utf-8")
+        # The cover filename is random per send, so it can never be hardcoded in
+        # the template. Two placeholders are supported:
+        #   {{cover_image_url}} — the whole URL, built from REPORT_ASSET_BASE_URL
+        #   {{cover_filename}}  — just the file name, for templates that prefer to
+        #                         hardcode their own base URL
+        cover_filename = _cover_name if cover_url else ""
         if not cover_url:
+            # Drop the <img> entirely when there's no cover, so the email shows no
+            # broken picture. Matches whichever placeholder the template uses.
             html_body = re.sub(
-                r"<img[^>]*\{\{cover_image_url\}\}[^>]*>", "", html_body
+                r"<img[^>]*\{\{cover_(?:image_url|filename)\}\}[^>]*>", "", html_body
             )
         for _key, _val in {
             "client_name": project_name,
@@ -212,6 +267,7 @@ def send_report(
             "report_month": period_label,
             "period_range": period_range,
             "cover_image_url": cover_url,
+            "cover_filename": cover_filename,
             "logo_url": EMAIL_LOGO_URL,
             "unsubscribe_url": UNSUBSCRIBE_URL,
             "year": str(datetime.now().year),
