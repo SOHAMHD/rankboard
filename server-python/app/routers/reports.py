@@ -210,8 +210,14 @@ def send_report(
     proj = db.execute(
         "SELECT name, client_name, domain FROM projects WHERE id = ?", (version["projectId"],)
     ).fetchone()
-    # Prefer the explicit client name; fall back to the project name.
+    # Two different names, used in two different places:
+    #   project_name  - who the mail is addressed to. client_name is the contact
+    #                   person ("Dr. Anuranjan"), so this drives the greeting.
+    #   company_name  - the business the report is about ("MindBrainTMS"). This is
+    #                   what belongs in the subject line and the body sentence; a
+    #                   person's name there reads as though the report is about them.
     project_name = (proj["client_name"] or proj["name"]) if proj else "your project"
+    company_name = (proj["name"] or proj["client_name"]) if proj else "your project"
     client_domain = (proj["domain"] if proj else "") or ""
     period = version.get("periodKey") or ""
 
@@ -225,14 +231,14 @@ def send_report(
     if not client_domain:
         client_domain = _hdr.get("domain") or ""
 
-    subject = (body.subject or "").strip() or f"SEO report for {project_name} — {period}".rstrip(" —")
+    subject = (body.subject or "").strip() or f"SEO report for {company_name} — {period}".rstrip(" —")
 
     intro = (body.message or "").strip()
     if intro:
         email_body = intro
     else:
         email_body = "\n\n".join([
-            f"Hi,\n\nPlease find attached the SEO report for {project_name}"
+            f"Hi,\n\nPlease find attached the SEO report for {company_name}"
             + (f" ({period_label})" if period_label else "") + ".",
             "Best regards,\nThe SEO Dashboard team",
         ])

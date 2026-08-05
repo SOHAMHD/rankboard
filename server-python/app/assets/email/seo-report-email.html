@@ -19,8 +19,11 @@
     .h1{font-size:28px !important;line-height:36px !important;}
     .hero{padding-top:32px !important;padding-bottom:34px !important;}
     .body-txt{font-size:15px !important;line-height:25px !important;}
-    .stack{display:block !important;width:100% !important;text-align:left !important;}
+    .stack{display:block !important;width:100% !important;}
     .stack-pad{padding:0 0 16px 0 !important;}
+    /* Phone only: the footer address centres under the centred legal text.
+       Desktop keeps the align="left" on the cell. */
+    .center-sm{text-align:center !important;}
   }
   @media only screen and (max-width:420px){
     .px{padding-left:18px !important;padding-right:18px !important;}
@@ -44,7 +47,7 @@
              
             </td>
             <td align="right" valign="middle" style="font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;mso-line-height-rule:exactly;letter-spacing:1.8px;text-transform:uppercase;color:#3D8FC0;">
-              <img src="https://betadelivery.website/asset-map-capital/images/infy_logo.png.png" alt="InfyApp" width="112" style="display:block;width:112px;max-width:100%;height:auto;border:0;">
+              <img src="https://infyappseodashboard.website/infapp-logo.png" alt="InfyApp" width="112" style="display:block;width:112px;max-width:100%;height:auto;border:0;">
             </td>
           </tr>
         </table>
@@ -54,7 +57,7 @@
     <tr>
       <td class="px hero" bgcolor="#0067A6" style="background-color:#0067A6;padding:44px 44px 46px 44px;">
         <p style="margin:0 0 14px 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:16px;mso-line-height-rule:exactly;letter-spacing:2px;text-transform:uppercase;color:#BFE0F2;">
-          Reporting period &nbsp;&middot;&nbsp; {{period_range}}
+          Reporting period <br>{{period_range}}
         </p>
         <h1 class="h1" style="margin:0 0 18px 0;font-family:Arial,Helvetica,sans-serif;font-size:36px;line-height:44px;mso-line-height-rule:exactly;font-weight:bold;color:#FFFFFF;">
           Your {{report_month}}<br>SEO report is here
@@ -131,7 +134,7 @@
       <td class="px" bgcolor="#00304D" style="background-color:#00304D;padding:30px 44px 24px 44px;">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr>
-            <td class="stack" align="left" valign="top" style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;mso-line-height-rule:exactly;color:#94A3B8;">
+            <td class="stack center-sm" align="left" valign="top" style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;mso-line-height-rule:exactly;color:#94A3B8;">
               <a href="https://infyappdevelopment.com" style="color:#3D8FC0;text-decoration:none;font-weight:bold;">infyappdevelopment.com</a><br>
               211, Lotus Business Park, Rambaugh Lane,<br>Malad West, Mumbai 400064, India
             </td>
