@@ -7,16 +7,29 @@
 <meta name="supported-color-schemes" content="light dark">
 <title>Your Monthly SEO Report</title>
 <style>
+  /* Clients that honour <style>: fluid down to phone widths. Everything below
+     is progressive - the table layout alone still reads on a client that
+     strips this block. */
+  img{border:0;outline:none;text-decoration:none;line-height:100%;-ms-interpolation-mode:bicubic;}
+  table{border-collapse:collapse;}
+  a{word-break:break-word;}
   @media only screen and (max-width:620px){
-    .wrap{width:100% !important;}
-    .px{padding-left:26px !important;padding-right:26px !important;}
-    .h1{font-size:30px !important;line-height:38px !important;}
+    .wrap{width:100% !important;max-width:100% !important;}
+    .px{padding-left:24px !important;padding-right:24px !important;}
+    .h1{font-size:28px !important;line-height:36px !important;}
+    .hero{padding-top:32px !important;padding-bottom:34px !important;}
+    .body-txt{font-size:15px !important;line-height:25px !important;}
     .stack{display:block !important;width:100% !important;text-align:left !important;}
     .stack-pad{padding:0 0 16px 0 !important;}
   }
+  @media only screen and (max-width:420px){
+    .px{padding-left:18px !important;padding-right:18px !important;}
+    .h1{font-size:24px !important;line-height:31px !important;}
+    .hero{padding-top:26px !important;padding-bottom:28px !important;}
+  }
 </style>
 </head>
-<body style="margin:0;padding:0;background-color:#EBF5FB;">
+<body style="margin:0;padding:0;background-color:#EBF5FB;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
 <span style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;mso-hide:all;">Your {{report_month}} SEO report is attached as a PDF &mdash; traffic, keywords, backlinks and next month&rsquo;s targets.</span>
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#EBF5FB;">
 <tr>
@@ -28,10 +41,10 @@
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr>
             <td align="left" valign="middle">
-              <img src="https://betadelivery.website/asset-map-capital/images/infy_logo.png.png" alt="InfyApp" width="112" style="display:block;width:112px;height:auto;border:0;">
+             
             </td>
             <td align="right" valign="middle" style="font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:14px;mso-line-height-rule:exactly;letter-spacing:1.8px;text-transform:uppercase;color:#3D8FC0;">
-              Monthly SEO Report
+              <img src="https://betadelivery.website/asset-map-capital/images/infy_logo.png.png" alt="InfyApp" width="112" style="display:block;width:112px;max-width:100%;height:auto;border:0;">
             </td>
           </tr>
         </table>
@@ -39,7 +52,7 @@
     </tr>
     <!-- Hero band -->
     <tr>
-      <td class="px" bgcolor="#0067A6" style="background-color:#0067A6;padding:44px 44px 46px 44px;">
+      <td class="px hero" bgcolor="#0067A6" style="background-color:#0067A6;padding:44px 44px 46px 44px;">
         <p style="margin:0 0 14px 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:16px;mso-line-height-rule:exactly;letter-spacing:2px;text-transform:uppercase;color:#BFE0F2;">
           Reporting period &nbsp;&middot;&nbsp; {{period_range}}
         </p>
@@ -56,10 +69,10 @@
       <td bgcolor="#FFFFFF" style="background-color:#FFFFFF;">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr>
-            <td class="px" style="padding:38px 44px 0 44px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:27px;mso-line-height-rule:exactly;color:#4A5568;">
-              <p style="margin:0 0 16px 0;color:#00304D;font-size:17px;font-weight:bold;">Dear  {{client_name}},</p>
+            <td class="px body-txt" style="padding:38px 44px 0 44px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:27px;mso-line-height-rule:exactly;color:#4A5568;">
+              <p style="margin:0 0 16px 0;color:#00304D;font-size:17px;font-weight:bold;">Dear {{client_name}},</p>
               <p style="margin:0 0 14px 0;">Please find attached the SEO performance report for {{report_month}}, covering the period {{period_range}}.</p>
-              <p style="margin:0;">The complete report is enclosed as a PDF attachment to this email. If you have any questions about the report, please fell free to contact us.</p>
+              <p style="margin:0;">The complete report is enclosed as a PDF attachment to this email. If you have any questions about the report, please feel free to contact us.</p>
             </td>
           </tr>
           <!-- Cover + what's inside -->
@@ -73,25 +86,25 @@
                     </p>
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                   <tr>
-                    <td width="8" valign="top" style="width:8px;padding:0 10px 0 0;">
+                    <td width="8" valign="top" style="width:8px;padding:7px 10px 0 0;">
                       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="8" style="width:8px;"><tr><td height="8" bgcolor="#0067A6" style="height:8px;background-color:#0067A6;font-size:0;line-height:0;">&nbsp;</td></tr></table>
                     </td>
                     <td valign="top" style="padding:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:21px;mso-line-height-rule:exactly;font-weight:bold;color:#00304D;">Traffic &amp; audience activity</td>
                   </tr>
                   <tr>
-                    <td width="8" valign="top" style="width:8px;padding:0 10px 0 0;">
+                    <td width="8" valign="top" style="width:8px;padding:7px 10px 0 0;">
                       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="8" style="width:8px;"><tr><td height="8" bgcolor="#0067A6" style="height:8px;background-color:#0067A6;font-size:0;line-height:0;">&nbsp;</td></tr></table>
                     </td>
                     <td valign="top" style="padding:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:21px;mso-line-height-rule:exactly;font-weight:bold;color:#00304D;">Keyword ranking movements</td>
                   </tr>
                   <tr>
-                    <td width="8" valign="top" style="width:8px;padding:0 10px 0 0;">
+                    <td width="8" valign="top" style="width:8px;padding:7px 10px 0 0;">
                       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="8" style="width:8px;"><tr><td height="8" bgcolor="#0067A6" style="height:8px;background-color:#0067A6;font-size:0;line-height:0;">&nbsp;</td></tr></table>
                     </td>
                     <td valign="top" style="padding:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:21px;mso-line-height-rule:exactly;font-weight:bold;color:#00304D;">Backlinks &amp; Search Console</td>
                   </tr>
                   <tr>
-                    <td width="8" valign="top" style="width:8px;padding:0 10px 0 0;">
+                    <td width="8" valign="top" style="width:8px;padding:7px 10px 0 0;">
                       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="8" style="width:8px;"><tr><td height="8" bgcolor="#0067A6" style="height:8px;background-color:#0067A6;font-size:0;line-height:0;">&nbsp;</td></tr></table>
                     </td>
                     <td valign="top" style="padding:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:21px;mso-line-height-rule:exactly;font-weight:bold;color:#00304D;">Targets for next month</td>
@@ -118,12 +131,7 @@
       <td class="px" bgcolor="#00304D" style="background-color:#00304D;padding:30px 44px 24px 44px;">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr>
-            <td class="stack stack-pad" align="left" valign="top" width="52%" style="width:52%;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:23px;mso-line-height-rule:exactly;color:#EBF5FB;">
-              <a href="https://infyappdevelopment.com/services/seo" style="color:#EBF5FB;text-decoration:none;font-weight:bold;">Our SEO work</a><br>
-              <a href="https://infyappdevelopment.com/contact" style="color:#EBF5FB;text-decoration:none;font-weight:bold;">Contact</a><br>
-              <a href="https://infyappdevelopment.com/privacy" style="color:#EBF5FB;text-decoration:none;font-weight:bold;">Privacy</a>
-            </td>
-            <td class="stack" align="right" valign="top" width="48%" style="width:48%;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;mso-line-height-rule:exactly;color:#94A3B8;">
+            <td class="stack" align="left" valign="top" style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;mso-line-height-rule:exactly;color:#94A3B8;">
               <a href="https://infyappdevelopment.com" style="color:#3D8FC0;text-decoration:none;font-weight:bold;">infyappdevelopment.com</a><br>
               211, Lotus Business Park, Rambaugh Lane,<br>Malad West, Mumbai 400064, India
             </td>
@@ -136,7 +144,6 @@
       <td class="px" align="center" bgcolor="#00304D" style="background-color:#00304D;padding:0 44px 28px 44px;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:19px;mso-line-height-rule:exactly;color:#94A3B8;">
         You&rsquo;re receiving this because InfyApp manages SEO for {{client_domain}}<br>
         &copy; {{year}} InfyApp. All rights reserved. &middot;
-        <a href="{{unsubscribe_url}}" style="color:#94A3B8;text-decoration:underline;">Unsubscribe</a>
       </td>
     </tr>
   </table>

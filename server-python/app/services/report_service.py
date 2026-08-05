@@ -194,10 +194,16 @@ def gather(
             gsc_section, gsc_outcome = gsc_future.result()
 
     backlinks_data = backlink_service.backlinks_for_month(db, project_id, period_key)
+    # The previous month's count as well, so the Key Metrics tile can show a
+    # month-over-month comparison. It used to be hard-coded as absent, which made
+    # New backlinks the only metric in that grid with no previous figure.
+    prev_backlinks_data = backlink_service.backlinks_for_month(db, project_id, prev_period)
     backlinks_section = {
         "source": "backlinks",
         "month": period_key,
         "count": backlinks_data["count"],
+        "prev_month": prev_period,
+        "prev_count": prev_backlinks_data["count"],
         "items": [{"url": u} for u in backlinks_data["urls"]],
     }
 

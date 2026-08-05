@@ -460,6 +460,9 @@ def build_document(gathered: dict) -> dict:
     moz_present = present("moz")
     kw_present = present("keywords")
     bl_count = bl.get("count", 0)
+    # Absent on blobs frozen before prev_count was recorded, which correctly
+    # leaves those reports with no comparison rather than inventing a zero.
+    bl_prev_count = bl.get("prev_count")
 
     ga4_tbl = {
         key: _ga4_table(key, title, dim_labels, metric_keys, ga4, ga4_present, reason("ga4"))
@@ -479,7 +482,8 @@ def build_document(gathered: dict) -> dict:
             "maturingNotice": maturing_notice,
         },
         _progress_summary(period_label, prev_label, ga4, ga4_present, moz, moz_present, bl_count),
-        _key_metrics_grid(ga4, ga4_present, reason("ga4"), moz, moz_present, reason("moz"), bl_count),
+        _key_metrics_grid(ga4, ga4_present, reason("ga4"), moz, moz_present, reason("moz"),
+                          bl_count, bl_prev_count),
         _achievements(kw, kw_present, period_label),
         _moz_grid(moz, moz_present, reason("moz")),
         _notes_slot("ga4-overview-notes", "GA4 Notes"),
@@ -532,7 +536,8 @@ def build_document_from_data(data: dict | None) -> dict:
     return build_document({"blob": data})
 
 
-def _key_metrics_grid(ga4, ga4_present, ga4_reason, moz, moz_present, moz_reason, bl_count):
+def _key_metrics_grid(ga4, ga4_present, ga4_reason, moz, moz_present, moz_reason,
+                      bl_count, bl_prev_count=None):
     cur = _totals(_ga4_month_sections(ga4, "report_month"), "users_overview")
     prev = _totals(_ga4_month_sections(ga4, "prior_month"), "users_overview")
     moz_deltas = (moz or {}).get("deltas", {}) if moz else {}
@@ -548,7 +553,7 @@ def _key_metrics_grid(ga4, ga4_present, ga4_reason, moz, moz_present, moz_reason
         _metric("sessions", "Sessions", "count", cur.get("sessions"), prev.get("sessions")),
         _metric("returningUsers", "Returning users", "count", cur.get("returningUsers"), prev.get("returningUsers")),
         _metric("domain_authority", "Domain Authority", "count", da, da_prev, da_delta),
-        _metric("new_backlinks", "New backlinks", "count", bl_count, None, None),
+        _metric("new_backlinks", "New backlinks", "count", bl_count, bl_prev_count),
     ]
     available = ga4_present or moz_present
     unavailable_reason = None if available else (ga4_reason or moz_reason)

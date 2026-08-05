@@ -73,9 +73,9 @@ def bar_chart(points, active_key="activeUsers", new_key="newUsers", month_label=
         parts.append(f'<rect x="{cx+1:.1f}" y="{y(nw):.1f}" width="{bw:.1f}" height="{yb-y(nw):.1f}" fill="#416180"/>')
         lbl = esc(p.get("label") or (i + 1))
         parts.append(f'<text x="{cx:.1f}" y="246" text-anchor="middle" font-size="10" fill="#5d5d60" font-family="Barlow, sans-serif">{lbl}</text>')
-    parts.append(f'<text transform="rotate(-90 13 122)" x="13" y="122" text-anchor="middle" font-size="10" fill="#5d5d60" font-family="Barlow, sans-serif">Users (Y-axis)</text>')
+    parts.append(f'<text transform="rotate(-90 13 122)" x="13" y="122" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1d1f20" font-family="Barlow, sans-serif">Users (Y-axis)</text>')
     xaxis = f"Date — {month_label}" if month_label else "Date"
-    parts.append(f'<text x="353" y="268" text-anchor="middle" font-size="10" fill="#5d5d60" font-family="Barlow, sans-serif">{esc(xaxis)} (X-axis)</text>')
+    parts.append(f'<text x="353" y="268" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1d1f20" font-family="Barlow, sans-serif">{esc(xaxis)} (X-axis)</text>')
     return (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:680px;display:block" role="img" aria-label="Daily users">'
             + "".join(parts) + "</svg>")
 
@@ -129,6 +129,32 @@ def card(kicker="", title="", meta="", body="", title_size=24, body_html="") -> 
     return f'<div class="card blueprint">{inner}</div>'
 
 
+#: Only http(s) is turned into a live href. Backlink and post URLs are typed in
+#: by an operator, so a "javascript:" value must not be emitted as a link.
+_HREF_RE = re.compile(r"^https?://", re.I)
+
+
+def _safe_href(url) -> str:
+    u = (url or "").strip()
+    return u if _HREF_RE.match(u) else ""
+
+
+def _link(url, *, underline=False) -> str:
+    """A real <a> so the PDF gets a clickable link annotation.
+
+    Plain-text URLs are only tappable in viewers that auto-detect them (desktop
+    Acrobat does; phone viewers generally do not), so the anchor is what makes
+    them work everywhere. Styling stays neutral by default because a whole
+    column of underlined URLs reads as noise at 100+ rows.
+    """
+    u = _safe_href(url)
+    if not u:
+        return esc(url or "—")
+    deco = "underline" if underline else "none"
+    return (f'<a href="{esc(u)}" style="color:inherit;text-decoration:{deco};'
+            f'word-break:break-all">{esc(u)}</a>')
+
+
 def table(headers, rows) -> str:
     th = "".join(f"<th>{esc(h)}</th>" for h in headers)
     body = "".join("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in r) + "</tr>" for r in rows)
@@ -140,8 +166,7 @@ def _posts_table(items) -> str:
     for it in items or []:
         url = (it or {}).get("url") or ""
         title = (it or {}).get("title") or "—"
-        link = (f'<a href="{esc(url)}" style="color:#424242;text-decoration:underline;word-break:break-all">{esc(url)}</a>'
-                if url else "—")
+        link = _link(url, underline=True) if url else "—"
         trs.append(f"<tr><td>{esc(title)}</td><td>{link}</td></tr>")
     return ('<table class="table table-left"><thead><tr><th>Title</th><th>Link</th></tr></thead>'
             f'<tbody>{"".join(trs)}</tbody></table>')
@@ -673,7 +698,7 @@ def render_document(version, blobs=None, part="all") -> str:
         if geo:
             body.append(_table_block(geo))
             body.append(
-                '<p class="text-muted" style="font-size:11.5px;line-height:1.5;margin-top:var(--space-3);max-width:48em">'
+                '<p class="text-muted" style="font-size:16px;line-height:1.5;margin-top:var(--space-3); color:#000000; max-width:48em">'
                 '(<strong>Note:</strong> Engaged sessions are visits that lasted 10+ seconds, triggered a key '
                 'event, or included 2 or more page views; Engagement rate is the share of sessions that were '
                 'engaged; Avg. engagement is the average engagement time per active user.)</p>')
@@ -693,7 +718,7 @@ def render_document(version, blobs=None, part="all") -> str:
                 # made this the only table in the report that broke the pattern.
                 landing.append(_table_block(land))
                 landing.append(
-                    '<p class="text-muted" style="font-size:11.5px;line-height:1.5;margin-top:var(--space-3);max-width:48em">'
+                    '<p class="text-muted" style="font-size:16px;line-height:1.5;margin-top:var(--space-3);max-width:48em">'
                     '(<strong>Note:</strong> “/” is the website home page; other rows show the page path — '
                     'e.g. /contact-us/ is the Contact Us page.)</p>')
             body.append('<div style="break-inside:avoid">' + "".join(landing) + '</div>')
@@ -719,7 +744,7 @@ def render_document(version, blobs=None, part="all") -> str:
             body.append('<h4 style="margin-top:var(--space-6);margin-bottom:var(--space-3)">Performance trend</h4>')
             body.append(_gsc_chart(gsc_trend))
             body.append(
-                '<p class="text-muted" style="font-size:11.5px;line-height:1.5;margin-top:var(--space-3);max-width:48em">'
+                '<p class="text-muted" style="font-size:16px;line-height:1.5;margin-top:var(--space-3);color:#000000;max-width:48em">'
                 '(<strong>Note:</strong> Each chart tracks one Search Console dimension over the period — '
                 '<strong>Clicks</strong> is the number of times users clicked through to the site from Google search; '
                 '<strong>Impressions</strong> is how many times the site appeared in search results; '
@@ -741,9 +766,13 @@ def render_document(version, blobs=None, part="all") -> str:
                     + f'<p style="max-width:38em">This month, we acquired <strong>{esc(cnt)}</strong> backlinks.</p>')
         if bl_items:
             body.append('<h4 style="margin-top:var(--space-6)">Backlink placements</h4>')
-            rows = [[i + 1, it.get("url")] for i, it in enumerate(bl_items)]
-            body.append(table(["Sr No.", "Backlinks list"], rows)
-                        .replace('class="table"', 'class="table table-left table-bl"', 1))
+            trs = "".join(
+                f'<tr><td>{i + 1}</td><td>{_link((it or {}).get("url"))}</td></tr>'
+                for i, it in enumerate(bl_items))
+            body.append(
+                '<table class="table table-left table-bl">'
+                '<thead><tr><th>Sr No.</th><th>Backlinks list</th></tr></thead>'
+                f'<tbody>{trs}</tbody></table>')
         body.append(ex(8))
 
     blogs = [i for i in (g("posts-blogs") or {}).get("items", []) if _included(i)]
@@ -959,8 +988,8 @@ def _mini_metric_chart(points, key, label, type_):
             parts.append(f'<line x1="{cx:.1f}" y1="{yb}" x2="{cx:.1f}" y2="{yb+3}" stroke="#7a7a7d" stroke-width="1"/>')
             parts.append(f'<text x="{cx:.1f}" y="{yb+12}" text-anchor="{anchor}" font-size="7.5" fill="#98989b">{esc(_fx(points[i].get("x")))}</text>')
         midy = (yt + yb) / 2
-        parts.append(f'<text x="{(x0+xr)/2:.0f}" y="{H-3}" text-anchor="middle" font-size="8" fill="#7a7a7d" font-family="Barlow,sans-serif">Date (X-axis)</text>')
-        parts.append(f'<text transform="rotate(-90 10 {midy:.0f})" x="10" y="{midy:.0f}" text-anchor="middle" font-size="8" fill="#7a7a7d" font-family="Barlow,sans-serif">{esc(label)} (Y-axis)</text>')
+        parts.append(f'<text x="{(x0+xr)/2:.0f}" y="{H-3}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1d1f20" font-family="Barlow,sans-serif">Date (X-axis)</text>')
+        parts.append(f'<text transform="rotate(-90 10 {midy:.0f})" x="10" y="{midy:.0f}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1d1f20" font-family="Barlow,sans-serif">{esc(label)} (Y-axis)</text>')
     return ('<div class="card blueprint" style="padding:8px 10px 6px">'
             '<i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>'
             f'<svg viewBox="0 0 {W} {H}" width="100%" style="display:block">{"".join(parts)}</svg></div>')

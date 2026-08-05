@@ -14,6 +14,7 @@ import {
   LayoutGrid,
 } from "lucide-react";
 import { api } from "../api";
+import { useToast } from "../toast.jsx";
 import { ErrorNote, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { createBlobNode } from "../lib/blobNode";
 import DownloadPdfButton from "../lib/DownloadPdfButton";
@@ -174,6 +175,38 @@ function TargetsGridEditor({ block, onSetValue }) {
   );
 }
 
+// The logo is rendered at most 230x56 CSS px (cover), 200x40 (running header).
+// Storing it at native resolution is what pushed content_json past the server's
+// 500,000-char cap and produced "Report document is too large." on save. ~3x the
+// largest print size is plenty sharp, and LOGO_MAX_CHARS keeps the encoded data
+// URI to a small fraction of the document budget.
+const LOGO_MAX_W = 720;
+const LOGO_MAX_H = 200;
+const LOGO_MAX_CHARS = 120000;
+
+function encodeScaled(src, sx, sy, sw, sh, scale) {
+  const o = document.createElement("canvas");
+  o.width = Math.max(1, Math.round(sw * scale));
+  o.height = Math.max(1, Math.round(sh * scale));
+  const ctx = o.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, o.width, o.height);
+  return o.toDataURL("image/png");
+}
+
+// Fit inside LOGO_MAX_W/H, then keep shrinking while the encoded string is over
+// budget (a photo-like logo can still be heavy at 720px wide).
+function encodeWithinBudget(src, sx, sy, sw, sh) {
+  let scale = Math.min(1, LOGO_MAX_W / sw, LOGO_MAX_H / sh);
+  let out = encodeScaled(src, sx, sy, sw, sh, scale);
+  while (out.length > LOGO_MAX_CHARS && scale > 0.08) {
+    scale *= 0.75;
+    out = encodeScaled(src, sx, sy, sw, sh, scale);
+  }
+  return out;
+}
+
 function trimLogo(dataUrl) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -200,15 +233,12 @@ function trimLogo(dataUrl) {
             }
           }
         }
-        if (!found) return resolve(dataUrl);
+        if (!found) return resolve(encodeWithinBudget(c, 0, 0, c.width, c.height));
         const pad = 2;
         left = Math.max(0, left - pad); top = Math.max(0, top - pad);
         right = Math.min(c.width - 1, right + pad); bottom = Math.min(c.height - 1, bottom + pad);
         const w = right - left + 1, h = bottom - top + 1;
-        const o = document.createElement("canvas");
-        o.width = w; o.height = h;
-        o.getContext("2d").drawImage(c, left, top, w, h, 0, 0, w, h);
-        resolve(o.toDataURL("image/png"));
+        resolve(encodeWithinBudget(c, left, top, w, h));
       } catch (e) {
         resolve(dataUrl);
       }
@@ -219,12 +249,25 @@ function trimLogo(dataUrl) {
 }
 
 function HeaderEditor({ block, onSetLogo }) {
+  const toast = useToast();
   const onFile = (e) => {
     const f = e.target.files && e.target.files[0];
     if (!f || !f.type.startsWith("image/")) return;
     const reader = new FileReader();
     reader.onload = () => {
-      trimLogo(reader.result).then((trimmed) => onSetLogo(block.id, trimmed));
+      trimLogo(reader.result).then((trimmed) => {
+        // trimLogo falls back to the untouched data URI when the browser cannot
+        // decode the image. Storing that would fail the save with an unhelpful
+        // "too large", so say so here instead.
+        if (typeof trimmed === "string" && trimmed.length > LOGO_MAX_CHARS * 2) {
+          toast.error(
+            "That image couldn't be resized. Save it as a PNG or JPG under about 2 MB and try again.",
+            { title: "Logo too large" }
+          );
+          return;
+        }
+        onSetLogo(block.id, trimmed);
+      });
     };
     reader.readAsDataURL(f);
     e.target.value = "";
