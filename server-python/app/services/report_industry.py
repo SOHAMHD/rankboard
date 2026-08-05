@@ -108,7 +108,13 @@ def donut(slices, total_label="", center_value=None) -> str:
             + "</svg>")
 
 
-def card(kicker="", title="", meta="", body="", title_size=24) -> str:
+def card(kicker="", title="", meta="", body="", title_size=24, body_html="") -> str:
+    """body is escaped here; body_html is inserted as-is.
+
+    Pass body_html only with output from _inline(), which escapes the text and
+    emits a fixed whitelist of tags. It is how the Key achievements cards keep
+    bold/underline/colour marks that plain `body` would flatten.
+    """
     inner = '<i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>'
     if kicker:
         inner += f'<div class="card-kicker">{esc(kicker)}</div>'
@@ -116,7 +122,9 @@ def card(kicker="", title="", meta="", body="", title_size=24) -> str:
         inner += f'<div class="card-title" style="font-size:{title_size}px">{esc(title)}</div>'
     if meta:
         inner += f'<div class="card-meta">{esc(meta)}</div>'
-    if body:
+    if body_html:
+        inner += f'<p class="card-body">{body_html}</p>'
+    elif body:
         inner += f'<p class="card-body">{esc(body)}</p>'
     return f'<div class="card blueprint">{inner}</div>'
 
@@ -274,6 +282,16 @@ def _rich(block):
 
 
 def _list_items(block):
+    """Split each Key achievements bullet into (title, body_html).
+
+    ITALIC marks the title. Bold used to, but the operator needs bold available
+    as ordinary emphasis inside the sentence, so the roles are now separate:
+    italic spans become the card heading, everything else becomes the body and
+    keeps its marks (bold/underline/colour) via _inline().
+
+    Only the achievements block reaches this function, so the rule is scoped to
+    that section and no other narrative is affected.
+    """
     doc = (block or {}).get("doc")
     pairs = []
     if isinstance(doc, dict):
@@ -282,28 +300,56 @@ def _list_items(block):
                 for li in nd.get("content") or []:
                     kids = li.get("content") or []
                     spans = (kids[0].get("content") if kids else None) or []
-                    title, rest = "", ""
+                    title_parts, body_spans = [], []
                     for sp in spans:
-                        txt = sp.get("text") or ""
-                        if any(m.get("type") == "bold" for m in sp.get("marks") or []):
-                            title += txt
+                        is_italic = (sp.get("type") == "text"
+                                     and any(m.get("type") == "italic"
+                                             for m in sp.get("marks") or []))
+                        if is_italic:
+                            title_parts.append(sp.get("text") or "")
                         else:
-                            rest += txt
-                    title = title.strip().rstrip(":").strip()
-                    rest = rest.strip().lstrip(":").strip()
-                    if not title and ":" in rest:
-                        lead, tail = rest.split(":", 1)
-                        if len(lead.split()) <= 6:
-                            title, rest = lead.strip(), tail.strip()
-                    if title or rest:
-                        pairs.append((title or "Highlight", rest))
+                            body_spans.append(sp)
+                    title = "".join(title_parts).strip().rstrip(":").strip()
+
+                    # No italic run: fall back to a short "Label: text" lead, as
+                    # before. Split the span list at the colon rather than the
+                    # joined string so marks after it survive.
+                    if not title:
+                        joined = "".join(sp.get("text") or "" for sp in body_spans)
+                        lead = joined.split(":", 1)[0] if ":" in joined else ""
+                        if lead.strip() and len(lead.split()) <= 6:
+                            for idx, sp in enumerate(body_spans):
+                                txt = sp.get("text") or ""
+                                if ":" not in txt:
+                                    continue
+                                tail = txt.split(":", 1)[1]
+                                head = [{**sp, "text": tail}] if tail else []
+                                body_spans = head + body_spans[idx + 1:]
+                                title = lead.strip()
+                                break
+
+                    # Trim the body's outer whitespace (and any leading colon)
+                    # on the spans, not on the rendered HTML: when the first span
+                    # carries a mark the space sits inside the tag where strip()
+                    # cannot reach it.
+                    body_spans = [dict(sp) for sp in body_spans]
+                    if body_spans and body_spans[0].get("type") == "text":
+                        lead = (body_spans[0].get("text") or "").lstrip()
+                        body_spans[0]["text"] = lead.lstrip(":").lstrip()
+                    if body_spans and body_spans[-1].get("type") == "text":
+                        body_spans[-1]["text"] = (body_spans[-1].get("text") or "").rstrip()
+                    body_html = _inline(body_spans).strip()
+                    if title or body_html:
+                        pairs.append((title or "Highlight", body_html))
     if not pairs:
+        # Legacy plain-string bullets carry no marks, so they must be escaped
+        # here now that the second element is inserted as HTML.
         for b in (block or {}).get("bullets") or []:
             if ":" in b:
                 t, r = b.split(":", 1)
-                pairs.append((t.strip(), r.strip()))
+                pairs.append((t.strip(), esc(r.strip())))
             else:
-                pairs.append(("Highlight", b))
+                pairs.append(("Highlight", esc(b)))
     return pairs
 
 
@@ -551,7 +597,7 @@ def render_document(version, blobs=None, part="all") -> str:
     pairs = _list_items(g("achievements"))
     if pairs:
         body.append('<h4 style="margin-top:var(--space-8)">Key achievements</h4>')
-        cc = "".join(card(title=("" if t == "Highlight" else t), body=b, title_size=16)
+        cc = "".join(card(title=("" if t == "Highlight" else t), body_html=b, title_size=16)
                      for t, b in pairs[:8])
         body.append(f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-top:var(--space-3)">{cc}</div>')
     body.append(ex(1))

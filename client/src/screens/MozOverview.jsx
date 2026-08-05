@@ -174,7 +174,7 @@ export function MozOverview({ project, user }) {
               )}
             </span>
             <a
-              href="https://moz.com"
+              href=""
               target="_blank"
               rel="noopener noreferrer"
               className="text-stone-400 hover:text-orange-600 transition-colors"
