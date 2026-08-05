@@ -148,7 +148,7 @@ const [month, setMonth] = useState(currentMonth);
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && add()}
-            placeholder="Title (optional)"
+            placeholder="Title"
             className={`${INPUT_CLS} sm:w-56`}
           />
                      <input

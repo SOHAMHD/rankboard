@@ -641,7 +641,11 @@ def render_document(version, blobs=None, part="all") -> str:
             if _rich(g("ga4-landing-notes")):
                 landing.append(f'<div style="max-width:38em;margin-bottom:var(--space-3)">{_rich(g("ga4-landing-notes"))}</div>')
             if land:
-                landing.append(_table_block(land).replace('class="table"', 'class="table table-left"', 1))
+                # Default .table alignment: first column left, every other column
+                # centered — same as the Geographic table above it. The old
+                # table-left override left-aligned the numeric columns too, which
+                # made this the only table in the report that broke the pattern.
+                landing.append(_table_block(land))
                 landing.append(
                     '<p class="text-muted" style="font-size:11.5px;line-height:1.5;margin-top:var(--space-3);max-width:48em">'
                     '(<strong>Note:</strong> “/” is the website home page; other rows show the page path — '
