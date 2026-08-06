@@ -23,6 +23,34 @@ from ..services import report_service
 from ..services import report_pdf
 from ..services import email_service
 
+
+_MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"]
+
+
+def _month_year_label(period_key, period_label: str = "") -> str:
+    """Human month for the email subject: '2026-07' -> 'July 2026'.
+
+    The stored label already spells the month out, so it wins whenever it
+    contains letters. Only when it is missing (or is itself numeric) do we
+    parse the key, accepting either order — '2026-07' and '07-2026' both work.
+    """
+    lbl = (period_label or "").strip()
+    if any(c.isalpha() for c in lbl):
+        return lbl
+    parts = [p for p in re.split(r"[-/_. ]+", str(period_key or "").strip()) if p]
+    if len(parts) >= 2:
+        try:
+            a, b = int(parts[0]), int(parts[1])
+        except ValueError:
+            a = b = None
+        if a is not None:
+            month, year = (b, a) if len(parts[0]) == 4 else (a, b)
+            if 1 <= month <= 12 and year > 0:
+                return f"{_MONTH_NAMES[month]} {year:04d}"
+    return lbl or str(period_key or "")
+
+
 router = APIRouter()
 
 _EMAIL_TEMPLATE = (
@@ -231,7 +259,10 @@ def send_report(
     if not client_domain:
         client_domain = _hdr.get("domain") or ""
 
-    subject = (body.subject or "").strip() or f"SEO report for {company_name} — {period}".rstrip(" —")
+    # Subject shows the month by name ("July 2026"), not the raw period key
+    # ("2026-07"), so it reads the same way as the PDF header and body copy.
+    subject_period = _month_year_label(period, period_label)
+    subject = (body.subject or "").strip() or f"SEO report for {company_name} — {subject_period}".rstrip(" —")
 
     intro = (body.message or "").strip()
     if intro:

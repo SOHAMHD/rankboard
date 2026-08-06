@@ -119,6 +119,17 @@ h5 { font-size: 16px; }
 h6 { font-size: 13px; }
 h6 { letter-spacing: 0.08em; text-transform: uppercase; }
 p { margin: 0 0 var(--space-3); }
+
+/* ── Body copy ─────────────────────────────────────────────────────────────
+   ONE size for every section narrative, and one for every caption. Section
+   paragraphs used to each carry their own inline font-size, which is how
+   Section 01 and Section 02 drifted apart. Change the size here, once. */
+.narrative { font-size: 16px; line-height: 1.55; max-width: 38em; }
+.narrative.wide { max-width: 48em; }
+.narrative p, .narrative li { font-size: inherit; line-height: inherit; }
+.caption { font-size: 12.5px; line-height: 1.5; max-width: 40em;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+.caption p, .caption li { font-size: inherit; line-height: inherit; }
 /* Rich edited content (Strategy & Notes, section notes): faithful bullet /
    ordered lists, nested sub-lists, multi-line items, and author blank lines. */
 ul, ol { margin: 0 0 var(--space-3); padding-left: 1.4em; }

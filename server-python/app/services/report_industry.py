@@ -610,12 +610,12 @@ def render_document(version, blobs=None, part="all") -> str:
 
     def ex(n):
         _ex_used.add(n)
-        return "".join(f'<div style="max-width:40em;margin-top:var(--space-3)">{h}</div>'
+        return "".join(f'<div class="narrative" style="margin-top:var(--space-3)">{h}</div>'
                        for h in extras.get(n, []))
     if maturing:
-        body.append(f'<p class="text-muted" style="font-style:italic;font-size:12.5px;max-width:38em">{esc(maturing)}</p>')
+        body.append(f'<p class="caption" style="font-style:italic">{esc(maturing)}</p>')
     if _rich(g("progress-summary")):
-        body.append(f'<div style="font-size:16px;max-width:38em;margin-top:var(--space-3)">{_rich(g("progress-summary"))}</div>')
+        body.append(f'<div class="narrative" style="margin-top:var(--space-3)">{_rich(g("progress-summary"))}</div>')
     cards = _metric_cards(_with_manual_fallbacks(g("key-metrics"), g("targets")), prev_label)
     if cards:
         body.append(f'<div style="margin-top:var(--space-6)"><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-3)">{cards}</div></div>')
@@ -629,7 +629,7 @@ def render_document(version, blobs=None, part="all") -> str:
 
     body.append(section(2, "Audience Overview", True))
     if _rich(g("ga4-overview-notes")):
-        body.append(f'<div style="max-width:38em">{_rich(g("ga4-overview-notes"))}</div>')
+        body.append(f'<div class="narrative">{_rich(g("ga4-overview-notes"))}</div>')
     ocards = _metric_cards(g("ga4-overview"), prev_label)
     if ocards:
         body.append(f'<div style="margin-top:var(--space-4)"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-3)">{ocards}</div></div>')
@@ -644,7 +644,7 @@ def render_document(version, blobs=None, part="all") -> str:
         body.append('<div class="card blueprint" style="padding:var(--space-4)"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>'
                     + bar_chart(pts, month_label=period_label) + '</div>')
     if _rich(g("ga4-graph-notes")):
-        body.append(f'<div class="text-muted" style="font-size:12.5px;margin-top:var(--space-3);max-width:40em">{_rich(g("ga4-graph-notes"))}</div>')
+        body.append(f'<div class="caption" style="margin-top:var(--space-3)">{_rich(g("ga4-graph-notes"))}</div>')
     body.append(ex(2))
 
     ch = g("ga4-by_channel")
@@ -673,7 +673,7 @@ def render_document(version, blobs=None, part="all") -> str:
             for s, c in zip(slices, _PIE_COLORS * 3))
         channel_notes = _rich(g("ga4-channel-notes"))
         body.append(
-            (f'<div style="max-width:44em;margin-bottom:var(--space-4)">{channel_notes}</div>'
+            (f'<div class="narrative wide" style="margin-bottom:var(--space-4)">{channel_notes}</div>'
              if channel_notes.strip() else "")
             + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-8);align-items:center">'
             + f'<div style="display:flex;flex-direction:column;gap:9px">{legend}</div>'
@@ -684,7 +684,7 @@ def render_document(version, blobs=None, part="all") -> str:
         body.append(f'<div style="margin-top:var(--space-4)">{_table_block(ch)}</div>')
         if _center is not None and total > (_num(_center) or 0):
             body.append(
-                '<div class="text-muted" style="font-size:11.5px;margin-top:var(--space-2);max-width:46em">'
+                '<div class="caption" style="margin-top:var(--space-2)">'
                 'Note: channel rows add up to more than the period total because a visitor who '
                 'arrives through more than one channel is counted in each channel, but only once '
                 'in the overall total.</div>'
@@ -694,11 +694,11 @@ def render_document(version, blobs=None, part="all") -> str:
     if geo or land:
         body.append(section(4, "Geographic Overview & Top Landing Pages", True))
         if _rich(g("ga4-cities-notes")):
-            body.append(f'<div style="max-width:38em">{_rich(g("ga4-cities-notes"))}</div>')
+            body.append(f'<div class="narrative">{_rich(g("ga4-cities-notes"))}</div>')
         if geo:
             body.append(_table_block(geo))
             body.append(
-                '<p class="text-muted" style="font-size:16px;line-height:1.5;margin-top:var(--space-3); color:#000000; max-width:48em">'
+                '<p class="narrative wide" style="margin-top:var(--space-3)">'
                 '(<strong>Note:</strong> Engaged sessions are visits that lasted 10+ seconds, triggered a key '
                 'event, or included 2 or more page views; Engagement rate is the share of sessions that were '
                 'engaged; Avg. engagement is the average engagement time per active user.)</p>')
@@ -710,7 +710,7 @@ def render_document(version, blobs=None, part="all") -> str:
             # next page only when it genuinely doesn't fit, which also saves a page.
             landing = ['<h4 style="margin-top:var(--space-6)">Top landing pages</h4>']
             if _rich(g("ga4-landing-notes")):
-                landing.append(f'<div style="max-width:38em;margin-bottom:var(--space-3)">{_rich(g("ga4-landing-notes"))}</div>')
+                landing.append(f'<div class="narrative" style="margin-bottom:var(--space-3)">{_rich(g("ga4-landing-notes"))}</div>')
             if land:
                 # Default .table alignment: first column left, every other column
                 # centered — same as the Geographic table above it. The old
@@ -718,7 +718,7 @@ def render_document(version, blobs=None, part="all") -> str:
                 # made this the only table in the report that broke the pattern.
                 landing.append(_table_block(land))
                 landing.append(
-                    '<p class="text-muted" style="font-size:16px;line-height:1.5;margin-top:var(--space-3);max-width:48em">'
+                    '<p class="narrative wide" style="margin-top:var(--space-3)">'
                     '(<strong>Note:</strong> “/” is the website home page; other rows show the page path — '
                     'e.g. /contact-us/ is the Contact Us page.)</p>')
             body.append('<div style="break-inside:avoid">' + "".join(landing) + '</div>')
@@ -736,7 +736,7 @@ def render_document(version, blobs=None, part="all") -> str:
     if gsc_grid or gsc_trend:
         body.append(section(6, "Search Console Performance", True))
         if _rich(g("gsc-notes")):
-            body.append(f'<div style="max-width:38em">{_rich(g("gsc-notes"))}</div>')
+            body.append(f'<div class="narrative">{_rich(g("gsc-notes"))}</div>')
         gc = _metric_cards(gsc_grid, prev_label)
         if gc:
             body.append(f'<div style="margin:var(--space-6) 0 var(--space-8)"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-4)">{gc}</div></div>')
@@ -744,7 +744,7 @@ def render_document(version, blobs=None, part="all") -> str:
             body.append('<h4 style="margin-top:var(--space-6);margin-bottom:var(--space-3)">Performance trend</h4>')
             body.append(_gsc_chart(gsc_trend))
             body.append(
-                '<p class="text-muted" style="font-size:16px;line-height:1.5;margin-top:var(--space-3);color:#000000;max-width:48em">'
+                '<p class="narrative wide" style="margin-top:var(--space-3)">'
                 '(<strong>Note:</strong> Each chart tracks one Search Console dimension over the period — '
                 '<strong>Clicks</strong> is the number of times users clicked through to the site from Google search; '
                 '<strong>Impressions</strong> is how many times the site appeared in search results; '
@@ -763,7 +763,7 @@ def render_document(version, blobs=None, part="all") -> str:
     if bl:
         cnt = bl.get("count", len(bl_items))
         body.append(section(8, "New Backlinks", True)
-                    + f'<p style="max-width:38em">This month, we acquired <strong>{esc(cnt)}</strong> backlinks.</p>')
+                    + f'<p class="narrative">This month, we acquired <strong>{esc(cnt)}</strong> backlinks.</p>')
         if bl_items:
             body.append('<h4 style="margin-top:var(--space-6)">Backlink placements</h4>')
             trs = "".join(
@@ -789,17 +789,17 @@ def render_document(version, blobs=None, part="all") -> str:
     if tg:
         notes_html = _rich(g("targets-notes"))
         body.append(section(10, "Targets & Goals", True) + _targets_table(tg)
-                    + (f'<h4 style="margin-top:var(--space-6)">Focus areas</h4><div style="max-width:42em">{notes_html}</div>' if notes_html else ""))
+                    + (f'<h4 style="margin-top:var(--space-6)">Focus areas</h4><div class="narrative">{notes_html}</div>' if notes_html else ""))
         body.append(ex(10))
 
     st = g("strategy")
     if st and _rich(st):
         body.append(section(11, "Strategy & Notes", True)
-                    + f'<div style="max-width:42em">{_rich(st)}</div>')
+                    + f'<div class="narrative">{_rich(st)}</div>')
         body.append(ex(11))
 
     leftover = "".join(
-        "".join(f'<div style="max-width:40em;margin-top:var(--space-3)">{h}</div>'
+        "".join(f'<div class="narrative" style="margin-top:var(--space-3)">{h}</div>'
                 for h in extras.get(n, []))
         for n in sorted(extras) if n not in _ex_used
     )
