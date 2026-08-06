@@ -1,0 +1,9 @@
+# Test-only dependencies. Not installed on the server.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   pytest
+#
+# The suite needs no database: the units under test take a connection as an
+# argument and the tests pass a fake (tests/fake_db.py).
+-r requirements.txt
+pytest==8.4.2

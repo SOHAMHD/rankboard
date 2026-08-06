@@ -1,6 +1,16 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ListOrdered, LoaderCircle, Plus, Save, Trash2 } from "lucide-react";
-import { api } from "../api";
+import {
+  Check,
+  Download,
+  FileSpreadsheet,
+  ListOrdered,
+  LoaderCircle,
+  Plus,
+  Save,
+  Trash2,
+  Upload,
+} from "lucide-react";
+import { api, getToken, BASE } from "../api";
 import { Modal, ErrorNote, can, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { useToast } from "../toast.jsx";
 
@@ -8,6 +18,11 @@ const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
+
+//: Mirrors keyword_rank_service.MAX_RANK. The input's maxLength keeps a leaned-on
+//: digit key from producing a value the INTEGER column can't hold.
+const MAX_RANK = 1000;
+const MAX_RANK_DIGITS = String(MAX_RANK).length;
 
 function shortMonthLabel(key) {
   const [y, m] = String(key).split("-");
@@ -64,6 +79,7 @@ const KeywordRow = memo(function KeywordRow({
               onChange={(e) => onCell(row, m, e.target.value)}
               disabled={!canEdit}
               inputMode="numeric"
+              maxLength={MAX_RANK_DIGITS}
               placeholder="—"
               aria-label={`${row.term} rank for ${shortMonthLabel(m)}`}
               className={`w-16 rounded-md border px-2 py-1 text-center text-sm font-data text-stone-900
@@ -98,6 +114,7 @@ export function KeywordsView({ user, project }) {
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
 
   const [dirty, setDirty] = useState({});
@@ -108,15 +125,20 @@ export function KeywordsView({ user, project }) {
   const canAdd = can(user, "addKeyword");
   const canDelete = can(user, "deleteKeyword");
 
-  const load = async () => {
+  // `keepEdits` is for the conflict case: pull in the current numbers so the
+  // next save is checked against them, without throwing away what the user
+  // typed. A plain load() clears the pending edits.
+  const load = async ({ keepEdits = false } = {}) => {
     setError(null);
     try {
       const d = await api(`/projects/${project.id}/keyword-ranks?months=${months.join(",")}`);
       setRows(d.keywords);
-      setDirty({});
+      if (!keepEdits) setDirty({});
+      return true;
     } catch (err) {
       setError(err.message);
-      setRows([]);
+      if (!keepEdits) setRows([]);
+      return false;
     }
   };
 
@@ -124,6 +146,35 @@ export function KeywordsView({ user, project }) {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, monthCount]);
+
+  // Closing the tab or hitting back used to take unsaved cells with it silently.
+  // The browser's own prompt is the only thing that can interrupt those.
+  useEffect(() => {
+    if (!dirtyCount) return undefined;
+    const warn = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirtyCount]);
+
+  // Changing the window reloads the grid, and the reload clears `dirty` — so
+  // without this the selector quietly threw away whatever was typed.
+  const changeMonthCount = (next) => {
+    if (next === monthCount) return;
+    if (
+      dirtyCount &&
+      !window.confirm(
+        `You have ${dirtyCount} unsaved change${dirtyCount === 1 ? "" : "s"}. ` +
+          "Changing the date range will discard them. Continue?"
+      )
+    ) {
+      return;
+    }
+    setMonthCount(next);
+  };
 
   // `dirty` is a flat "<id>:<month>" map, which every cell had to consult — so a
   // single keystroke changed a value every row depended on and React reconciled
@@ -142,9 +193,20 @@ export function KeywordsView({ user, project }) {
 
   // Stable identity so KeywordRow's memo isn't defeated by a new handler each render.
   const setCell = useCallback((row, month, raw) => {
-    const clean = raw.replace(/[^0-9]/g, "");
+    const clean = raw.replace(/[^0-9]/g, "").slice(0, MAX_RANK_DIGITS);
     setDirty((d) => ({ ...d, [`${row.id}:${month}`]: clean }));
   }, []);
+
+  // What the grid last loaded for a cell — sent as `expected` so the server can
+  // reject a save that would overwrite someone else's edit.
+  const loadedValue = useCallback(
+    (keywordId, month) => {
+      const row = (rows || []).find((r) => String(r.id) === String(keywordId));
+      const v = row?.ranks?.[month];
+      return v === undefined || v === null ? null : v;
+    },
+    [rows]
+  );
 
   const save = async () => {
     if (!dirtyCount || saving) return;
@@ -153,17 +215,43 @@ export function KeywordsView({ user, project }) {
     try {
       const cells = Object.entries(dirty).map(([k, v]) => {
         const [id, month] = k.split(":");
-        return { keywordId: Number(id), month, rank: v === "" ? null : Number(v) };
+        const rank = v === "" ? null : Number(v);
+        return {
+          keywordId: Number(id),
+          month,
+          rank,
+          expected: loadedValue(id, month),
+        };
       });
-      const d = await api(`/projects/${project.id}/keyword-ranks`, { method: "PUT", body: { cells } });
+      const tooBig = cells.find((c) => c.rank !== null && c.rank > MAX_RANK);
+      if (tooBig) {
+        throw new Error(`Rank must be ${MAX_RANK} or lower — check ${tooBig.month}.`);
+      }
+      const d = await api(`/projects/${project.id}/keyword-ranks`, {
+        method: "PUT",
+        body: { cells, checkConflicts: true },
+      });
       await load();
       toast.success(
         `Saved ${d.saved} rank${d.saved === 1 ? "" : "s"}` +
           (d.cleared ? `, cleared ${d.cleared}.` : ".")
       );
     } catch (err) {
-      setError(err.message);
-      toast.error(err.message);
+      if (err.status === 409) {
+        // Someone else moved the same cells. Pull in their numbers so the retry
+        // is checked against what's actually stored, but keep the pending edits
+        // — the highlighted cells still show what this user typed, and saving
+        // again now applies them on top, knowingly.
+        await load({ keepEdits: true });
+        setError(
+          `${err.message} The grid below now shows the current numbers; your unsaved ` +
+            "cells are still highlighted. Save again to apply them over the top."
+        );
+        toast.error(err.message, { title: "Save conflict" });
+      } else {
+        setError(err.message);
+        toast.error(err.message);
+      }
     } finally {
       setSaving(false);
     }
@@ -202,7 +290,7 @@ export function KeywordsView({ user, project }) {
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={monthCount}
-            onChange={(e) => setMonthCount(Number(e.target.value))}
+            onChange={(e) => changeMonthCount(Number(e.target.value))}
             aria-label="Months to show"
             className={`${INPUT_CLS} w-auto`}
           >
@@ -213,9 +301,14 @@ export function KeywordsView({ user, project }) {
             ))}
           </select>
           {canAdd && (
-            <button onClick={() => setShowAdd(true)} className={`${BTN_GHOST} px-4 py-2`}>
-              <Plus size={15} /> Add keywords
-            </button>
+            <>
+              <button onClick={() => setShowImport(true)} className={`${BTN_GHOST} px-4 py-2`}>
+                <FileSpreadsheet size={15} /> Import from Excel
+              </button>
+              <button onClick={() => setShowAdd(true)} className={`${BTN_GHOST} px-4 py-2`}>
+                <Plus size={15} /> Add keywords
+              </button>
+            </>
           )}
           {canEdit && (
             <button
@@ -248,9 +341,14 @@ export function KeywordsView({ user, project }) {
               <p className="text-sm text-stone-500 mt-1 mb-5 max-w-xs">
                 Add the keywords you track for this project, then fill in each month&apos;s position.
               </p>
-              <button onClick={() => setShowAdd(true)} className={`${BTN_PRIMARY} px-4 py-2`}>
-                <Plus size={15} /> Add your first keywords
-              </button>
+              <div className="flex flex-wrap justify-center gap-2">
+                <button onClick={() => setShowAdd(true)} className={`${BTN_PRIMARY} px-4 py-2`}>
+                  <Plus size={15} /> Add your first keywords
+                </button>
+                <button onClick={() => setShowImport(true)} className={`${BTN_GHOST} px-4 py-2`}>
+                  <FileSpreadsheet size={15} /> Import from Excel
+                </button>
+              </div>
             </>
           ) : (
             <p className="text-sm text-stone-500 mt-1 max-w-xs">
@@ -263,13 +361,15 @@ export function KeywordsView({ user, project }) {
           <table className="min-w-full text-sm">
             <thead>
               <tr className="text-xs uppercase tracking-wider text-stone-400 border-b border-stone-200">
-                <th className="px-5 py-3 font-medium text-left sticky left-0 bg-white">Keyword</th>
+                <th scope="col" className="px-5 py-3 font-medium text-left sticky left-0 bg-white">
+                  Keyword
+                </th>
                 {months.map((m) => (
-                  <th key={m} className="px-3 py-3 font-medium text-center whitespace-nowrap">
+                  <th key={m} scope="col" className="px-3 py-3 font-medium text-center whitespace-nowrap">
                     {shortMonthLabel(m)}
                   </th>
                 ))}
-                {canDelete && <th className="px-4 py-3 w-10" aria-label="Actions" />}
+                {canDelete && <th scope="col" className="px-4 py-3 w-10"><span className="sr-only">Actions</span></th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
@@ -300,8 +400,17 @@ export function KeywordsView({ user, project }) {
       {showAdd && (
         <AddKeywordsModal
           projectId={project.id}
+          existingTerms={(rows || []).map((r) => r.term)}
           onClose={() => setShowAdd(false)}
           onAdded={load}
+        />
+      )}
+
+      {showImport && (
+        <BulkImportModal
+          projectId={project.id}
+          onClose={() => setShowImport(false)}
+          onImported={load}
         />
       )}
 
@@ -328,23 +437,45 @@ export function KeywordsView({ user, project }) {
   );
 }
 
-function AddKeywordsModal({ projectId, onClose, onAdded }) {
+function AddKeywordsModal({ projectId, existingTerms, onClose, onAdded }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const toast = useToast();
   const inputRef = useRef(null);
 
-  const terms = text
-    .split(/\r?\n/)
-    .map((t) => t.trim())
-    .filter(Boolean);
+  // Terms are lowercased server-side, so "Yoga" and "yoga" on two lines are the
+  // same keyword. De-duplicate here rather than sending both and relying on the
+  // second one to be rejected.
+  const { terms, duplicateCount, alreadyCount } = useMemo(() => {
+    const existing = new Set((existingTerms || []).map((t) => t.trim().toLowerCase()));
+    const seen = new Set();
+    const out = [];
+    let dupes = 0;
+    let already = 0;
+    for (const line of text.split(/\r?\n/)) {
+      const term = line.trim().toLowerCase();
+      if (!term) continue;
+      if (seen.has(term)) {
+        dupes += 1;
+        continue;
+      }
+      seen.add(term);
+      if (existing.has(term)) {
+        already += 1;
+        continue;
+      }
+      out.push(term);
+    }
+    return { terms: out, duplicateCount: dupes, alreadyCount: already };
+  }, [text, existingTerms]);
 
   const submit = async () => {
     if (!terms.length || busy) return;
     setBusy(true);
     setError(null);
     let added = 0;
+    let skipped = 0;
     const failed = [];
 
     // Was one awaited request per term, strictly serial — pasting 80 keywords
@@ -358,8 +489,11 @@ function AddKeywordsModal({ projectId, onClose, onAdded }) {
         try {
           await api(`/projects/${projectId}/keywords`, { method: "POST", body: { term } });
           added += 1;
-        } catch {
-          failed.push(term);
+        } catch (err) {
+          // 409 is the server telling us it's already tracked — not a failure
+          // worth making the user re-check.
+          if (err.status === 409) skipped += 1;
+          else failed.push(term);
         }
       }
     };
@@ -370,6 +504,7 @@ function AddKeywordsModal({ projectId, onClose, onAdded }) {
     setBusy(false);
     await onAdded();
     if (added) toast.success(`Added ${added} keyword${added === 1 ? "" : "s"}.`);
+    if (skipped) toast.info(`${skipped} already tracked and skipped.`);
     if (failed.length) {
       setError(`Couldn't add ${failed.length}: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}`);
       setText(failed.join("\n"));
@@ -393,6 +528,12 @@ function AddKeywordsModal({ projectId, onClose, onAdded }) {
         placeholder={"electrical estimating\nelectrical estimators in perth\nelectrical takeoff services"}
         className={`${INPUT_CLS} font-data text-xs leading-relaxed resize-y`}
       />
+      {(duplicateCount > 0 || alreadyCount > 0) && (
+        <p className="text-xs text-stone-500 mt-2">
+          {duplicateCount > 0 && `${duplicateCount} repeated line${duplicateCount === 1 ? "" : "s"} will be sent once. `}
+          {alreadyCount > 0 && `${alreadyCount} already tracked and will be skipped.`}
+        </p>
+      )}
       <ErrorNote>{error}</ErrorNote>
       <button onClick={submit} disabled={busy || !terms.length} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
         {busy ? (
@@ -404,5 +545,146 @@ function AddKeywordsModal({ projectId, onClose, onAdded }) {
         )}
       </button>
     </Modal>
+  );
+}
+
+/**
+ * Excel import. This and ImportResult were written months ago and left sitting
+ * in Dashboard.jsx, defined but never rendered — so the endpoints behind them
+ * (and the styled template generator) were unreachable. Moved here and wired to
+ * the toolbar button above.
+ */
+function BulkImportModal({ projectId, onClose, onImported }) {
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const downloadTemplate = async () => {
+    try {
+      const res = await fetch(`${BASE}/api/projects/keywords/sample-template`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error("Couldn't download the template.");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "seo-dashboard-keywords-template.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const upload = async () => {
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`${BASE}/api/projects/${projectId}/keywords/bulk-import`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${getToken()}` },
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Import failed.");
+      setResult(data);
+      onImported();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Import keywords from Excel" onClose={onClose} wide>
+      {!result ? (
+        <>
+          <ol className="text-sm text-stone-600 space-y-2 mb-4 list-decimal list-inside">
+            <li>
+              Download the template and fill in your keywords.{" "}
+              <button onClick={downloadTemplate} className="text-orange-600 font-medium hover:underline inline-flex items-center gap-1">
+                <Download size={13} /> Sample file
+              </button>
+            </li>
+            <li>Keep the header row. One keyword per row.</li>
+            <li>Upload the completed file below.</li>
+          </ol>
+
+          <label className="block">
+            <span className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+              Excel file (.xlsx)
+            </span>
+            <input
+              type="file"
+              accept=".xlsx,.xlsm"
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                setError(null);
+              }}
+              className="block w-full text-sm text-stone-600 file:mr-3 file:rounded-lg file:border-0 file:bg-stone-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-stone-700 hover:file:bg-stone-200 cursor-pointer"
+            />
+          </label>
+
+          {file && (
+            <p className="mt-2 text-xs text-stone-500 flex items-center gap-1.5">
+              <FileSpreadsheet size={13} className="text-emerald-600" /> {file.name}
+            </p>
+          )}
+
+          <p className="mt-3 text-xs text-stone-400">
+            This adds the keywords only. Enter each month&apos;s position on the grid afterwards.
+          </p>
+
+          <ErrorNote>{error}</ErrorNote>
+
+          <button onClick={upload} disabled={!file || busy} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
+            {busy ? <LoaderCircle size={15} className="animate-spin" /> : <><Upload size={15} /> Import keywords</>}
+          </button>
+        </>
+      ) : (
+        <ImportResult result={result} onClose={onClose} />
+      )}
+    </Modal>
+  );
+}
+
+function ImportResult({ result, onClose }) {
+  const { imported, skippedExisting, errors } = result;
+  return (
+    <div>
+      <div className="flex items-center gap-2 text-sm rounded-lg px-3 py-2 bg-emerald-50 border border-emerald-100 text-emerald-800">
+        <Check size={15} />
+        Imported {imported} keyword{imported === 1 ? "" : "s"}.
+        {skippedExisting > 0 && ` ${skippedExisting} already existed and were skipped.`}
+      </div>
+
+      {errors.length > 0 && (
+        <div className="mt-4">
+          <p className="text-sm font-medium text-stone-700 mb-2">
+            {errors.length} row{errors.length === 1 ? "" : "s"} skipped:
+          </p>
+          <div className="rounded-lg border border-stone-200 divide-y divide-stone-100 max-h-48 overflow-y-auto">
+            {errors.map((e, i) => (
+              <div key={i} className="px-3 py-2 text-xs flex gap-2">
+                <span className="font-data text-stone-400 shrink-0">Row {e.row}</span>
+                <span className="text-stone-600">{e.reason}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-stone-400 mt-2">Fix these rows in your file and import again — already-added keywords will be skipped.</p>
+        </div>
+      )}
+
+      <button onClick={onClose} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
+        Done
+      </button>
+    </div>
   );
 }

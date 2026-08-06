@@ -1,3 +1,5 @@
+import traceback
+
 import jwt
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -8,7 +10,7 @@ from fastapi.responses import JSONResponse
 from .config import CORS_ORIGINS, DEBUG, JWT_SECRET
 from .db import close_pool, get_db, init_db
 from .permissions import READ_ONLY_ROLES
-from .routers import auth, backlinks, locations, moz, posts, projects, reports, snapshots, users
+from .routers import auth, backlinks, locations, moz, posts, projects, reports, users
 
 init_db()
 
@@ -108,6 +110,21 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=400, content={"error": "Invalid request body."})
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return the shape the client parses, even when something unexpected breaks.
+
+    Without this, an error the handlers didn't anticipate — a driver-level
+    DataError, say — came back as Starlette's plain-text "Internal Server Error".
+    api.js does `res.json().catch(() => ({}))`, so the real status was preserved
+    but the user saw the generic "Something went wrong." with nothing logged
+    client-side. The detail is only exposed when DEBUG is on.
+    """
+    traceback.print_exception(type(exc), exc, exc.__traceback__)
+    detail = f"{exc.__class__.__name__}: {exc}" if DEBUG else "Something went wrong on the server."
+    return JSONResponse(status_code=500, content={"error": detail})
+
+
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(locations.router, prefix="/api/locations", tags=["locations"])
@@ -115,5 +132,4 @@ app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(moz.router, prefix="/api/projects", tags=["moz"])
 app.include_router(backlinks.router, prefix="/api/projects", tags=["backlinks"])
 app.include_router(posts.router, prefix="/api/projects", tags=["posts"])
-app.include_router(snapshots.router, prefix="/api/snapshots", tags=["snapshots"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])

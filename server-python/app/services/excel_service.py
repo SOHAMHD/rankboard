@@ -6,6 +6,10 @@ from openpyxl.styles import Alignment, Font, PatternFill
 COLUMNS = ["keyword"]
 MAX_ROWS = 1000
 
+#: Matches routers/projects.py MAX_TERM_LEN. A cell holding a paragraph is a
+#: mis-shaped spreadsheet, not a long-tail keyword.
+MAX_TERM_LEN = 200
+
 
 def build_sample_workbook() -> bytes:
     wb = Workbook()
@@ -35,11 +39,16 @@ def build_sample_workbook() -> bytes:
     ws.column_dimensions["A"].width = 46
 
     notes_start = 2 + len(examples) + 1
+    # These notes used to promise that the app "finds each keyword's current
+    # position automatically the next time you run Check rankings". There is no
+    # such feature and never was — every rank in this app is typed in by hand —
+    # so the template was describing a workflow the product doesn't have.
     notes = [
         "How to use this template:",
         "• Replace the example rows above with your own keywords — one per row.",
         "• Keyword: the search term you want to track (required).",
-        "• You don't need to enter any rank — SEO Dashboard finds each keyword's current position automatically the next time you run “Check rankings”.",
+        "• This file adds the keywords only. Enter each month's position afterwards in the Keywords grid — ranks are recorded by hand.",
+        "• Duplicates are skipped, so it's safe to re-import a file you've added to.",
         "• Keep the header row. Delete these notes if you like.",
         "• Up to %d keywords per file." % MAX_ROWS,
     ]
@@ -85,6 +94,13 @@ def parse_keyword_workbook(file_bytes: bytes) -> tuple[list[dict], list[dict]]:
             break
 
         term = str(term_raw).strip().lower()
+
+        if len(term) > MAX_TERM_LEN:
+            errors.append({
+                "row": excel_row,
+                "reason": f"Longer than {MAX_TERM_LEN} characters — is this a keyword? Skipped.",
+            })
+            continue
 
         if term in seen_terms:
             errors.append({"row": excel_row, "reason": f"Duplicate of an earlier row for “{term}”; skipped."})

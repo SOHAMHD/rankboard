@@ -3,7 +3,7 @@ import re
 from fastapi import HTTPException
 
 from ..db import INTEGRITY_ERRORS
-from .snapshot_service import _label_for
+from .periods import label_for as _label_for
 
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 

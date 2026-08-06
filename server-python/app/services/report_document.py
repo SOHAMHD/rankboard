@@ -1,4 +1,4 @@
-from .snapshot_service import _label_for
+from .periods import label_for as _label_for
 
 DOC_SCHEMA_VERSION = 1
 
@@ -321,17 +321,35 @@ def _progress_summary(period_label, prev_label, ga4, ga4_present, moz, moz_prese
     }
 
 
+#: How many auto-written wins the Achievements block lists.
+ACHIEVEMENT_LIMIT = 5
+
+
+def achievement_bullets(items) -> tuple[list[str], list[str]]:
+    """The biggest rank improvements, as bullets plus the term behind each one.
+
+    Returning the terms alongside the text is what lets the editor keep this
+    block in step with the Keyword Rankings table: excluding a keyword from the
+    table drops its bullet too. Without that pairing there was no way to tell
+    which bullet belonged to which row, so an excluded keyword stayed named in
+    Achievements — in a report that had deliberately left it out.
+    """
+    improved = [it for it in (items or [])
+                if _is_num(it.get("rank_delta")) and it["rank_delta"] < 0]
+    improved.sort(key=lambda it: it["rank_delta"])
+
+    bullets, terms = [], []
+    for it in improved[:ACHIEVEMENT_LIMIT]:
+        places = abs(it["rank_delta"])
+        bullets.append(
+            f"“{it.get('term')}” improved {places} place{'s' if places != 1 else ''} "
+            f"to position #{it.get('current_rank')}.")
+        terms.append(it.get("term"))
+    return bullets, terms
+
+
 def _achievements(kw, kw_present, period_label):
-    bullets = []
-    if kw_present:
-        improved = [it for it in (kw or {}).get("items", [])
-                    if _is_num(it.get("rank_delta")) and it["rank_delta"] < 0]
-        improved.sort(key=lambda it: it["rank_delta"])
-        for it in improved[:5]:
-            places = abs(it["rank_delta"])
-            bullets.append(
-                f"“{it.get('term')}” improved {places} place{'s' if places != 1 else ''} "
-                f"to position #{it.get('current_rank')}.")
+    bullets, terms = achievement_bullets((kw or {}).get("items") if kw_present else [])
     paragraphs = ([] if bullets else
                   [f"Key wins for {period_label} will be summarised here."])
     return {
@@ -341,6 +359,15 @@ def _achievements(kw, kw_present, period_label):
         "title": "Achievements",
         "paragraphs": paragraphs,
         "bullets": bullets,
+        #: The pristine auto-written list, and the keyword behind each entry.
+        #: `bullets` above is the displayed subset — the editor re-derives it from
+        #: these whenever a keyword is included or excluded in the Keyword
+        #: Rankings table, so a keyword left out of the table stops being named
+        #: here, and re-including it brings its line back verbatim. Kept separate
+        #: from `bullets` so the filter is reversible and never has to
+        #: re-generate the wording.
+        "autoBullets": list(bullets),
+        "autoBulletTerms": list(terms),
         "editable": True,
     }
 

@@ -201,8 +201,30 @@ def download_report_pdf(
 
 class SendReportIn(BaseModel):
     recipients: list[str]
+    cc: list[str] = []
     subject: str | None = None
     message: str | None = None
+
+
+def _clean_addresses(raw, seen: set[str]) -> tuple[list[str], list[str]]:
+    """Split addresses into (valid, invalid), skipping blanks and repeats.
+
+    `seen` is shared across the To and Cc lists and mutated as it goes, so an
+    address already on the To line is dropped from the Cc rather than named twice
+    in the same message.
+    """
+    valid: list[str] = []
+    invalid: list[str] = []
+    for addr in raw or []:
+        clean = (addr or "").strip()
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        (valid if email_service._valid_email(clean) else invalid).append(clean)
+    return valid, invalid
 
 
 @router.post("/{version_id}/send")
@@ -213,19 +235,12 @@ def send_report(
     db: sqlite3.Connection = Depends(get_db),
 ):
     _require_version_access(db, user, version_id)
-    raw = body.recipients or []
+    # One `seen` set for both lists: To wins, so cc'ing someone already on the To
+    # line is a no-op rather than a duplicate.
     seen: set[str] = set()
-    valid: list[str] = []
-    invalid: list[str] = []
-    for addr in raw:
-        clean = (addr or "").strip()
-        if not clean:
-            continue
-        key = clean.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        (valid if email_service._valid_email(clean) else invalid).append(clean)
+    valid, invalid = _clean_addresses(body.recipients, seen)
+    cc_valid, cc_invalid = _clean_addresses(body.cc, seen)
+    invalid = invalid + cc_invalid
 
     if not valid:
         raise HTTPException(422, "Add at least one valid email address.")
@@ -338,24 +353,36 @@ def send_report(
         print("report email template failed, sending text only:", exc)
         html_body = None
 
-    results = []
-    for addr in valid:
-        outcome = email_service.send_report_email(
-            db,
-            email=addr,
-            subject=subject,
-            body=email_body,
-            html=html_body,
-            pdf_bytes=pdf_bytes,
-            pdf_filename=filename,
-        )
-        results.append({"email": addr, "delivery": outcome["delivery"]})
+    # ONE message to the whole group, rather than the previous separate send per
+    # recipient. A Cc header is only honest sitting next to the real To line, so
+    # supporting Cc means sending together — and that makes recipients visible to
+    # each other, which the previous per-recipient loop did not. Deliberate, and
+    # called out in the send dialog so nobody discovers it from a client.
+    outcome = email_service.send_report_email(
+        db,
+        email=valid,
+        cc=cc_valid,
+        subject=subject,
+        body=email_body,
+        html=html_body,
+        pdf_bytes=pdf_bytes,
+        pdf_filename=filename,
+    )
+    delivery = outcome["delivery"]
+    ok = delivery in ("sent", "outbox")
+
+    # Per-address results are kept in the response even though delivery is now
+    # all-or-nothing: the caller counts them, and reporting per address stays
+    # useful if a Bcc or a retry-per-address path is added later.
+    addressed = [{"email": a, "delivery": delivery, "kind": "to"} for a in valid]
+    addressed += [{"email": a, "delivery": delivery, "kind": "cc"} for a in cc_valid]
 
     return {
-        "sent": sum(1 for r in results if r["delivery"] in ("sent", "outbox")),
-        "failed": sum(1 for r in results if r["delivery"] == "failed"),
+        "sent": len(addressed) if ok else 0,
+        "failed": 0 if ok else len(addressed),
         "skipped": invalid,
-        "results": results,
+        "cc": cc_valid,
+        "results": addressed,
     }
 
 

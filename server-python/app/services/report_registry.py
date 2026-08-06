@@ -7,7 +7,6 @@ TYPE_TEXT = "text"
 
 FIELD_TYPES = frozenset({TYPE_COUNT, TYPE_DURATION, TYPE_PERCENT, TYPE_RANK, TYPE_TEXT})
 
-SOURCE_SNAPSHOT_RANKS = "snapshot_ranks"
 SOURCE_MOZ = "moz_metrics"
 SOURCE_KEYWORDS = "keywords"
 SOURCE_GA4 = "ga4"
@@ -15,11 +14,16 @@ SOURCE_GSC = "gsc"
 SOURCE_DEFERRED = "deferred"
 
 
+#: Fields offered to the report editor's "/" insert menu, via manifest().
+#:
+#: Every entry here must have a matching path in report_blobs.BLOB_MAP, or it
+#: appears in the menu and then resolves to nothing. Three used to break that
+#: rule — ranks.keyword_rank (from the removed snapshot storage) and
+#: keywords.current_rank / previous_rank (from the removed legacy columns). All
+#: three were per-keyword values with nowhere sensible to point in a per-report
+#: scalar map; keyword ranks belong in the Keyword Rankings table, which is
+#: built directly from the keywords section.
 REPORT_FIELDS = (
-    {"name": "ranks.keyword_rank", "source": SOURCE_SNAPSHOT_RANKS,
-     "column": "rank", "type": TYPE_RANK, "deferred": False,
-     "label": "Keyword rank (frozen snapshot)"},
-
     {"name": "moz.domain_authority", "source": SOURCE_MOZ,
      "column": "domain_authority", "type": TYPE_COUNT, "deferred": False,
      "label": "Domain Authority"},
@@ -29,13 +33,6 @@ REPORT_FIELDS = (
     {"name": "moz.inbound_links", "source": SOURCE_MOZ,
      "column": "inbound_links", "type": TYPE_COUNT, "deferred": False,
      "label": "Inbound links (backlinks)"},
-
-    {"name": "keywords.current_rank", "source": SOURCE_KEYWORDS,
-     "column": "current_rank", "type": TYPE_RANK, "deferred": False,
-     "label": "Current rank"},
-    {"name": "keywords.previous_rank", "source": SOURCE_KEYWORDS,
-     "column": "previous_rank", "type": TYPE_RANK, "deferred": False,
-     "label": "Previous rank"},
 
     {"name": "ga4.sessions", "source": SOURCE_GA4,
      "column": None, "type": TYPE_COUNT, "deferred": False,

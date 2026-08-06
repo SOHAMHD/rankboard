@@ -18,12 +18,30 @@ from ..config import (
 )
 
 
-def _send_via_smtp(*, email: str, subject: str, body: str, html: str | None = None,
-                   attachments=None) -> str:
+def _as_addresses(value) -> list[str]:
+    """Normalise a To/Cc argument to a list of non-empty addresses.
+
+    `email=` accepts either a single address or a list: most senders here mail one
+    person, while the report send mails a group with a visible Cc.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    return [a.strip() for a in value if a and a.strip()]
+
+
+def _send_via_smtp(*, email, subject: str, body: str, html: str | None = None,
+                   attachments=None, cc=None) -> str:
     try:
+        to_list = _as_addresses(email)
+        cc_list = _as_addresses(cc)
+
         msg = EmailMessage()
         msg["From"] = EMAIL_FROM
-        msg["To"] = email
+        msg["To"] = ", ".join(to_list)
+        if cc_list:
+            msg["Cc"] = ", ".join(cc_list)
         msg["Subject"] = subject
         msg.set_content(body)
         if html:
@@ -46,6 +64,8 @@ def _send_via_smtp(*, email: str, subject: str, body: str, html: str | None = No
                 server.starttls()
             if SMTP_USER:
                 server.login(SMTP_USER, SMTP_PASS)
+            # send_message reads the recipients off the To/Cc/Bcc headers, so the
+            # Cc above is delivered as well as displayed — no separate list needed.
             server.send_message(msg)
         return "sent"
     except Exception as exc:
@@ -53,7 +73,8 @@ def _send_via_smtp(*, email: str, subject: str, body: str, html: str | None = No
         return "failed"
 
 
-def _send_via_brevo(*, email: str, subject: str, body: str, html: str | None = None, attachments=None) -> str:
+def _send_via_brevo(*, email, subject: str, body: str, html: str | None = None,
+                    attachments=None, cc=None) -> str:
     try:
         from_name, from_addr = parseaddr(EMAIL_FROM)
         sender = {"email": from_addr}
@@ -62,10 +83,13 @@ def _send_via_brevo(*, email: str, subject: str, body: str, html: str | None = N
 
         payload = {
             "sender": sender,
-            "to": [{"email": email}],
+            "to": [{"email": a} for a in _as_addresses(email)],
             "subject": subject,
             "textContent": body,
         }
+        cc_list = _as_addresses(cc)
+        if cc_list:
+            payload["cc"] = [{"email": a} for a in cc_list]
         if html:
             payload["htmlContent"] = html
         if attachments:
@@ -91,25 +115,33 @@ def _send_via_brevo(*, email: str, subject: str, body: str, html: str | None = N
         return "failed"
 
 
-def _deliver(db: sqlite3.Connection, *, email: str, subject: str, body: str,
-             html: str | None = None, attachments=None) -> dict:
+def _deliver(db: sqlite3.Connection, *, email, subject: str, body: str,
+             html: str | None = None, attachments=None, cc=None) -> dict:
+    to_list = _as_addresses(email)
+    cc_list = _as_addresses(cc)
+
     if SMTP_HOST:
-        delivery = _send_via_smtp(email=email, subject=subject, body=body, html=html,
-                                  attachments=attachments)
+        delivery = _send_via_smtp(email=to_list, subject=subject, body=body, html=html,
+                                  attachments=attachments, cc=cc_list)
     elif BREVO_API_KEY:
-        delivery = _send_via_brevo(email=email, subject=subject, body=body, html=html,
-                                   attachments=attachments)
+        delivery = _send_via_brevo(email=to_list, subject=subject, body=body, html=html,
+                                   attachments=attachments, cc=cc_list)
     else:
         delivery = "outbox"
 
+    to_logged = ", ".join(to_list)
+    cc_logged = ", ".join(cc_list) or None
     cur = db.execute(
-        "INSERT INTO emails (to_email, subject, body) VALUES (?, ?, ?)", (email, subject, body)
+        "INSERT INTO emails (to_email, cc_email, subject, body) VALUES (?, ?, ?, ?)",
+        (to_logged, cc_logged, subject, body),
     )
     row = db.execute("SELECT * FROM emails WHERE id = ?", (cur.lastrowid,)).fetchone()
     if delivery == "outbox":
         note = " (+1 attachment)" if attachments else ""
         print("=" * 64)
-        print(f"[email outbox — no provider configured] to: {email}{note}")
+        print(f"[email outbox — no provider configured] to: {to_logged}{note}")
+        if cc_logged:
+            print(f"cc: {cc_logged}")
         print(f"subject: {subject}")
         print(body)
         print("=" * 64)
@@ -127,19 +159,28 @@ def _valid_email(addr: str) -> bool:
 def send_report_email(
     db: sqlite3.Connection,
     *,
-    email: str,
+    email,
     subject: str,
     body: str,
     pdf_bytes: bytes,
     pdf_filename: str,
     html: str | None = None,
+    cc=None,
 ) -> dict:
+    """Send one report email. `email` may be a single address or a list.
+
+    Recipients on a report send go out together in one message so the Cc is
+    meaningful — a Cc header is only honest if the To it sits beside is the real
+    one. That does mean recipients can see each other; see the note in
+    routers/reports.py where the list is assembled.
+    """
     return _deliver(
         db,
         email=email,
         subject=subject,
         body=body,
         html=html,
+        cc=cc,
         attachments=[{"filename": pdf_filename, "content": pdf_bytes, "mime": "application/pdf"}],
     )
 

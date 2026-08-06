@@ -95,25 +95,27 @@ def gather(
         (project_id,),
     ).fetchall()
 
-    ranks_section = None
     keywords_section = None
     if kw_rows:
-        cur_m = keyword_rank_service.ranks_for_month(db, project_id, period_key)
-        prev_m = keyword_rank_service.ranks_for_month(db, project_id, prev_period)
-        prev2_m = keyword_rank_service.ranks_for_month(db, project_id, prev2_period)
+        # One lookup shared across the three months. Any term held by more than
+        # one keyword is excluded from the term-based fallback below, so a
+        # duplicate can't inherit its twin's rank.
+        ambiguous = keyword_rank_service.ambiguous_terms(db, project_id)
+        cur_m = keyword_rank_service.ranks_for_month(db, project_id, period_key, ambiguous)
+        prev_m = keyword_rank_service.ranks_for_month(db, project_id, prev_period, ambiguous)
+        prev2_m = keyword_rank_service.ranks_for_month(db, project_id, prev2_period, ambiguous)
 
         def _rank_of(maps, kw_id, term):
             if kw_id in maps["by_keyword_id"]:
                 return maps["by_keyword_id"][kw_id]
             return maps["by_term"].get(term)
 
-        rank_items, keyword_items = [], []
+        keyword_items = []
         for k in kw_rows:
             kw_id, term = k["id"], k["term"]
             cur = _rank_of(cur_m, kw_id, term)
             prev = _rank_of(prev_m, kw_id, term)
             prev2 = _rank_of(prev2_m, kw_id, term)
-            rank_items.append({"term": term, "rank": cur, "last_checked": None})
             keyword_items.append({
                 "term": term,
                 "current_rank": cur,
@@ -122,15 +124,10 @@ def gather(
                 "rank_delta": _delta(cur, prev),
             })
 
-        order = lambda it: (it["current_rank"] is None, it["current_rank"] or 0, it["term"])
-        rank_items.sort(key=lambda it: (it["rank"] is None, it["rank"] or 0, it["term"]))
-        keyword_items.sort(key=order)
+        keyword_items.sort(
+            key=lambda it: (it["current_rank"] is None, it["current_rank"] or 0, it["term"])
+        )
 
-        ranks_section = {
-            "source": registry.SOURCE_SNAPSHOT_RANKS,
-            "month": period_key,
-            "items": rank_items,
-        }
         keywords_section = {
             "source": registry.SOURCE_KEYWORDS,
             "month": period_key,
@@ -233,8 +230,6 @@ def gather(
         "period_complete": period_complete,
         "period_in_progress": period_in_progress,
         "sources": {
-            "ranks":     {"present": ranks_section is not None,
-                          "reason": None if ranks_section is not None else "no keywords added for this project yet"},
             "keywords":  {"present": keywords_section is not None,
                           "reason": None if keywords_section is not None else "no keywords added for this project yet"},
             "moz":       {"present": moz is not None,
@@ -246,8 +241,12 @@ def gather(
             "backlinks": {"present": True, "reason": None},
             "posts": {"present": True, "reason": None},
         },
+        # `ranks` used to sit alongside `keywords` here, holding the same terms
+        # and current ranks in a second shape. Nothing ever read it — not
+        # report_document, not report_blobs — so it was pure weight in every
+        # stored data_json. Older versions still carry it; they render the same,
+        # because the renderer never looked at it.
         "sections": {
-            "ranks": ranks_section,
             "keywords": keywords_section,
             "moz": moz_section,
             "ga4": ga4_section,

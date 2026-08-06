@@ -72,6 +72,79 @@ function docFromNarrative(block) {
 }
 
 const EDITABLE_TABLE_ID = "keywords";
+const ACHIEVEMENTS_BLOCK_ID = "achievements";
+
+function sameList(a, b) {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/**
+ * Has the user typed in this narrative block?
+ *
+ * The comparison has to be against the WHOLE doc, not just the bullet text. The
+ * editor stores hand edits only in `doc` — `bullets` and `paragraphs` are never
+ * written back — so a check that looked at bullet strings alone treated a
+ * reworded-with-bold bullet, an added paragraph, or an inserted data chip as
+ * "untouched" and threw the doc away on the next row toggle.
+ */
+function narrativeIsUntouched(block) {
+  if (!block.doc) return true;
+  const pristine = docFromNarrative({ ...block, doc: undefined });
+  return JSON.stringify(block.doc) === JSON.stringify(pristine);
+}
+
+/**
+ * Keep the Achievements bullets in step with the Keyword Rankings table.
+ *
+ * The bullets are written from the biggest rank improvements when the report is
+ * generated, and the table's `included` flags come later — so excluding a
+ * keyword from the table used to leave it named in Achievements anyway, in a
+ * report that had deliberately left it out.
+ *
+ * `autoBullets` / `autoBulletTerms` hold the pristine generated list, so this
+ * filters rather than re-generates: re-including a keyword brings its exact line
+ * back. Skipped entirely once the user has edited the block by hand — their
+ * wording always wins.
+ */
+function syncAchievements(blocks) {
+  const table = blocks.find((b) => b.id === EDITABLE_TABLE_ID);
+  const ach = blocks.find((b) => b.id === ACHIEVEMENTS_BLOCK_ID);
+  if (!table || !ach) return blocks;
+
+  const autoBullets = ach.autoBullets;
+  const autoTerms = ach.autoBulletTerms;
+  if (!Array.isArray(autoBullets) || !Array.isArray(autoTerms) || !autoBullets.length) {
+    return blocks;
+  }
+
+  // Any hand edit at all — reworded bullet, added paragraph, applied bold,
+  // inserted data chip — stops the sync. The user's wording always wins.
+  if (!narrativeIsUntouched(ach)) return blocks;
+
+  const excluded = new Set(
+    (table.rows || [])
+      .filter((r) => r.included === false)
+      .map((r) => (r.cells || {}).term)
+  );
+  const bullets = autoBullets.filter((_, i) => !excluded.has(autoTerms[i]));
+  if (sameList(bullets, ach.bullets || [])) return blocks;
+
+  const paragraphs = bullets.length
+    ? []
+    : ach.paragraphs && ach.paragraphs.length
+      ? ach.paragraphs
+      : ["Key wins for this period will be summarised here."];
+
+  const next = {
+    ...ach,
+    bullets,
+    paragraphs,
+    docVersion: (ach.docVersion || 0) + 1,
+  };
+  // Drop the cached doc so docFromNarrative rebuilds it from the new bullets.
+  delete next.doc;
+  return blocks.map((b) => (b.id === ACHIEVEMENTS_BLOCK_ID ? next : b));
+}
 
 const DATA_BLOCK_TYPES = new Set([
   "report_header",
@@ -385,25 +458,29 @@ function EditableDoc({ version, blobs, canSend = false }) {
   const rowsKey = (block) => (block.type === "backlinks_list" ? "items" : "rows");
   const setRowIncluded = useCallback((blockId, rowIndex, included) => {
     setBlocks((bs) =>
-      bs.map((b) => {
-        if (b.id !== blockId) return b;
-        const key = rowsKey(b);
-        const arr = (b[key] || []).map((r, i) => (i === rowIndex ? { ...r, included } : r));
-        return { ...b, [key]: arr };
-      })
+      syncAchievements(
+        bs.map((b) => {
+          if (b.id !== blockId) return b;
+          const key = rowsKey(b);
+          const arr = (b[key] || []).map((r, i) => (i === rowIndex ? { ...r, included } : r));
+          return { ...b, [key]: arr };
+        })
+      )
     );
   }, []);
   const setRowsBulk = useCallback((blockId, mode) => {
     setBlocks((bs) =>
-      bs.map((b) => {
-        if (b.id !== blockId) return b;
-        const key = rowsKey(b);
-        const arr = (b[key] || []).map((r, i) => {
-          const included = mode === "all" ? true : mode === "none" ? false : i < mode;
-          return { ...r, included };
-        });
-        return { ...b, [key]: arr };
-      })
+      syncAchievements(
+        bs.map((b) => {
+          if (b.id !== blockId) return b;
+          const key = rowsKey(b);
+          const arr = (b[key] || []).map((r, i) => {
+            const included = mode === "all" ? true : mode === "none" ? false : i < mode;
+            return { ...r, included };
+          });
+          return { ...b, [key]: arr };
+        })
+      )
     );
   }, []);
 
@@ -535,7 +612,7 @@ function EditableDoc({ version, blobs, canSend = false }) {
       <ErrorNote>{saveError}</ErrorNote>
 
       <p className="mb-3 text-sm text-stone-500">
-        Reorder, delete, and add blocks; edit any text block (type <kbd className="px-1 rounded bg-stone-100 border border-stone-200">/</kbd> to insert data). Keyword ranks are editable here; every other data value is fixed. Edits apply to this report only.
+        Reorder, delete, and add blocks; edit any text block (type <kbd className="px-1 rounded bg-stone-100 border border-stone-200">/</kbd> to insert data). Keyword ranks are editable here; every other data value is fixed. Edits apply to this report only — correcting a rank here does <strong>not</strong> change the tracked number in the Keywords grid, so fix it there too if it was wrong at the source.
       </p>
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_15rem] gap-4">
@@ -572,7 +649,12 @@ function EditableDoc({ version, blobs, canSend = false }) {
                 {block.type === "report_header" ? (
                   <HeaderEditor block={block} onSetLogo={setClientLogo} />
                 ) : block.type === "narrative" ? (
+                  // The tiptap instance builds its content once, on mount. When
+                  // syncAchievements rewrites this block's bullets it bumps
+                  // docVersion, and the changed key remounts the editor so the
+                  // new list actually appears.
                   <NarrativeEditor
+                    key={`${block.id}:${block.docVersion || 0}`}
                     block={block}
                     BlobNode={BlobNode}
                     suggestion={suggestion}

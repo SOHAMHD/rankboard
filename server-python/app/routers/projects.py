@@ -3,10 +3,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..access import accessible_project_ids
-from ..db import get_db
+from ..db import INTEGRITY_ERRORS, get_db
 from ..security import require_active_user, require_permission, require_project_access
 from ..services.analytics_provider import (
     ALLOWED_DIMENSIONS,
@@ -24,7 +24,6 @@ from ..services.search_console_provider import (
 )
 from ..services.excel_service import build_sample_workbook, parse_keyword_workbook
 from ..services import keyword_rank_service
-from ..services.snapshot_service import create_snapshot
 
 router = APIRouter(dependencies=[Depends(require_active_user)])
 
@@ -51,35 +50,16 @@ def row_to_project(p: sqlite3.Row, keyword_count: int | None = None) -> dict:
 
 
 def row_to_keyword(k: sqlite3.Row) -> dict:
+    # current_rank / previous_rank are legacy columns kept for the historical
+    # data they hold; nothing writes them any more and reports read the monthly
+    # grid instead. They stay in the response so an older client build doesn't
+    # break on a missing key.
     return {
         "id": k["id"],
         "term": k["term"],
         "currentRank": k["current_rank"],
         "previousRank": k["previous_rank"],
         "lastChecked": k["last_checked"],
-    }
-
-
-def row_to_snapshot(s, keyword_count: int | None = None) -> dict:
-    out = {
-        "id": s["id"],
-        "periodKey": s["period_key"],
-        "label": s["label"],
-        "capturedAt": s["captured_at"],
-        "createdAt": s["created_at"],
-        "source": s["source"],
-        "locked": bool(s["locked"]),
-    }
-    if keyword_count is not None:
-        out["keywordCount"] = keyword_count
-    return out
-
-
-def row_to_snapshot_rank(r: sqlite3.Row) -> dict:
-    return {
-        "term": r["term"],
-        "rank": r["rank"],
-        "lastChecked": r["last_checked"],
     }
 
 
@@ -595,9 +575,14 @@ def download_sample_template(user=Depends(require_active_user)):
     )
 
 
+#: Read one byte past the limit so an oversized upload is rejected on the
+#: strength of what has been read, rather than after the whole thing is resident.
+MAX_IMPORT_BYTES = 5 * 1024 * 1024
+
+
 @router.post(
     "/{project_id}/keywords/bulk-import",
-    dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
+    dependencies=[Depends(require_project_access), Depends(require_permission("addKeyword"))],
 )
 def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Connection = Depends(get_db)):
     # Deliberately a plain `def`. This was the only `async def` handler in the
@@ -612,8 +597,11 @@ def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Connecti
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Please upload an .xlsx file (the sample template format).")
 
-    raw = file.file.read()
-    if len(raw) > 5 * 1024 * 1024:
+    # Bounded read: the previous version called .read() with no argument and
+    # checked the length afterwards, so a 500 MB upload was fully buffered in
+    # memory before being rejected.
+    raw = file.file.read(MAX_IMPORT_BYTES + 1)
+    if len(raw) > MAX_IMPORT_BYTES:
         raise HTTPException(400, "That file is too large (limit 5 MB).")
 
     try:
@@ -644,10 +632,13 @@ def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Connecti
     }
 
 
+#: A keyword no user would ever type. Long enough for the longest real long-tail
+#: phrase, short enough that a pasted paragraph is rejected as the mistake it is.
+MAX_TERM_LEN = 200
+
+
 class KeywordIn(BaseModel):
     term: str = ""
-    currentRank: int | None = None
-    previousRank: int | None = None
 
 
 @router.post(
@@ -662,43 +653,28 @@ def add_keyword(project_id: int, body: KeywordIn, db: sqlite3.Connection = Depen
     term = body.term.strip().lower()
     if not term:
         raise HTTPException(400, "Keyword is required.")
-    if body.currentRank is not None and body.currentRank < 1:
-        raise HTTPException(400, "Current rank must be a whole number of 1 or more.")
-    if body.previousRank is not None and body.previousRank < 1:
-        raise HTTPException(400, "Previous rank must be a whole number of 1 or more.")
+    if len(term) > MAX_TERM_LEN:
+        raise HTTPException(400, f"That keyword is too long (limit {MAX_TERM_LEN} characters).")
 
-    cur = db.execute(
-        "INSERT INTO keywords (project_id, term, current_rank, previous_rank) VALUES (?, ?, ?, ?)",
-        (project_id, term, body.currentRank, body.previousRank),
-    )
+    # Bulk import has always de-duplicated; the single-add path did not, and
+    # there was no unique index behind it either. Two keywords sharing a term
+    # break the term-based rank fallback in reports, so refuse the duplicate
+    # rather than create it. idx_keywords_project_term is the real guard — this
+    # check exists to turn the resulting error into a useful message.
+    if db.execute(
+        "SELECT id FROM keywords WHERE project_id = ? AND term = ?", (project_id, term)
+    ).fetchone() is not None:
+        raise HTTPException(409, f"“{term}” is already tracked on this project.")
+
+    try:
+        cur = db.execute(
+            "INSERT INTO keywords (project_id, term) VALUES (?, ?)",
+            (project_id, term),
+        )
+    except INTEGRITY_ERRORS:
+        raise HTTPException(409, f"“{term}” is already tracked on this project.")
     keyword = db.execute("SELECT * FROM keywords WHERE id = ?", (cur.lastrowid,)).fetchone()
     return {"keyword": row_to_keyword(keyword)}
-
-
-class NewRankIn(BaseModel):
-    newRank: int | None = None
-
-
-@router.patch(
-    "/{project_id}/keywords/{keyword_id}",
-    dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
-)
-def record_lookup(project_id: int, keyword_id: int, body: NewRankIn, db: sqlite3.Connection = Depends(get_db)):
-    if body.newRank is None or body.newRank < 1:
-        raise HTTPException(400, "New rank must be a whole number of 1 or more.")
-
-    kw = db.execute(
-        "SELECT * FROM keywords WHERE id = ? AND project_id = ?", (keyword_id, project_id)
-    ).fetchone()
-    if kw is None:
-        raise HTTPException(404, "Keyword not found.")
-
-    db.execute(
-        "UPDATE keywords SET previous_rank = current_rank, current_rank = ?, last_checked = date('now') WHERE id = ?",
-        (body.newRank, keyword_id),
-    )
-    updated = db.execute("SELECT * FROM keywords WHERE id = ?", (keyword_id,)).fetchone()
-    return {"keyword": row_to_keyword(updated)}
 
 
 @router.delete(
@@ -717,11 +693,21 @@ def delete_keyword(project_id: int, keyword_id: int, db: sqlite3.Connection = De
 class RankCellIn(BaseModel):
     keywordId: int
     month: str
-    rank: int | None = None
+    # A generous hard ceiling so an absurd integer is rejected by the parser
+    # rather than reaching Postgres. keyword_rank_service.MAX_RANK is the real
+    # limit and produces the message a user actually sees.
+    rank: int | None = Field(default=None, ge=0, le=1_000_000)
+    #: The value the client had on screen for this cell. When present the save
+    #: is checked against the stored value first, so concurrent editors get a
+    #: conflict instead of silently overwriting one another.
+    expected: int | None = Field(default=None, ge=0, le=1_000_000)
 
 
 class RankCellsIn(BaseModel):
     cells: list[RankCellIn] = []
+    #: Whether the client is sending `expected` values it wants enforced. A
+    #: client that doesn't set this keeps the old last-write-wins behaviour.
+    checkConflicts: bool = False
 
 
 @router.get("/{project_id}/keyword-ranks", dependencies=[Depends(require_project_access)])
@@ -730,9 +716,7 @@ def get_keyword_ranks(
     months: str = "",
     db: sqlite3.Connection = Depends(get_db),
 ):
-    wanted = [m.strip() for m in (months or "").split(",") if m.strip()]
-    if not wanted:
-        raise HTTPException(400, "Pass ?months=YYYY-MM,YYYY-MM,... — at least one month.")
+    wanted = keyword_rank_service.clean_months(months)
     return keyword_rank_service.get_grid(db, project_id, wanted)
 
 
@@ -741,49 +725,14 @@ def get_keyword_ranks(
     dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
 )
 def save_keyword_ranks(project_id: int, body: RankCellsIn, db: sqlite3.Connection = Depends(get_db)):
-    return keyword_rank_service.save_cells(db, project_id, [c.model_dump() for c in body.cells])
-
-
-@router.post(
-    "/{project_id}/snapshots", status_code=201,
-    dependencies=[Depends(require_project_access), Depends(require_permission("recordRank"))],
-)
-def save_snapshot(project_id: int, db: sqlite3.Connection = Depends(get_db)):
-    summary = create_snapshot(db, project_id)
-    return {"snapshot": row_to_snapshot(summary, summary["keyword_count"])}
-
-
-@router.get("/{project_id}/snapshots", dependencies=[Depends(require_project_access)])
-def list_snapshots(project_id: int, db: sqlite3.Connection = Depends(get_db)):
-    project = db.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
-    if project is None:
-        raise HTTPException(404, "Project not found.")
-    rows = db.execute(
-        """SELECT s.*, COUNT(sr.id) AS keyword_count
-           FROM snapshots s
-           LEFT JOIN snapshot_ranks sr ON sr.snapshot_id = s.id
-           WHERE s.project_id = ?
-           GROUP BY s.id
-           ORDER BY s.created_at DESC, s.id DESC""",
-        (project_id,),
-    ).fetchall()
-    return {"snapshots": [row_to_snapshot(r, r["keyword_count"]) for r in rows]}
-
-
-@router.get("/{project_id}/snapshots/{snapshot_id}", dependencies=[Depends(require_project_access)])
-def snapshot_detail(project_id: int, snapshot_id: int, db: sqlite3.Connection = Depends(get_db)):
-    snap = db.execute(
-        "SELECT * FROM snapshots WHERE id = ? AND project_id = ?", (snapshot_id, project_id)
-    ).fetchone()
-    if snap is None:
-        raise HTTPException(404, "Snapshot not found.")
-    rows = db.execute(
-        "SELECT * FROM snapshot_ranks WHERE snapshot_id = ? ORDER BY rank IS NULL, rank ASC, term",
-        (snapshot_id,),
-    ).fetchall()
-    return {
-        "snapshot": {
-            **row_to_snapshot(snap, len(rows)),
-            "ranks": [row_to_snapshot_rank(r) for r in rows],
-        }
-    }
+    cells = []
+    for c in body.cells:
+        cell = {"keywordId": c.keywordId, "month": c.month, "rank": c.rank}
+        # Only forward `expected` when the caller actually sent it. Forwarding the
+        # default would tell save_cells "this cell was empty", so a client that
+        # opted into conflict checking but omitted `expected` on some cells would
+        # get a 409 on every cell that isn't empty.
+        if body.checkConflicts and "expected" in c.model_fields_set:
+            cell["expected"] = c.expected
+        cells.append(cell)
+    return keyword_rank_service.save_cells(db, project_id, cells)
