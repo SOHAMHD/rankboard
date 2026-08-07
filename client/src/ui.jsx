@@ -4,6 +4,18 @@ import { api } from "./api";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
 
+/**
+ * A wizard-only pseudo-role for a client who receives reports but never signs in.
+ *
+ * It is NOT a real role: the server rejects anything outside ROLES, and nothing
+ * is written to `users` on this path — only `project_recipients`. Kept out of
+ * ROLES on purpose so role dropdowns, permission checks and the users table
+ * can't accidentally offer it.
+ */
+export const CONTACT_ONLY = "Client contact";
+
+export const ONBOARD_ROLES = [...ROLES, CONTACT_ONLY];
+
 export const ROLE = {
   ADMIN: "Super Admin",
   MANAGER: "Admin",
@@ -22,7 +34,8 @@ export const ROLE_LABELS = {
   "Super Admin": "Super Admin",
   "Admin": "Admin (Manager)",
   "Team": "Team Member",
-  "Client": "Client",
+  "Client": "Client with dashboard access",
+  "Client contact": "Client contact only",
 };
 
 export const roleLabel = (role) => ROLE_LABELS[role] || role;
@@ -31,7 +44,8 @@ export const ROLE_DESCRIPTIONS = {
   "Super Admin": "Full control. Onboards people and assigns roles.",
   "Admin": "Also called Manager. Full project control; authors reports and sends them to clients.",
   "Team": "Sees only assigned projects. Authors reports, but can't send them to clients.",
-  "Client": "Permissions to be decided — most likely read-only.",
+  "Client": "Signs in to see their own project, and receives reports by email.",
+  "Client contact": "Receives reports by email only. No account, no invite email.",
 };
 
 const WRITE_ACTIONS = ["manageUsers", "addProject", "toggleProject", "deleteProject", "addKeyword", "deleteKeyword"];

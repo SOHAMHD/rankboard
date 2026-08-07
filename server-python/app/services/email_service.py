@@ -156,6 +156,60 @@ def _valid_email(addr: str) -> bool:
     return bool(local) and "." in domain and not domain.startswith(".") and not domain.endswith(".")
 
 
+def clean_recipient_set(primary: str, ccs) -> tuple[str, list[str]]:
+    """Validate and dedupe a saved recipient set. Returns (primary, cc_list).
+
+    Lives here rather than in a router because two of them need it — the project
+    recipients endpoint and user onboarding — and because it has to agree with
+    `_valid_email` above, which is what the send path uses. One validator means
+    an address that saves is an address that sends.
+
+    The primary wins over Cc on a collision, matching the shared `seen` set in
+    the report send endpoint.
+
+    Raises ValueError on an invalid address rather than dropping it. These are
+    stored defaults: an address quietly discarded here would make every future
+    report to that client miss someone, and nobody would find out for months.
+    Callers turn this into whatever their framework wants (routers raise a 422).
+    """
+    primary = (primary or "").strip()
+    if not _valid_email(primary):
+        raise ValueError(f"Not a valid email: {primary or '(empty)'}")
+
+    seen = {primary.lower()}
+    clean: list[str] = []
+    for raw in ccs or []:
+        addr = (raw or "").strip()
+        if not addr:
+            continue
+        if addr.lower() in seen:  # equals the primary, or a repeated Cc
+            continue
+        if not _valid_email(addr):
+            raise ValueError(f"Not a valid email: {addr}")
+        seen.add(addr.lower())
+        clean.append(addr)
+    return primary, clean
+
+
+def upsert_project_recipients(db, *, project_id: int, primary: str, ccs: list[str]) -> None:
+    """Write one project's recipient set, replacing whatever was there.
+
+    json.dumps plus the ::jsonb cast because psycopg has no adapter for a bare
+    Python list on a jsonb column. updated_at is set explicitly since the column
+    default only fires on INSERT.
+    """
+    db.execute(
+        """INSERT INTO project_recipients (project_id, primary_email, cc_emails)
+           VALUES (?, ?, ?::jsonb)
+           ON CONFLICT (project_id) DO UPDATE
+               SET primary_email = EXCLUDED.primary_email,
+                   cc_emails     = EXCLUDED.cc_emails,
+                   updated_at    = to_char((now() AT TIME ZONE 'UTC'),
+                                           'YYYY-MM-DD HH24:MI:SS')""",
+        (project_id, primary, json.dumps(ccs)),
+    )
+
+
 def send_report_email(
     db: sqlite3.Connection,
     *,

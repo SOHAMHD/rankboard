@@ -15,6 +15,8 @@ import {
   Modal,
   ErrorNote,
   ROLES,
+  ONBOARD_ROLES,
+  CONTACT_ONLY,
   ROLE_DESCRIPTIONS,
   roleLabel,
   can,
@@ -22,6 +24,7 @@ import {
   BTN_PRIMARY,
   BTN_GHOST,
 } from "../ui";
+import AddressInput, { foldDraft, isEmail } from "../lib/AddressInput";
 
 export function AdminPanelView({ user, onBack, onLogout }) {
   const [users, setUsers] = useState([]);
@@ -378,14 +381,36 @@ function ManageProjectsModal({ user, onClose, onSaved }) {
 }
 
 const STEP_LABELS = {
-  details: "Details",
   role: "Role",
+  details: "Details",
   projects: "Projects",
+  client: "Recipients",
   review: "Review",
 };
 
+/**
+ * Step order per role.
+ *
+ * Role comes first so every later step is conditional on something already
+ * known — asking for a name and email before the role meant those fields meant
+ * subtly different things depending on an answer not yet given.
+ *
+ * CONTACT_ONLY has no `details` step: there is no login to name and no invite
+ * to send. Their name and email are collected on the client step instead, where
+ * they mean "who the report is addressed to" rather than "who signs in".
+ */
+const FLOWS = {
+  "Super Admin": ["role", "details", "review"],
+  "Admin": ["role", "details", "review"],
+  "Team": ["role", "details", "projects", "review"],
+  "Client": ["role", "details", "projects", "client", "review"],
+  [CONTACT_ONLY]: ["role", "projects", "client", "review"],
+};
+
+const blankRecipients = () => ({ clientName: "", useLogin: true, primary: "", cc: [] });
+
 function OnboardWizard({ onClose, onCreated }) {
-  const [step, setStep] = useState("details");
+  const [step, setStep] = useState("role");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("Team");
@@ -395,6 +420,13 @@ function OnboardWizard({ onClose, onCreated }) {
   const [sentEmail, setSentEmail] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  // Recipients are keyed by project id, because project_recipients is. Selecting
+  // three projects means three separate lists, not one list copied three times —
+  // copies would drift the first time someone edited one of them.
+  const [recipients, setRecipients] = useState({});
+  const [ccDraft, setCcDraft] = useState("");
+  const [clientIndex, setClientIndex] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -408,9 +440,21 @@ function OnboardWizard({ onClose, onCreated }) {
     })();
   }, []);
 
-  const isScoped = role === "Client" || role === "Team";
-  const flow = isScoped ? ["details", "role", "projects", "review"] : ["details", "role", "review"];
+  const isContactOnly = role === CONTACT_ONLY;
+  const isScoped = role === "Client" || role === "Team" || isContactOnly;
+  const flow = FLOWS[role] || FLOWS.Team;
   const stepIndex = flow.indexOf(step);
+
+  const selectedIds = [...selected];
+  const clientProjectId = selectedIds[clientIndex];
+  const clientProject = projects.find((p) => p.id === clientProjectId);
+  const current = recipients[clientProjectId] || blankRecipients();
+
+  const patchCurrent = (patch) =>
+    setRecipients((prev) => ({
+      ...prev,
+      [clientProjectId]: { ...(prev[clientProjectId] || blankRecipients()), ...patch },
+    }));
 
   const toggleProject = (id) =>
     setSelected((prev) => {
@@ -424,10 +468,146 @@ function OnboardWizard({ onClose, onCreated }) {
     if (!name.trim()) return setError("Please enter their full name.");
     if (!/\S+@\S+\.\S+/.test(email.trim())) return setError("That doesn't look like a valid email address.");
     setError(null);
-    setStep("role");
+    setStep(flow[flow.indexOf("details") + 1]);
+  };
+
+  /** Seed the client step from the project and, for a login client, their email. */
+  const enterClientStep = () => {
+    if (selectedIds.length === 0) {
+      return setError(
+        isContactOnly
+          ? "Pick the project whose reports they should receive."
+          : "Pick at least one project before setting up recipients."
+      );
+    }
+    setError(null);
+    setCcDraft("");
+    setRecipients((prev) => {
+      const next = { ...prev };
+      for (const pid of selectedIds) {
+        if (next[pid]) continue;
+        const proj = projects.find((p) => p.id === pid);
+        next[pid] = {
+          ...blankRecipients(),
+          clientName: proj?.clientName || "",
+          // A login client's address is usually the right default; contact-only
+          // has no login, so there is nothing to prefill from.
+          useLogin: !isContactOnly,
+          primary: isContactOnly ? "" : email.trim(),
+        };
+      }
+      return next;
+    });
+    setClientIndex(0);
+    setStep("client");
+  };
+
+  /** The address that will actually be saved as primary for the current project. */
+  const effectivePrimary = () =>
+    (current.useLogin && !isContactOnly ? email.trim() : current.primary.trim());
+
+  const nextFromClient = () => {
+    const folded = foldDraft(current.cc, ccDraft, [effectivePrimary()]);
+    if (folded.error) return setError(folded.error);
+    if (folded.values !== current.cc) patchCurrent({ cc: folded.values });
+    setCcDraft("");
+
+    const primary = effectivePrimary();
+    if (!primary) {
+      return setError(
+        isContactOnly
+          ? "Enter the address their reports should go to."
+          : "Enter a primary report address, or tick \"same as their login\"."
+      );
+    }
+    if (!isEmail(primary)) return setError(`Not a valid email: ${primary}`);
+    if (isContactOnly && !current.clientName.trim()) {
+      return setError("Enter the client's name — it's used in the report greeting.");
+    }
+
+    setError(null);
+    if (clientIndex < selectedIds.length - 1) {
+      setClientIndex(clientIndex + 1);
+      setCcDraft("");
+    } else {
+      setStep("review");
+    }
+  };
+
+  /** Leave this project without saving anything for it. */
+  const skipClientStep = () => {
+    setError(null);
+    setRecipients((prev) => {
+      const next = { ...prev };
+      delete next[clientProjectId];
+      return next;
+    });
+    setCcDraft("");
+    if (clientIndex < selectedIds.length - 1) setClientIndex(clientIndex + 1);
+    else setStep("review");
+  };
+
+  const backFromClient = () => {
+    setError(null);
+    setCcDraft("");
+    if (clientIndex > 0) setClientIndex(clientIndex - 1);
+    else setStep("projects");
+  };
+
+  /** Only projects the user actually filled in get written. */
+  const recipientPayload = () =>
+    selectedIds
+      .filter((pid) => {
+        const r = recipients[pid];
+        return r && (r.useLogin ? email.trim() : r.primary.trim());
+      })
+      .map((pid) => {
+        const r = recipients[pid];
+        return {
+          projectId: pid,
+          clientName: r.clientName.trim() || undefined,
+          primaryEmail: (r.useLogin && !isContactOnly ? email.trim() : r.primary.trim()),
+          ccEmails: r.cc,
+        };
+      });
+
+  /**
+   * Contact-only path: no user account, no invite.
+   *
+   * Writes straight to the endpoints that already exist — the recipients upsert
+   * and, where the project has no client name yet, a project patch. Nothing
+   * touches the `users` table, so nobody gets a password they never asked for.
+   */
+  const saveContactOnly = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      for (const r of recipientPayload()) {
+        await api(`/projects/${r.projectId}/recipients`, {
+          method: "PUT",
+          body: { primaryEmail: r.primaryEmail, ccEmails: r.ccEmails },
+        });
+        const proj = projects.find((p) => p.id === r.projectId);
+        if (r.clientName && r.clientName !== proj?.clientName) {
+          await api(`/projects/${r.projectId}`, {
+            method: "PATCH",
+            body: { clientName: r.clientName },
+          });
+        }
+      }
+      setSentEmail(null);
+      setStep("sent");
+      onCreated();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const send = async () => {
+    if (isContactOnly) return saveContactOnly();
+
     setBusy(true);
     setError(null);
     try {
@@ -437,7 +617,11 @@ function OnboardWizard({ onClose, onCreated }) {
           name: name.trim(),
           email: email.trim(),
           role,
-          project_ids: isScoped ? [...selected] : [],
+          project_ids: isScoped ? selectedIds : [],
+          // The server writes these in the same transaction as the user, then
+          // sends the invite last — so a failure here can't leave someone
+          // holding a password for a half-built account.
+          recipients: role === "Client" ? recipientPayload() : [],
         },
       });
       setSentEmail(d.email);
@@ -451,7 +635,11 @@ function OnboardWizard({ onClose, onCreated }) {
   };
 
   return (
-    <Modal title={step === "sent" ? "Invite sent" : "Onboard someone"} onClose={onClose} wide>
+    <Modal
+      title={step === "sent" ? (sentEmail ? "Invite sent" : "Recipients saved") : "Onboard someone"}
+      onClose={onClose}
+      wide
+    >
       {step !== "sent" && (
         <div className="flex items-center mb-6 mt-1">
           {flow.map((key, i) => {
@@ -511,15 +699,19 @@ function OnboardWizard({ onClose, onCreated }) {
           />
           <ErrorNote>{error}</ErrorNote>
           <button onClick={nextFromDetails} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
-            Next: choose role
+            {flow[flow.indexOf("details") + 1] === "projects" ? "Next: pick projects" : "Next: review"}
           </button>
         </div>
       )}
 
       {step === "role" && (
         <div>
+          <h3 className="text-sm font-semibold text-stone-900 mb-0.5">What kind of access do they need?</h3>
+          <p className="text-xs text-stone-500 mb-3">
+            This decides what we ask for next.
+          </p>
           <div className="space-y-2">
-            {ROLES.map((r) => (
+            {ONBOARD_ROLES.map((r) => (
               <button
                 key={r}
                 onClick={() => setRole(r)}
@@ -539,12 +731,112 @@ function OnboardWizard({ onClose, onCreated }) {
               </button>
             ))}
           </div>
+          <ErrorNote>{error}</ErrorNote>
           <div className="flex gap-2 mt-5">
-            <button onClick={() => setStep("details")} className={`${BTN_GHOST} px-4 py-2.5`}>
+            <button onClick={onClose} className={`${BTN_GHOST} px-4 py-2.5`}>
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                setError(null);
+                setStep(flow[1]);
+              }}
+              className={`${BTN_PRIMARY} flex-1 py-2.5`}
+            >
+              {flow[1] === "details" ? "Next: their details" : "Next: pick projects"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === "client" && (
+        <div>
+          {selectedIds.length > 1 && (
+            <div className="flex items-center gap-2 rounded-lg bg-stone-50 border border-stone-200 px-3 py-2 mb-4 text-xs">
+              <FolderCog size={14} className="text-stone-400 shrink-0" />
+              <span className="text-stone-500">Project</span>
+              <span className="font-medium text-stone-800 truncate">{clientProject?.name}</span>
+              <span className="ml-auto text-stone-400 shrink-0">
+                {clientIndex + 1} of {selectedIds.length}
+              </span>
+            </div>
+          )}
+          {selectedIds.length === 1 && (
+            <p className="text-xs text-stone-500 mb-4">
+              Reports for <span className="font-medium text-stone-700">{clientProject?.name}</span>
+            </p>
+          )}
+
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+            Client name
+          </label>
+          <input
+            value={current.clientName}
+            onChange={(e) => patchCurrent({ clientName: e.target.value })}
+            placeholder="e.g. Dr. Anuranjan"
+            className={INPUT_CLS}
+          />
+          <p className="text-[11px] text-stone-400 mt-1">
+            Used in the report greeting and subject line.
+            {clientProject?.clientName ? ` Currently "${clientProject.clientName}".` : ""}
+          </p>
+
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mt-4 mb-1.5">
+            Primary report email
+          </label>
+          {!isContactOnly && (
+            <label className="flex items-center gap-2 text-sm text-stone-700 mb-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={current.useLogin}
+                onChange={(e) => patchCurrent({ useLogin: e.target.checked })}
+                className="h-4 w-4 accent-orange-600"
+              />
+              Same as their login — <span className="font-data">{email.trim() || "not set"}</span>
+            </label>
+          )}
+          {(isContactOnly || !current.useLogin) && (
+            <input
+              type="email"
+              value={current.primary}
+              onChange={(e) => patchCurrent({ primary: e.target.value })}
+              placeholder="accounts@company.com"
+              className={INPUT_CLS}
+            />
+          )}
+
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mt-4 mb-1.5">
+            Cc <span className="normal-case tracking-normal font-normal text-stone-400">(optional)</span>
+          </label>
+          <AddressInput
+            id="onboard-cc"
+            values={current.cc}
+            onChange={(v) => patchCurrent({ cc: v })}
+            draft={ccDraft}
+            onDraftChange={setCcDraft}
+            taken={[effectivePrimary()].filter(Boolean)}
+            placeholder="colleague@company.com"
+            onError={setError}
+          />
+
+          <p className="text-[11px] text-stone-500 bg-stone-50 border border-stone-200 rounded-lg px-2.5 py-2 mt-3 flex gap-1.5">
+            <Mail size={13} className="shrink-0 mt-0.5 text-stone-400" />
+            <span>
+              These people receive the report PDF. They do not get an account and cannot sign in.
+            </span>
+          </p>
+
+          <ErrorNote>{error}</ErrorNote>
+
+          <div className="flex items-center gap-2 mt-5">
+            <button onClick={skipClientStep} className={`${BTN_GHOST} px-3 py-2.5 mr-auto`}>
+              Skip for now
+            </button>
+            <button onClick={backFromClient} className={`${BTN_GHOST} px-4 py-2.5`}>
               <ChevronLeft size={15} /> Back
             </button>
-            <button onClick={() => setStep(isScoped ? "projects" : "review")} className={`${BTN_PRIMARY} flex-1 py-2.5`}>
-              {isScoped ? "Next: pick projects" : "Next: review"}
+            <button onClick={nextFromClient} className={`${BTN_PRIMARY} px-5 py-2.5`}>
+              {clientIndex < selectedIds.length - 1 ? "Next project" : "Next: review"}
             </button>
           </div>
         </div>
@@ -552,18 +844,36 @@ function OnboardWizard({ onClose, onCreated }) {
 
       {step === "projects" && (
         <div>
-          <h3 className="text-sm font-semibold text-stone-900">Which projects can this person see?</h3>
+          <h3 className="text-sm font-semibold text-stone-900">
+            {isContactOnly ? "Whose reports should they receive?" : "Which projects can this person see?"}
+          </h3>
           <p className="text-xs text-stone-500 mt-0.5 mb-3">
-            They'll only see the projects you select here — you can change this later.
+            {isContactOnly
+              ? "You'll set the addresses for each project you pick — you can change them later."
+              : "They'll only see the projects you select here — you can change this later."}
           </p>
           <ProjectChecklist projects={projects} selected={selected} onToggle={toggleProject} loading={projectsLoading} />
           <p className="text-xs text-stone-400 mt-2">{selected.size} selected</p>
+          <ErrorNote>{error}</ErrorNote>
           <div className="flex justify-end gap-2 mt-5">
-            <button onClick={() => setStep("role")} className={`${BTN_GHOST} px-4 py-2.5`}>
+            <button
+              onClick={() => {
+                setError(null);
+                setStep(flow[flow.indexOf("projects") - 1]);
+              }}
+              className={`${BTN_GHOST} px-4 py-2.5`}
+            >
               <ChevronLeft size={15} /> Back
             </button>
-            <button onClick={() => setStep("review")} className={`${BTN_PRIMARY} px-5 py-2.5`}>
-              Next
+            <button
+              onClick={() => {
+                if (flow.includes("client")) return enterClientStep();
+                setError(null);
+                setStep("review");
+              }}
+              className={`${BTN_PRIMARY} px-5 py-2.5`}
+            >
+              {flow.includes("client") ? "Next: recipients" : "Next"}
             </button>
           </div>
         </div>
@@ -572,14 +882,18 @@ function OnboardWizard({ onClose, onCreated }) {
       {step === "review" && (
         <div>
           <div className="rounded-xl border border-stone-200 divide-y divide-stone-100 text-sm">
-            <div className="px-4 py-2.5 flex justify-between gap-4">
-              <span className="text-stone-400">Name</span>
-              <span className="font-medium text-stone-800 text-right">{name.trim()}</span>
-            </div>
-            <div className="px-4 py-2.5 flex justify-between gap-4">
-              <span className="text-stone-400">Email</span>
-              <span className="font-data text-stone-800 text-right">{email.trim()}</span>
-            </div>
+            {!isContactOnly && (
+              <>
+                <div className="px-4 py-2.5 flex justify-between gap-4">
+                  <span className="text-stone-400">Name</span>
+                  <span className="font-medium text-stone-800 text-right">{name.trim()}</span>
+                </div>
+                <div className="px-4 py-2.5 flex justify-between gap-4">
+                  <span className="text-stone-400">Email</span>
+                  <span className="font-data text-stone-800 text-right">{email.trim()}</span>
+                </div>
+              </>
+            )}
             <div className="px-4 py-2.5 flex justify-between gap-4">
               <span className="text-stone-400">Role</span>
               <span className="font-medium text-stone-800 text-right">
@@ -594,33 +908,71 @@ function OnboardWizard({ onClose, onCreated }) {
                 </span>
               </div>
             )}
+            {recipientPayload().map((r) => {
+              const proj = projects.find((p) => p.id === r.projectId);
+              return (
+                <div key={r.projectId} className="px-4 py-2.5 flex justify-between gap-4">
+                  <span className="text-stone-400 shrink-0">{proj?.name || `Project ${r.projectId}`}</span>
+                  <span className="text-stone-800 text-right min-w-0">
+                    <span className="font-data break-all">{r.primaryEmail}</span>
+                    {r.ccEmails.length > 0 && (
+                      <span className="text-stone-500"> +{r.ccEmails.length} cc</span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
           </div>
           <p className="text-xs text-stone-400 mt-3">
-            Sending creates their account and emails them the website link, their email, and a temporary password
-            generated by the server.
+            {isContactOnly
+              ? "Saves the report recipients for the projects above. No account is created and nobody is emailed."
+              : "Sending creates their account and emails them the website link, their email, and a temporary password generated by the server."}
           </p>
           <ErrorNote>{error}</ErrorNote>
           <div className="flex gap-2 mt-4">
-            <button onClick={() => setStep(isScoped ? "projects" : "role")} className={`${BTN_GHOST} px-4 py-2.5`}>
+            <button
+              onClick={() => {
+                setError(null);
+                setStep(flow[flow.indexOf("review") - 1]);
+                if (flow.includes("client")) setClientIndex(Math.max(selectedIds.length - 1, 0));
+              }}
+              className={`${BTN_GHOST} px-4 py-2.5`}
+            >
               <ChevronLeft size={15} /> Back
             </button>
             <button onClick={send} disabled={busy} className={`${BTN_PRIMARY} flex-1 py-2.5`}>
-              {busy ? <LoaderCircle size={15} className="animate-spin" /> : <><Send size={15} /> Create &amp; send invite</>}
+              {busy ? (
+                <LoaderCircle size={15} className="animate-spin" />
+              ) : isContactOnly ? (
+                <><Check size={15} /> Save recipients</>
+              ) : (
+                <><Send size={15} /> Create &amp; send invite</>
+              )}
             </button>
           </div>
         </div>
       )}
 
-      {step === "sent" && sentEmail && (
+      {step === "sent" && (
         <div>
           <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 mb-4">
-            <Check size={15} /> Account created and invite sent.
+            <Check size={15} />
+            {sentEmail ? "Account created and invite sent." : "Recipients saved."}
           </div>
-          <EmailPreview email={sentEmail} />
-          <p className="text-xs text-stone-400 mt-3">
-            This temporary password is shown once — only its hash is stored. If it's lost, use "resend invite" to
-            generate a new one.
-          </p>
+          {sentEmail ? (
+            <>
+              <EmailPreview email={sentEmail} />
+              <p className="text-xs text-stone-400 mt-3">
+                This temporary password is shown once — only its hash is stored. If it's lost, use "resend invite" to
+                generate a new one.
+              </p>
+            </>
+          ) : (
+            <p className="text-xs text-stone-500">
+              Reports for the selected projects will go to these addresses. No account was created and nobody was
+              emailed. You can change the list any time from the send dialog.
+            </p>
+          )}
           <button onClick={onClose} className={`${BTN_PRIMARY} w-full py-2.5 mt-4`}>
             Done
           </button>

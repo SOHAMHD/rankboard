@@ -150,7 +150,10 @@ def main() -> None:
         if moves:
             print(f"\n{len(moves)} rank(s) will move to the surviving keyword:")
             for survivor_id, month, rank, from_id in moves:
-                print(f"    {month}  #{rank}   keyword {from_id} → {survivor_id}")
+                # ASCII arrow: a Windows console is cp1252 and cannot encode
+                # U+2192, which would crash this script on the machine most
+                # likely to be running it.
+                print(f"    {month}  #{rank}   keyword {from_id} -> {survivor_id}")
 
         if collisions:
             print(f"\n{len(collisions)} month(s) hold different ranks on both rows. "

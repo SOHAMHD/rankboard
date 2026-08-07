@@ -1,98 +1,14 @@
-import { useState } from "react";
-import { Send, LoaderCircle, X, Plus, Mail, Users } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Send, LoaderCircle, X, Plus, Mail, Users, Save, Bookmark } from "lucide-react";
 import { api } from "../api";
 import { BTN_PRIMARY, BTN_GHOST, INPUT_CLS } from "../ui";
 import { useToast } from "../toast.jsx";
-
-function isEmail(s) {
-  const v = (s || "").trim();
-  if (!v || (v.match(/@/g) || []).length !== 1) return false;
-  const [local, domain] = v.split("@");
-  return !!local && domain.includes(".") && !domain.startsWith(".") && !domain.endsWith(".");
-}
-
-/**
- * The address chip input, shared by Recipients and Cc.
- *
- * Extracted rather than copied: the paste-splitting, backspace-to-remove and
- * commit-on-blur behaviour is fiddly enough that two copies would drift.
- * `taken` holds the addresses already used by the other field, so the same
- * person can't be put on both lines — the server drops that duplicate anyway,
- * and it's clearer to say so here.
- */
-function AddressInput({ id, values, onChange, draft, onDraftChange, taken = [], placeholder, onError }) {
-  const commitDraft = (text = draft) => {
-    const parts = text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
-    if (parts.length === 0) return;
-    const bad = [];
-    const dupes = [];
-    const next = [...values];
-    const seen = new Set([...values, ...taken].map((e) => e.toLowerCase()));
-    for (const p of parts) {
-      const key = p.toLowerCase();
-      if (seen.has(key)) {
-        if (taken.some((t) => t.toLowerCase() === key)) dupes.push(p);
-        continue;
-      }
-      if (!isEmail(p)) { bad.push(p); continue; }
-      seen.add(key);
-      next.push(p);
-    }
-    onChange(next);
-    onDraftChange("");
-    if (bad.length) onError(`Not a valid email: ${bad.join(", ")}`);
-    else if (dupes.length) onError(`${dupes.join(", ")} is already on the other line.`);
-    else onError(null);
-  };
-
-  const remove = (target) => onChange(values.filter((e) => e !== target));
-
-  const onKeyDown = (e) => {
-    if (["Enter", ",", " ", "Tab"].includes(e.key)) {
-      if (draft.trim()) {
-        e.preventDefault();
-        commitDraft();
-      }
-    } else if (e.key === "Backspace" && !draft && values.length) {
-      remove(values[values.length - 1]);
-    }
-  };
-
-  return (
-    <div className="flex flex-wrap gap-1.5 rounded-lg border border-stone-300 bg-white px-2 py-2 focus-within:border-orange-400">
-      {values.map((e) => (
-        <span key={e} className="inline-flex items-center gap-1 rounded-md bg-stone-100 text-stone-700 text-xs px-2 py-1">
-          {e}
-          <button
-            onClick={() => remove(e)}
-            className="text-stone-400 hover:text-red-600"
-            aria-label={`Remove ${e}`}
-          >
-            <X size={12} />
-          </button>
-        </span>
-      ))}
-      <input
-        id={id}
-        type="email"
-        value={draft}
-        onChange={(ev) => onDraftChange(ev.target.value)}
-        onKeyDown={onKeyDown}
-        onBlur={() => draft.trim() && commitDraft()}
-        onPaste={(ev) => {
-          const text = ev.clipboardData.getData("text");
-          if (/[\s,;]/.test(text)) { ev.preventDefault(); commitDraft(text); }
-        }}
-        placeholder={values.length ? "Add another…" : placeholder}
-        className="flex-1 min-w-[10rem] outline-none text-sm py-0.5"
-      />
-    </div>
-  );
-}
+import AddressInput, { foldDraft } from "./AddressInput";
 
 export default function SendReportButton({
   versionId,
   periodKey,
+  projectId,
   label = false,
   className = "",
   beforeSend,
@@ -108,6 +24,9 @@ export default function SendReportButton({
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
+  const [loadingSaved, setLoadingSaved] = useState(false);
+  const [savingDefault, setSavingDefault] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
   const toast = useToast();
 
   const reset = () => {
@@ -119,23 +38,47 @@ export default function SendReportButton({
     setSubject("");
     setMessage("");
     setError(null);
+    setSavedAt(null);
   };
+
+  // Prefill from the project's saved recipients.
+  //
+  // Keyed on `open`, not on mount: the reports list renders one of these buttons
+  // per row, so fetching on mount would fire a request per row on every page
+  // load to populate a dialog nobody has opened.
+  //
+  // A project with no saved recipients is the ordinary case, not a failure — the
+  // endpoint returns null and the form simply stays blank.
+  useEffect(() => {
+    if (!open || !projectId) return;
+    let cancelled = false;
+    setLoadingSaved(true);
+    api(`/projects/${projectId}/recipients`)
+      .then((res) => {
+        if (cancelled || !res.recipients) return;
+        const { primaryEmail, ccEmails = [], updatedAt } = res.recipients;
+        setEmails(primaryEmail ? [primaryEmail] : []);
+        setCc(ccEmails);
+        setShowCc(ccEmails.length > 0);
+        setSavedAt(updatedAt || null);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoadingSaved(false);
+      });
+    // Guards against the dialog being closed mid-flight: without it the chips
+    // land in state after reset() has run and reappear on the next open.
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projectId]);
 
   const close = () => {
-    if (sending) return;
+    // Also blocked mid-save: closing then would leave the user unsure whether
+    // the default was stored.
+    if (sending || savingDefault) return;
     setOpen(false);
     reset();
-  };
-
-  // A typed-but-not-yet-committed address should still send, so fold the draft in
-  // before validating. Same treatment for both lines.
-  const foldDraft = (values, pending, other) => {
-    const clean = (pending || "").trim();
-    if (!clean) return { values, error: null };
-    if (!isEmail(clean)) return { values, error: `Not a valid email: ${clean}` };
-    const seen = new Set([...values, ...other].map((e) => e.toLowerCase()));
-    if (seen.has(clean.toLowerCase())) return { values, error: null };
-    return { values: [...values, clean], error: null };
   };
 
   const send = async () => {
@@ -188,7 +131,59 @@ export default function SendReportButton({
     }
   };
 
+  /**
+   * Store the addresses currently on screen as this project's default.
+   *
+   * The table holds exactly one primary, so if the To line has several the first
+   * becomes the primary and the rest fold into Cc. The toast says so rather than
+   * silently reshuffling what the user typed.
+   *
+   * Sending and saving stay separate on purpose: editing the list for a one-off
+   * send shouldn't quietly rewrite the default for every future report.
+   */
+  const saveAsDefault = async () => {
+    const to = foldDraft(emails, draft, cc);
+    if (to.error) { setError(to.error); return; }
+    const copies = foldDraft(cc, ccDraft, to.values);
+    if (copies.error) { setError(copies.error); return; }
+
+    setEmails(to.values);
+    setDraft("");
+    setCc(copies.values);
+    setCcDraft("");
+
+    if (to.values.length === 0) { setError("Add a primary email address first."); return; }
+
+    const extras = to.values.slice(1);
+    setSavingDefault(true);
+    setError(null);
+    try {
+      const res = await api(`/projects/${projectId}/recipients`, {
+        method: "PUT",
+        body: {
+          primaryEmail: to.values[0],
+          ccEmails: [...extras, ...copies.values],
+        },
+      });
+      const saved = res.recipients?.ccEmails?.length ?? 0;
+      toast.success(
+        extras.length
+          ? `${to.values[0]} saved as primary, ${saved} on Cc.`
+          : `Saved for next time — ${to.values[0]}${saved ? ` and ${saved} on Cc` : ""}.`,
+        { title: "Default recipients saved" }
+      );
+      setSavedAt("just now");
+    } catch (e) {
+      const msg = e.message || "Couldn't save these as the default.";
+      setError(msg);
+      toast.error(msg, { title: "Save failed" });
+    } finally {
+      setSavingDefault(false);
+    }
+  };
+
   const totalAddresses = emails.length + cc.length;
+  const busy = sending || savingDefault;
 
   const trigger = label ? (
     <button onClick={() => setOpen(true)} className={`${BTN_GHOST} px-3 py-1.5 ${className}`}>
@@ -228,7 +223,7 @@ export default function SendReportButton({
                   {periodKey ? `${periodKey} report` : "This report"} will be attached as a PDF.
                 </p>
               </div>
-              <button onClick={close} disabled={sending} className="text-stone-400 hover:text-stone-700 disabled:opacity-40">
+              <button onClick={close} disabled={busy} className="text-stone-400 hover:text-stone-700 disabled:opacity-40">
                 <X size={18} />
               </button>
             </div>
@@ -257,8 +252,20 @@ export default function SendReportButton({
               onError={setError}
             />
             <p className="text-[11px] text-stone-400 mt-1">
-              Press Enter, comma, or space to add each address. Add as many as you like.
+              {loadingSaved
+                ? "Loading this project's saved recipients…"
+                : "Press Enter, comma, or space to add each address. Add as many as you like."}
             </p>
+
+            {savedAt && !loadingSaved && (
+              // Worth surfacing the date: a list nobody has touched in a year
+              // deserves a glance before it goes out again.
+              <p className="text-[11px] text-stone-500 mt-1 inline-flex items-center gap-1">
+                <Bookmark size={11} className="text-stone-400" />
+                Filled in from this project&apos;s saved recipients
+                {savedAt === "just now" ? "." : ` · last updated ${savedAt}`}
+              </p>
+            )}
 
             {showCc && (
               <>
@@ -330,12 +337,29 @@ export default function SendReportButton({
             )}
 
             <div className="flex justify-end gap-2 mt-5">
-              <button onClick={close} disabled={sending} className={`${BTN_GHOST} px-3 py-1.5`}>
+              {projectId && (
+                // mr-auto parks this on the far left, well away from Send, so
+                // it can't be hit by accident on the way to the primary action.
+                <button
+                  onClick={saveAsDefault}
+                  disabled={busy || (emails.length === 0 && !draft.trim())}
+                  title="Remember these addresses for this project's future reports"
+                  className={`${BTN_GHOST} px-3 py-1.5 mr-auto`}
+                >
+                  {savingDefault ? (
+                    <LoaderCircle size={14} className="animate-spin" />
+                  ) : (
+                    <Save size={14} />
+                  )}
+                  Save as default
+                </button>
+              )}
+              <button onClick={close} disabled={busy} className={`${BTN_GHOST} px-3 py-1.5`}>
                 Cancel
               </button>
               <button
                 onClick={send}
-                disabled={sending || (emails.length === 0 && !draft.trim())}
+                disabled={busy || (emails.length === 0 && !draft.trim())}
                 className={`${BTN_PRIMARY} px-4 py-1.5`}
               >
                 {sending ? (

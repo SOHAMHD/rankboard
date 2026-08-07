@@ -7,7 +7,13 @@ from pydantic import BaseModel, Field
 
 from ..access import accessible_project_ids
 from ..db import INTEGRITY_ERRORS, get_db
-from ..security import require_active_user, require_permission, require_project_access
+from ..permissions import SENDER_ROLES
+from ..security import (
+    require_active_user,
+    require_permission,
+    require_project_access,
+    require_roles,
+)
 from ..services.analytics_provider import (
     ALLOWED_DIMENSIONS,
     ALLOWED_MATCH_TYPES,
@@ -24,6 +30,7 @@ from ..services.search_console_provider import (
 )
 from ..services.excel_service import build_sample_workbook, parse_keyword_workbook
 from ..services import keyword_rank_service
+from ..services.email_service import clean_recipient_set, upsert_project_recipients
 
 router = APIRouter(dependencies=[Depends(require_active_user)])
 
@@ -401,6 +408,14 @@ def normalize_gsc_site_url(raw: str | None) -> str | None:
     return raw.strip()
 
 
+def _clean_recipients(primary: str, ccs: list[str] | None) -> tuple[str, list[str]]:
+    """HTTP wrapper around the shared validator in email_service."""
+    try:
+        return clean_recipient_set(primary, ccs)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
 def _lookup_location(db: sqlite3.Connection, code: int, kind: str) -> sqlite3.Row:
     row = db.execute(
         "SELECT location_code, name, full_name, kind, country_code, region_code"
@@ -736,3 +751,77 @@ def save_keyword_ranks(project_id: int, body: RankCellsIn, db: sqlite3.Connectio
             cell["expected"] = c.expected
         cells.append(cell)
     return keyword_rank_service.save_cells(db, project_id, cells)
+
+
+class RecipientsIn(BaseModel):
+    primaryEmail: str
+    ccEmails: list[str] = Field(default_factory=list)
+
+
+@router.get("/{project_id}/recipients", dependencies=[Depends(require_project_access)])
+def get_recipients(project_id: int, db: sqlite3.Connection = Depends(get_db)):
+    """A project's saved report recipients, or null if none are set yet.
+
+    The project and client names come from the join rather than being stored
+    alongside the addresses, so a rename can never leave the two disagreeing.
+    """
+    row = db.execute(
+        """SELECT r.primary_email, r.cc_emails, r.updated_at,
+                  p.name        AS project_name,
+                  p.client_name AS client_name
+             FROM project_recipients r
+             JOIN projects p ON p.id = r.project_id
+            WHERE r.project_id = ?""",
+        (project_id,),
+    ).fetchone()
+
+    # No row is the ordinary state for a project nobody has set up yet, not an
+    # error — the dialog opens blank instead of showing a failure.
+    if row is None:
+        return {"recipients": None}
+
+    return {
+        "recipients": {
+            "projectName": row["project_name"],
+            "clientName": row["client_name"],
+            "primaryEmail": row["primary_email"],
+            "ccEmails": row["cc_emails"] or [],
+            "updatedAt": row["updated_at"],
+        }
+    }
+
+
+@router.put(
+    "/{project_id}/recipients",
+    dependencies=[Depends(require_project_access), Depends(require_roles(*SENDER_ROLES))],
+)
+def save_recipients(
+    project_id: int,
+    body: RecipientsIn,
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Create or replace a project's saved recipients.
+
+    Gated on SENDER_ROLES: the people who can edit the list are the people who
+    can actually send with it.
+    """
+    if db.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone() is None:
+        raise HTTPException(404, "Project not found.")
+
+    primary, ccs = _clean_recipients(body.primaryEmail, body.ccEmails)
+    upsert_project_recipients(db, project_id=project_id, primary=primary, ccs=ccs)
+    return {"recipients": {"primaryEmail": primary, "ccEmails": ccs}}
+
+
+@router.delete(
+    "/{project_id}/recipients",
+    dependencies=[Depends(require_project_access), Depends(require_roles(*SENDER_ROLES))],
+)
+def delete_recipients(project_id: int, db: sqlite3.Connection = Depends(get_db)):
+    """Clear a project's saved recipients; the dialog then opens blank.
+
+    Deliberately not a 404 when there was nothing to delete — the caller asked
+    for "no saved recipients" and that is now true either way.
+    """
+    db.execute("DELETE FROM project_recipients WHERE project_id = ?", (project_id,))
+    return {"ok": True}

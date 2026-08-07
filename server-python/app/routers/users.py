@@ -3,12 +3,16 @@ import sqlite3
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..db import INTEGRITY_ERRORS, get_db
 from ..permissions import ADMIN_ROLE, ROLES, SCOPED_ROLES, can
 from ..security import require_active_user, require_permission
-from ..services.email_service import send_invite_email
+from ..services.email_service import (
+    clean_recipient_set,
+    send_invite_email,
+    upsert_project_recipients,
+)
 
 def require_user_admin(user: sqlite3.Row = Depends(require_active_user)) -> sqlite3.Row:
     if can(user["role"], "manageUsers") or can(user["role"], "assignProjects"):
@@ -66,11 +70,22 @@ def list_users(db: sqlite3.Connection = Depends(get_db)):
     return {"users": [row_to_user(r, assignments.get(r["id"])) for r in rows]}
 
 
+class OnboardRecipientsIn(BaseModel):
+    projectId: int
+    clientName: str | None = None
+    primaryEmail: str
+    ccEmails: list[str] = Field(default_factory=list)
+
+
 class OnboardIn(BaseModel):
     name: str
     email: str
     role: str
     project_ids: list[int] = []
+    #: Report recipients to set up per project while onboarding a client. Sent
+    #: with the user rather than as a follow-up call so the whole thing is one
+    #: transaction — see the ordering note in onboard_user.
+    recipients: list[OnboardRecipientsIn] = Field(default_factory=list)
 
 
 @router.post("", status_code=201, dependencies=[Depends(require_permission("manageUsers"))])
@@ -90,27 +105,60 @@ def onboard_user(body: OnboardIn, db: sqlite3.Connection = Depends(get_db)):
     if bad:
         raise HTTPException(400, f"These projects don't exist: {', '.join(map(str, bad))}.")
 
+    # Validate every recipient set before writing anything. Doing this up front
+    # means a typo in the third project's Cc can't leave the first two written
+    # and the user half-created.
+    recipient_writes = []
+    for r in body.recipients:
+        if r.projectId not in assign_ids:
+            raise HTTPException(
+                400, f"Project {r.projectId} isn't assigned to this person, so it can't have recipients."
+            )
+        try:
+            primary, ccs = clean_recipient_set(r.primaryEmail, r.ccEmails)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        recipient_writes.append((r.projectId, primary, ccs, (r.clientName or "").strip()))
+
     temp_password = generate_temp_password()
     pw_hash = bcrypt.hashpw(temp_password.encode(), bcrypt.gensalt()).decode()
 
+    # One transaction around every write. Connections are autocommit, so without
+    # this a failure partway through would leave the earlier rows committed.
     try:
-        cur = db.execute(
-            "INSERT INTO users (name, email, role, password_hash, must_change_password, status)"
-            " VALUES (?, ?, ?, ?, 1, 'invited')",
-            (name, email, body.role, pw_hash),
-        )
+        with db.transaction():
+            cur = db.execute(
+                "INSERT INTO users (name, email, role, password_hash, must_change_password, status)"
+                " VALUES (?, ?, ?, ?, 1, 'invited')",
+                (name, email, body.role, pw_hash),
+            )
+            user_id = cur.lastrowid
+
+            for pid in assign_ids:
+                db.execute(
+                    "INSERT OR IGNORE INTO user_projects (user_id, project_id) VALUES (?, ?)",
+                    (user_id, pid),
+                )
+
+            for pid, primary, ccs, client_name in recipient_writes:
+                upsert_project_recipients(db, project_id=pid, primary=primary, ccs=ccs)
+                # Only fill a blank client name. Silently renaming someone's
+                # project from an onboarding form would be a surprise.
+                if client_name:
+                    db.execute(
+                        "UPDATE projects SET client_name = ?"
+                        " WHERE id = ? AND (client_name IS NULL OR client_name = '')",
+                        (client_name, pid),
+                    )
     except INTEGRITY_ERRORS:
         raise HTTPException(409, "Someone with this email already exists.")
 
-    for pid in assign_ids:
-        db.execute(
-            "INSERT OR IGNORE INTO user_projects (user_id, project_id) VALUES (?, ?)",
-            (cur.lastrowid, pid),
-        )
-
+    # Sent only once everything above has committed. An email cannot be unsent,
+    # so it has to be the last irreversible act — otherwise a failed recipient
+    # write leaves someone holding a password for an account that got rolled back.
     email_record = send_invite_email(db, name=name, email=email, role=body.role, temp_password=temp_password)
     user = db.execute(
-        "SELECT id, name, email, role, status, created_at FROM users WHERE id = ?", (cur.lastrowid,)
+        "SELECT id, name, email, role, status, created_at FROM users WHERE id = ?", (user_id,)
     ).fetchone()
 
     return {"user": row_to_user(user, assign_ids), "email": email_record}

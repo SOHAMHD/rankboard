@@ -298,7 +298,13 @@ export function ReportsPanel({ user, project }) {
                   periodKey={v.periodKey}
                   onError={(m) => setGenMsg({ tone: "warn", text: m })}
                 />
-                {canSend && <SendReportButton versionId={v.id} periodKey={v.periodKey} />}
+                {canSend && (
+                  <SendReportButton
+                    versionId={v.id}
+                    periodKey={v.periodKey}
+                    projectId={project.id}
+                  />
+                )}
                 <button onClick={() => setOpenId(v.id)} className={`${BTN_GHOST} px-3 py-1.5`}>
                   {v.status === "draft" ? "Edit" : "Open"}
                 </button>
