@@ -11,6 +11,7 @@ import {
   searchRegions,
 } from "../locations";
 import { TopBar, Modal, ErrorNote, SmartSearch, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
+import ProjectRecipients from "../lib/ProjectRecipients";
 
 const TLD_COUNTRIES = {
   ".au": { code: 2036, name: "Australia" },
@@ -594,6 +595,12 @@ function EditProjectModal({ project, onClose, onSaved }) {
         className={INPUT_CLS}
       />
       <p className="text-xs text-stone-400 mt-2">URL-prefix property like "https://www.example.com/" (with trailing slash), or domain property like "sc-domain:example.com".</p>
+
+      {/* Its own endpoint and its own save button — a rejected address here
+          shouldn't stop you changing the domain above. */}
+      <div className="mt-5">
+        <ProjectRecipients projectId={project.id} />
+      </div>
 
       <ErrorNote>{error}</ErrorNote>
       <button onClick={submit} disabled={busy} className={`${BTN_PRIMARY} w-full mt-4 py-2.5`}>

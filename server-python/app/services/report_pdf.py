@@ -1035,8 +1035,7 @@ def _render_block_inline(b: dict, vs_sub: str, blobs_by_name, period_label='', p
 _PAGE_GROUPS = [
     ("Progress Summary", ["progress-summary"],True),
     ("Key Metrics", ["key-metrics", "achievements"], False),
-    ("Domain Authority & Backlinks (Moz)", ["moz-overview"], False),
-    ("GA4 - Audience Overview", ["ga4-overview-notes", "ga4-overview", "ga4-users-trend", "ga4-graph-notes"], True),
+    ("GA4 - Audience Overview", ["ga4-overview-notes", "ga4-overview", "ga4-users-trend"], True),
     ("Traffic by Channel", ["ga4-by_channel"], False),
     ("Users by Country & City", ["ga4-cities-notes", "ga4-by_country_city"], False),
     ("Top Landing Pages", ["ga4-landing-notes", "ga4-by_landing_page"], False),
