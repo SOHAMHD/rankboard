@@ -12,6 +12,63 @@ import pytest
 from app.services import brevo_events
 
 
+# ── event-name translation ────────────────────────────────────────────
+# The API says "hardBounces" where the webhook says "hard_bounce", and
+# EVENT_STATUS is keyed on the webhook spelling. An untranslated name resolves
+# to status None: the event stores, the row never advances, and nothing looks
+# broken enough to investigate. Every name Brevo can return is pinned here.
+
+@pytest.mark.parametrize("api_name,webhook_name", [
+    ("requests", "request"),
+    ("clicks", "click"),
+    ("uniqueOpened", "unique_opened"),
+    ("loadedByProxy", "proxy_open"),
+    ("hardBounces", "hard_bounce"),
+    ("softBounces", "soft_bounce"),
+    ("bounces", "hard_bounce"),
+    ("invalid", "invalid_email"),
+    ("complaints", "complaint"),
+])
+def test_api_event_names_are_translated(api_name, webhook_name):
+    out = brevo_events.to_webhook_payload({"event": api_name})
+    assert out["event"] == webhook_name
+
+
+@pytest.mark.parametrize("name", [
+    "delivered", "opened", "spam", "deferred", "blocked", "error", "unsubscribed",
+])
+def test_names_that_already_agree_pass_through(name):
+    assert brevo_events.to_webhook_payload({"event": name})["event"] == name
+
+
+def test_translation_is_case_insensitive():
+    assert brevo_events.to_webhook_payload({"event": "hardbounces"})["event"] == "hard_bounce"
+
+
+def test_an_unrecognised_event_is_left_alone_not_dropped():
+    # Better stored under its own name — visible in the raw column — than
+    # silently discarded because we didn't recognise it.
+    assert brevo_events.to_webhook_payload({"event": "somethingNew"})["event"] == "somethingNew"
+
+
+def test_every_translated_name_resolves_to_a_real_status():
+    # The point of the mapping: each output name must be a key EVENT_STATUS
+    # actually knows, or the row's status stays put.
+    from app.services.email_tracking import EVENT_STATUS
+
+    for api_name in brevo_events._EVENT_NAMES:
+        translated = brevo_events.to_webhook_payload({"event": api_name})["event"]
+        assert translated in EVENT_STATUS, f"{api_name} -> {translated} is not in EVENT_STATUS"
+
+
+def test_the_open_events_the_api_reports_all_count_as_reads():
+    from app.services.email_tracking import _OPEN_EVENTS
+
+    for api_name in ("opened", "uniqueOpened", "loadedByProxy"):
+        translated = brevo_events.to_webhook_payload({"event": api_name})["event"]
+        assert translated in _OPEN_EVENTS
+
+
 # ── field translation ─────────────────────────────────────────────────
 
 def test_messageid_is_renamed_to_the_webhook_spelling():

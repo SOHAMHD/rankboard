@@ -54,6 +54,33 @@ class BrevoEventsError(RuntimeError):
     """Raised when Brevo cannot be reached or refuses the request."""
 
 
+#: API event name -> webhook event name.
+#:
+#: The two halves of Brevo's own product disagree: the webhook pushes singular
+#: snake_case ("hard_bounce", "unique_opened", "click"), the statistics API
+#: returns plural camelCase ("hardBounces", "uniqueOpened", "clicks").
+#: email_tracking.EVENT_STATUS is keyed on the webhook spellings, so an
+#: untranslated API name resolves to status None — the event is stored, the row
+#: never advances, and nothing looks broken enough to investigate.
+#:
+#: `delivered`, `opened`, `spam`, `deferred`, `blocked`, `error` and
+#: `unsubscribed` are spelled identically in both and are deliberately absent
+#: here; anything not listed passes through unchanged.
+_EVENT_NAMES = {
+    "requests": "request",
+    "clicks": "click",
+    "uniqueOpened": "unique_opened",
+    "loadedByProxy": "proxy_open",
+    "hardBounces": "hard_bounce",
+    "softBounces": "soft_bounce",
+    # "bounces" is the API's aggregate of hard and soft. Both map to the same
+    # "bounced" status downstream, so picking either loses nothing.
+    "bounces": "hard_bounce",
+    "invalid": "invalid_email",
+    "complaints": "complaint",
+}
+
+
 def to_webhook_payload(item: dict) -> dict:
     """Reshape one API event into the payload `email_tracking.ingest_event` expects.
 
@@ -69,6 +96,17 @@ def to_webhook_payload(item: dict) -> dict:
     `_event_time` find it in its normal fallback order.
     """
     out = dict(item)
+
+    event = str(item.get("event") or "").strip()
+    if event:
+        # Case-insensitive lookup as well as exact: Brevo has been inconsistent
+        # about camelCase in this endpoint's history, and a name arriving as
+        # "hardbounces" would otherwise silently stop mapping.
+        mapped = _EVENT_NAMES.get(event)
+        if mapped is None:
+            lowered = {k.lower(): v for k, v in _EVENT_NAMES.items()}
+            mapped = lowered.get(event.lower())
+        out["event"] = mapped or event
 
     message_id = item.get("messageId") or item.get("message-id") or item.get("message_id")
     if message_id:
