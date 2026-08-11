@@ -124,6 +124,22 @@ def _filters(q: str | None, status: str | None, category: str | None, days: int)
     return " AND ".join(where), params
 
 
+#: Exactly the columns _row_to_item reads, and no more.
+#:
+#: This was `SELECT e.*`, which dragged `body` and `html_body` along with it —
+#: and a report's html_body is around 10 KB of table markup (see the schema note
+#: on the column). Fifty of those is half a megabyte fetched from a remote
+#: database and then dropped on the floor, because _row_to_item never looks at
+#: either field. The bodies are read by the detail endpoint, for the one row the
+#: drawer is actually showing.
+_LIST_COLUMNS = """
+    e.id, e.to_email, e.cc_email, e.subject, e.category, e.status, e.provider,
+    e.message_id, e.error, e.sent_at, e.delivered_at, e.first_opened_at,
+    e.last_opened_at, e.last_event_at, e.open_count, e.click_count,
+    e.attachment_count, e.project_id
+"""
+
+
 @router.get("")
 def list_emails(
     q: str | None = Query(default=None, max_length=200),
@@ -136,12 +152,15 @@ def list_emails(
 ):
     clause, params = _filters(q, status, category, days)
 
-    total = db.execute(
-        f"SELECT COUNT(*) FROM emails e WHERE {clause}", tuple(params)
-    ).fetchone()[0]
-
+    # One round trip, not two. COUNT(*) OVER () evaluates the same filtered set
+    # the page is drawn from, so the separate COUNT query it replaces was paying
+    # the ILIKE scan a second time — and against a remote database each avoided
+    # round trip is worth more than the query time itself.
     rows = db.execute(
-        f"""SELECT e.*, p.name AS project_name, u.name AS sent_by_name
+        f"""SELECT {_LIST_COLUMNS},
+                   p.name AS project_name,
+                   u.name AS sent_by_name,
+                   COUNT(*) OVER () AS total_count
               FROM emails e
               LEFT JOIN projects p ON p.id = e.project_id
               LEFT JOIN users    u ON u.id = e.sent_by
@@ -150,6 +169,11 @@ def list_emails(
              LIMIT ? OFFSET ?""",
         tuple(params + [limit, offset]),
     ).fetchall()
+
+    # An empty page carries no window value: either there are no matches at all,
+    # or the caller asked for an offset past the end. Both mean "nothing here",
+    # and the client's own guard sends it back to page 0.
+    total = rows[0]["total_count"] if rows else 0
 
     return {
         "items": [_row_to_item(r) for r in rows],

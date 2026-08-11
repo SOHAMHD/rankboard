@@ -224,7 +224,6 @@ function DetailDrawer({ emailId, onClose }) {
           </button>
         </header>
 
-        {error && <div className="px-6"><ErrorNote>{error}</ErrorNote></div>}
 
         {!detail && !error && (
           <div className="py-24 flex justify-center">
@@ -238,11 +237,11 @@ function DetailDrawer({ emailId, onClose }) {
               <Field label="Status">
                 <span className="flex items-center gap-2 flex-wrap">
                   <StatusPill status={detail.status} />
-                  {detail.openCount > 0 && (
-                    <span className="text-xs text-stone-500">
-                      {detail.openCount} open{detail.openCount === 1 ? "" : "s"}
-                    </span>
-                  )}
+
+                  {/* Open count deliberately not shown. Mail clients that cache
+                      the pixel report one open however often it's read, while
+                      ones that don't inflate it on every scroll past — so the
+                      number invites a precision it doesn't have. */}
                   {detail.clickCount > 0 && (
                     <span className="text-xs text-stone-500">
                       {detail.clickCount} click{detail.clickCount === 1 ? "" : "s"}
@@ -374,37 +373,62 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
   }, [q, status, category, days]);
 
   // Guards against an out-of-order response: a slow request for the previous
-  // filter must not overwrite the results of the newer one behind it.
-  const requestSeq = useRef(0);
+  // filter must not overwrite the results of the newer one behind it. One
+  // counter per feed, since the two now move independently.
+  const listSeq = useRef(0);
+  const statsSeq = useRef(0);
 
   const load = useCallback(async () => {
-    const seq = ++requestSeq.current;
+    const seq = ++listSeq.current;
     setRefreshing(true);
     try {
       const listQuery = new URLSearchParams(query);
       listQuery.set("offset", String(page * PAGE_SIZE));
-      const [list, s] = await Promise.all([
-        api(`/email-log?${listQuery}`),
-        api(`/email-log/stats?${query}`),
-      ]);
-      if (seq !== requestSeq.current) return;
+      const list = await api(`/email-log?${listQuery}`);
+      if (seq !== listSeq.current) return;
       setItems(list.items);
       setTotal(list.total);
-      setStats(s);
       setError(null);
     } catch (err) {
-      if (seq === requestSeq.current) setError(err.message);
+      if (seq === listSeq.current) setError(err.message);
     } finally {
-      if (seq === requestSeq.current) {
+      if (seq === listSeq.current) {
         setLoading(false);
         setRefreshing(false);
       }
     }
   }, [query, page]);
 
+  // Deliberately NOT keyed on `page`. The cards and the per-day chart describe
+  // the whole filtered window, so they are identical on page 2 as on page 1 —
+  // but they were being refetched on every page click, and that aggregate scans
+  // the entire window while the list only reads fifty rows. Paging through the
+  // log was paying for the expensive half of the screen over and over for a
+  // result that could not change.
+  const loadStats = useCallback(async () => {
+    const seq = ++statsSeq.current;
+    try {
+      const s = await api(`/email-log/stats?${query}`);
+      if (seq === statsSeq.current) setStats(s);
+    } catch {
+      // The list carries the error message; a failed stats fetch shouldn't
+      // replace a working table with an error screen.
+    }
+  }, [query]);
+
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  // Refresh means "re-read everything", including the cards.
+  const refreshAll = useCallback(() => {
+    load();
+    loadStats();
+  }, [load, loadStats]);
 
   // Capped at 100. `opened` counts any message with a recorded open regardless
   // of what happened to it afterwards, while `delivered` excludes anything that
@@ -443,7 +467,7 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
             </p>
           </div>
           <button
-            onClick={load}
+            onClick={refreshAll}
             disabled={refreshing}
             className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 hover:border-stone-400 bg-white text-stone-700 text-sm font-medium px-3 py-2 transition-colors disabled:opacity-50"
           >
@@ -502,27 +526,7 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
               className={`${INPUT_CLS} pl-9`}
             />
           </div>
-          {/* <select
-            value={status}
-            onChange={(e) => { setStatus(e.target.value); setPage(0); }}
-            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700 focus:outline-none focus:ring-2 focus:ring-orange-500"
-          >
-            {STATUS_FILTERS.map((s) => (
-              <option key={s || "all"} value={s}>
-                {s ? STATUS_STYLES[s]?.label || s : "Any status"}
-              </option>
-            ))}
-          </select>
-          <select
-            value={category}
-            onChange={(e) => { setCategory(e.target.value); setPage(0); }}
-            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700 focus:outline-none focus:ring-2 focus:ring-orange-500"
-          >
-            <option value="">Any kind</option>
-            {Object.entries(CATEGORY_LABELS).map(([v, l]) => (
-              <option key={v} value={v}>{l}</option>
-            ))}
-          </select> */}
+
           <div className="flex rounded-lg border border-stone-300 bg-white overflow-hidden">
             {RANGES.map((r) => (
               <button
@@ -601,9 +605,6 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
                           <span className="text-stone-700">
                             {formatWhen(m.firstOpenedAt)}
                             <span className="flex items-center gap-2 text-xs text-stone-400 mt-0.5">
-                              <span className="inline-flex items-center gap-1">
-                                <Eye size={11} />{m.openCount}
-                              </span>
                               {m.clickCount > 0 && (
                                 <span className="inline-flex items-center gap-1">
                                   <MousePointerClick size={11} />{m.clickCount}
