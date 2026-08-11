@@ -261,6 +261,10 @@ function BacklinkImportModal({ projectId, onClose, onImported }) {
   const lineCount = text.split(/\r?\n/).filter((l) => l.trim()).length;
 
   const submit = async () => {
+    if (!month) {
+      setError("Pick the month this batch belongs to.");
+      return;
+    }
     setBusy(true);
     setError(null);
     setResult(null);
@@ -293,16 +297,25 @@ function BacklinkImportModal({ projectId, onClose, onImported }) {
             saved for that month are skipped.
           </p>
 
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+          <label htmlFor="backlink-import-month" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
             Month
           </label>
-          <select value={month} onChange={(e) => setMonth(e.target.value)} className={INPUT_CLS}>
-            {months.map((m) => (
-              <option key={m} value={m}>
-                {monthLabel(m)}
-              </option>
-            ))}
-          </select>
+          {/* A month input emits exactly the "YYYY-MM" the API already expects, so
+              no conversion is needed. It also lifts the 24-month cap the old
+              dropdown imposed, which mattered for back-filling older batches.
+              `max` stops a future month being picked — backlinks can't predate
+              their own acquisition. */}
+          <input
+            id="backlink-import-month"
+            type="month"
+            value={month}
+            max={months[0]}
+            onChange={(e) => setMonth(e.target.value)}
+            className={INPUT_CLS}
+          />
+          {month && (
+            <p className="text-[11px] text-stone-400 mt-1">{monthLabel(month)}</p>
+          )}
 
           <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
             Backlink URLs (one per line)
@@ -318,9 +331,11 @@ function BacklinkImportModal({ projectId, onClose, onImported }) {
 
           <ErrorNote>{error}</ErrorNote>
 
+          {/* A month input can be cleared, which a select never could — so the
+              month is now part of what makes the form valid. */}
           <button
             onClick={submit}
-            disabled={busy || lineCount === 0}
+            disabled={busy || lineCount === 0 || !month}
             className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}
           >
             {busy ? (

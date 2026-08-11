@@ -174,7 +174,7 @@ function useGeoPicker(project) {
   return { country, region, city, onCountry, onRegion, onCity, guessFromDomain };
 }
 
-export function ProjectsView({ user, onOpenProject, onPeople, onLogout }) {
+export function ProjectsView({ user, onOpenProject, onPeople, onEmailLog, onLogout }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -224,7 +224,7 @@ export function ProjectsView({ user, onOpenProject, onPeople, onLogout }) {
 
   return (
     <div className="min-h-screen bg-stone-100">
-      <TopBar user={user} onLogout={onLogout} onPeople={onPeople} />
+      <TopBar user={user} onLogout={onLogout} onPeople={onPeople} onEmailLog={onEmailLog} />
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
         <div className="flex flex-wrap items-end justify-between gap-4 mb-6">

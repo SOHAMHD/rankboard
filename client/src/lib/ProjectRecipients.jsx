@@ -4,18 +4,7 @@ import { api } from "../api";
 import { BTN_GHOST, INPUT_CLS } from "../ui";
 import AddressInput, { foldDraft, isEmail } from "./AddressInput";
 
-/**
- * Edit a project's saved report recipients, outside the send dialog.
- *
- * Until this existed the only way to change an address was to open a report and
- * use "Save as default" — impossible for a project with no reports yet, and
- * awkward when you just want to fix a typo without going near a send button.
- * Clearing the list wasn't possible from the UI at all.
- *
- * Saves on its own button rather than joining the parent form's submit: the two
- * write to different endpoints, and a rejected address shouldn't block an
- * unrelated change to the project's domain.
- */
+
 export default function ProjectRecipients({ projectId, onSaved }) {
   const [loading, setLoading] = useState(true);
   const [primary, setPrimary] = useState("");

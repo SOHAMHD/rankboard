@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Eye, KeyRound, LoaderCircle, LogOut, Mail, Search, Users, X } from "lucide-react";
+import { Eye, KeyRound, LoaderCircle, LogOut, Mail, MailCheck, Search, Users, X } from "lucide-react";
 import { api } from "./api";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
@@ -14,6 +14,15 @@ export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
  */
 export const CONTACT_ONLY = "Client contact";
 
+/**
+ * No longer offered in the onboarding wizard — the role picker in AdminPanel
+ * maps over ROLES instead, so nothing imports this. Kept, along with the wizard
+ * machinery behind it, so re-enabling the option is a one-word change at that
+ * one call site rather than a rebuild.
+ *
+ * Contacts who receive reports without an account are set up per project now,
+ * via the recipients dialog (GET/PUT /api/projects/{id}/recipients).
+ */
 export const ONBOARD_ROLES = [...ROLES, CONTACT_ONLY];
 
 export const ROLE = {
@@ -70,7 +79,7 @@ export const BTN_GHOST =
 
 export const can = (user, action) => !!user?.permissions?.[action];
 
-export function TopBar({ user, onLogout, onPeople, onHome }) {
+export function TopBar({ user, onLogout, onPeople, onEmailLog, onHome }) {
   const [showPw, setShowPw] = useState(false);
   return (
     <>
@@ -88,6 +97,15 @@ export function TopBar({ user, onLogout, onPeople, onHome }) {
               className="inline-flex items-center gap-1.5 text-sm font-medium text-stone-600 hover:text-stone-900 px-2.5 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
             >
               <Users size={15} /> <span className="hidden sm:inline">People</span>
+            </button>
+          )}
+          {onEmailLog && can(user, "viewEmailLog") && (
+            <button
+              onClick={onEmailLog}
+              title="Every email the system has sent, and what happened to it"
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-stone-600 hover:text-stone-900 px-2.5 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
+            >
+              <MailCheck size={15} /> <span className="hidden sm:inline">Email Log</span>
             </button>
           )}
           <span className="text-sm text-stone-600 hidden sm:inline">{user.name}</span>

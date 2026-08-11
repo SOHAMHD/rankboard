@@ -12,6 +12,9 @@ const ProjectDashboard = lazy(() =>
 const AdminPanelView = lazy(() =>
   import("./screens/AdminPanel.jsx").then((m) => ({ default: m.AdminPanelView }))
 );
+const EmailLogView = lazy(() =>
+  import("./screens/EmailLog.jsx").then((m) => ({ default: m.EmailLogView }))
+);
 
 function FullScreenLoader() {
   return (
@@ -138,7 +141,28 @@ export default function App() {
   if (view === "people" && (can(user, "manageUsers") || can(user, "assignProjects"))) {
     return (
       <Suspense fallback={<FullScreenLoader />}>
-        <AdminPanelView user={user} onBack={() => setView("projects")} onLogout={logout} />
+        <AdminPanelView
+          user={user}
+          onBack={() => setView("projects")}
+          onEmailLog={() => setView("emailLog")}
+          onLogout={logout}
+        />
+      </Suspense>
+    );
+  }
+
+  // Super Admin only. This is a second gate, not the gate: the server checks
+  // `viewEmailLog` on every /email-log route, so hiding the screen here is a
+  // courtesy to the UI rather than the thing keeping other roles out.
+  if (view === "emailLog" && can(user, "viewEmailLog")) {
+    return (
+      <Suspense fallback={<FullScreenLoader />}>
+        <EmailLogView
+          user={user}
+          onBack={() => setView("projects")}
+          onPeople={() => setView("people")}
+          onLogout={logout}
+        />
       </Suspense>
     );
   }
@@ -148,6 +172,7 @@ export default function App() {
       user={user}
       onOpenProject={setOpenProjectId}
       onPeople={() => setView("people")}
+      onEmailLog={() => setView("emailLog")}
       onLogout={logout}
     />
   );

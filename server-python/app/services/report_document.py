@@ -94,7 +94,7 @@ def _ga4_overview_grid(ga4, present, reason):
     return {
         "id": "ga4-overview",
         "type": "metric_grid",
-        "title": "GA4 — Audience Overview",
+        "title": "Audience Overview",
         "source": "ga4.users_overview",
         "available": present,
         "unavailableReason": None if present else reason,
@@ -560,7 +560,7 @@ def _achievements(kw):
         "id": "achievements",
         "type": "narrative",
         "role": "achievements",
-        "title": "Achievements",
+        "title": "Key Achievements",
         "paragraphs": paragraphs,
         "bullets": [],
         "autoBullets": [],
@@ -710,10 +710,10 @@ def build_document(gathered: dict) -> dict:
                                             ga4_totals.get("avgEngagementSeconds"))),
         _ga4_overview_grid(ga4, ga4_present, reason("ga4")),
         _ga4_users_chart(ga4, ga4_present, reason("ga4")),
-        _auto_narrative("ga4-channel-notes", "Traffic by Channel Notes",
+        _auto_narrative("ga4-channel-notes", "Traffic by Channel",
                         _channel_narrative(ga4, ga4_present)),
         ga4_tbl["by_channel"],
-        _auto_narrative("ga4-cities-notes", "Cities & Countries Notes",
+        _auto_narrative("ga4-cities-notes", "GA4 — Geographic Overview",
                         _geo_narrative(ga4, ga4_present)),
         ga4_tbl["by_country_city"],
         _auto_narrative("ga4-landing-notes", "Landing Pages Notes",
@@ -732,10 +732,10 @@ def build_document(gathered: dict) -> dict:
         _posts_block("posts-blogs", "Blog Posts", "blog post", posts.get("blogs")),
         _posts_block("posts-linkedin", "LinkedIn Posts", "LinkedIn post", posts.get("linkedin")),
         _targets_grid_block(period, period_label),
-        _auto_narrative("targets-notes", "Notes",
+        _auto_narrative("targets-notes", "Targets & Goals for next month",
                         _targets_narrative()),
         _static_narrative(
-            "strategy", "strategy", "Strategy & Notes",
+            "strategy", "strategy", "Upcoming Month Strategy",
             _strategy_narrative()),
     ]
 

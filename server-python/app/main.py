@@ -10,7 +10,18 @@ from fastapi.responses import JSONResponse
 from .config import CORS_ORIGINS, DEBUG, JWT_SECRET
 from .db import close_pool, get_db, init_db
 from .permissions import READ_ONLY_ROLES
-from .routers import auth, backlinks, locations, moz, posts, projects, reports, users
+from .routers import (
+    auth,
+    backlinks,
+    email_log,
+    locations,
+    moz,
+    posts,
+    projects,
+    reports,
+    users,
+    webhooks,
+)
 
 init_db()
 
@@ -26,6 +37,10 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 READ_ONLY_EXEMPT_PATHS = {
     "/api/auth/login",
     "/api/auth/set-password",
+    # Brevo's event webhook. It's a POST from a machine with no account here, so
+    # the role lookup below finds nothing and the check would 403 every event.
+    # Its own shared-secret check is in routers/webhooks.py.
+    "/api/webhooks/brevo",
 }
 
 READ_ONLY_EXEMPT_SUFFIXES = (
@@ -133,3 +148,5 @@ app.include_router(moz.router, prefix="/api/projects", tags=["moz"])
 app.include_router(backlinks.router, prefix="/api/projects", tags=["backlinks"])
 app.include_router(posts.router, prefix="/api/projects", tags=["posts"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
+app.include_router(email_log.router, prefix="/api/email-log", tags=["email-log"])
+app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])

@@ -33,6 +33,15 @@ CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", APP_URL).split
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "SEO Dashboard <no-reply@example.com>")
 
+#: Shared secret guarding POST /api/webhooks/brevo.
+#:
+#: Brevo has no request signing — it will POST whatever URL you give it, with no
+#: proof the request came from Brevo. The URL itself is the credential, so the
+#: secret is passed as ?token=… (or an X-Webhook-Token header) and compared with
+#: secrets.compare_digest. Leave it unset and the endpoint refuses everything:
+#: an open ingest would let anyone forge delivery and open events.
+BREVO_WEBHOOK_SECRET = os.environ.get("BREVO_WEBHOOK_SECRET", "").strip()
+
 SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
 SMTP_USER = os.environ.get("SMTP_USER", "").strip()

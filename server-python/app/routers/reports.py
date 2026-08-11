@@ -367,6 +367,11 @@ def send_report(
         html=html_body,
         pdf_bytes=pdf_bytes,
         pdf_filename=filename,
+        # Attribution for the Email Log: which client this went out for, and who
+        # pressed send. Only the report path has both — the invite and code
+        # emails aren't tied to a project.
+        project_id=version["projectId"],
+        sent_by=user["id"],
     )
     delivery = outcome["delivery"]
     ok = delivery in ("sent", "outbox")

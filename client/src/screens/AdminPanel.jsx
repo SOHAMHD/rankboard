@@ -15,7 +15,6 @@ import {
   Modal,
   ErrorNote,
   ROLES,
-  ONBOARD_ROLES,
   CONTACT_ONLY,
   ROLE_DESCRIPTIONS,
   roleLabel,
@@ -26,7 +25,7 @@ import {
 } from "../ui";
 import AddressInput, { foldDraft, isEmail } from "../lib/AddressInput";
 
-export function AdminPanelView({ user, onBack, onLogout }) {
+export function AdminPanelView({ user, onBack, onEmailLog, onLogout }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -95,9 +94,12 @@ export function AdminPanelView({ user, onBack, onLogout }) {
 
   return (
     <div className="min-h-screen bg-stone-100">
-      <TopBar user={user} onLogout={onLogout} onHome={onBack} />
+      <TopBar user={user} onLogout={onLogout} onHome={onBack} onEmailLog={onEmailLog} />
 
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
+      {/* max-w-5xl, matching TopBar. At 4xl the five columns below — with a role
+          <select> sized to its longest option — overflowed into a horizontal
+          scrollbar that cut off the row actions. */}
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
         <button
           onClick={onBack}
           className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-800 mb-4 transition-colors"
@@ -142,13 +144,16 @@ export function AdminPanelView({ user, onBack, onLogout }) {
                   const isSelf = u.id === user.id;
                   return (
                     <tr key={u.id} className="hover:bg-stone-50">
-                      <td className="px-5 py-3">
+                      {/* Capped and truncating: these are full work addresses,
+                          and letting the column size to the longest one is what
+                          pushed the actions off the right edge. */}
+                      <td className="px-5 py-3 max-w-0 w-[45%]">
                         <span className="flex items-center gap-2.5">
                           <span className="h-8 w-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-semibold shrink-0">
                             {u.name.charAt(0)}
                           </span>
                           <span className="min-w-0">
-                            <span className="flex items-center gap-2 font-medium text-stone-800">
+                            <span className="flex items-center gap-2 font-medium text-stone-800 truncate">
                               {u.name}
                               {isSelf && (
                                 <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">
@@ -162,12 +167,18 @@ export function AdminPanelView({ user, onBack, onLogout }) {
                       </td>
                       <td className="px-5 py-3">
                         {canManage ? (
+                          /* Fixed width on the select below. A native select
+                             sizes itself to its longest option, and "Client with
+                             dashboard access" made every one of these ~250px
+                             wide — the single biggest contributor to the table
+                             overflowing. The open dropdown still shows each
+                             label in full. */
                           <select
                             value={u.role}
                             disabled={isSelf}
                             title={isSelf ? "You can't change your own role" : "Change role"}
                             onChange={(e) => changeRole(u.id, e.target.value)}
-                            className="text-xs font-medium rounded-md border border-stone-200 bg-white px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="w-40 text-xs font-medium rounded-md border border-stone-200 bg-white px-2 py-1.5 text-stone-700 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             {ROLES.map((r) => (
                               <option key={r} value={r}>
@@ -711,7 +722,16 @@ function OnboardWizard({ onClose, onCreated }) {
             This decides what we ask for next.
           </p>
           <div className="space-y-2">
-            {ONBOARD_ROLES.map((r) => (
+            {/*
+              ROLES, not ONBOARD_ROLES — the "Client contact only" pseudo-role is
+              deliberately no longer offered. The wizard still knows how to handle
+              it (FLOWS, saveContactOnly, the isContactOnly branches below), so
+              putting it back is a one-word change here; it just isn't a choice
+              anyone can make. Contacts who should receive reports without an
+              account are set up per project instead, through the recipients
+              dialog backed by GET/PUT /api/projects/{id}/recipients.
+            */}
+            {ROLES.map((r) => (
               <button
                 key={r}
                 onClick={() => setRole(r)}

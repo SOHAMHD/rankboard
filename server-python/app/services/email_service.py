@@ -2,6 +2,7 @@ import base64
 import json
 import smtplib
 import sqlite3
+import urllib.error
 import urllib.request
 from email.message import EmailMessage
 from email.utils import parseaddr
@@ -31,8 +32,22 @@ def _as_addresses(value) -> list[str]:
     return [a.strip() for a in value if a and a.strip()]
 
 
+#: Value of the X-Mailin-custom header we attach to every Brevo send.
+#:
+#: Brevo echoes this header back verbatim on every webhook event, so it is a
+#: correlation key we control. message_id alone would nearly always be enough,
+#: but it is assigned by Brevo *after* the send call returns — if that response
+#: is lost to a timeout we have a row in `emails` and no way to match its
+#: events. The row id travels with the message instead, so nothing is orphaned.
+_TRACK_PREFIX = "email_log_id:"
+
+
+def _tracking_header(email_id: int | None) -> dict[str, str]:
+    return {"X-Mailin-custom": f"{_TRACK_PREFIX}{email_id}"} if email_id else {}
+
+
 def _send_via_smtp(*, email, subject: str, body: str, html: str | None = None,
-                   attachments=None, cc=None) -> str:
+                   attachments=None, cc=None, email_id: int | None = None) -> dict:
     try:
         to_list = _as_addresses(email)
         cc_list = _as_addresses(cc)
@@ -43,6 +58,8 @@ def _send_via_smtp(*, email, subject: str, body: str, html: str | None = None,
         if cc_list:
             msg["Cc"] = ", ".join(cc_list)
         msg["Subject"] = subject
+        for _hk, _hv in _tracking_header(email_id).items():
+            msg[_hk] = _hv
         msg.set_content(body)
         if html:
             msg.add_alternative(html, subtype="html")
@@ -67,14 +84,19 @@ def _send_via_smtp(*, email, subject: str, body: str, html: str | None = None,
             # send_message reads the recipients off the To/Cc/Bcc headers, so the
             # Cc above is delivered as well as displayed — no separate list needed.
             server.send_message(msg)
-        return "sent"
+        # Plain SMTP has no event feedback loop, so a message sent this way stops
+        # at "sent" and never advances to delivered/opened. Brevo's SMTP relay is
+        # the exception: it fires the same webhooks as the API, and those events
+        # match on the X-Mailin-custom header set above.
+        return {"status": "sent", "message_id": msg.get("Message-ID") or "", "error": None}
     except Exception as exc:
         print("SMTP send failed:", exc)
-        return "failed"
+        return {"status": "failed", "message_id": "", "error": str(exc)[:500]}
 
 
 def _send_via_brevo(*, email, subject: str, body: str, html: str | None = None,
-                    attachments=None, cc=None) -> str:
+                    attachments=None, cc=None, email_id: int | None = None,
+                    category: str | None = None) -> dict:
     try:
         from_name, from_addr = parseaddr(EMAIL_FROM)
         sender = {"email": from_addr}
@@ -97,6 +119,13 @@ def _send_via_brevo(*, email, subject: str, body: str, html: str | None = None,
                 {"name": a["filename"], "content": base64.b64encode(a["content"]).decode()}
                 for a in attachments
             ]
+        headers = _tracking_header(email_id)
+        if headers:
+            payload["headers"] = headers
+        if category:
+            # Shows up as `tag` on the webhook payload and in Brevo's own UI, so
+            # the two views of the same send agree on what kind of mail it was.
+            payload["tags"] = [category]
         req = urllib.request.Request(
             "https://api.brevo.com/v3/smtp/email",
             data=json.dumps(payload).encode(),
@@ -109,33 +138,94 @@ def _send_via_brevo(*, email, subject: str, body: str, html: str | None = None,
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=15) as res:
-            return "sent" if 200 <= res.status < 300 else "failed"
+            if not 200 <= res.status < 300:
+                return {"status": "failed", "message_id": "",
+                        "error": f"Brevo returned HTTP {res.status}"}
+            try:
+                data = json.loads(res.read().decode() or "{}")
+            except (ValueError, UnicodeDecodeError):
+                data = {}
+        # A single-recipient send answers with `messageId`; a batch answers with
+        # `messageIds`. Both are stored the same way — one `emails` row is one
+        # message, and the batch form only appears for Brevo's batch endpoint,
+        # which this code does not use.
+        message_id = data.get("messageId") or ""
+        if not message_id and isinstance(data.get("messageIds"), list) and data["messageIds"]:
+            message_id = data["messageIds"][0]
+        return {"status": "sent", "message_id": str(message_id or ""), "error": None}
+    except urllib.error.HTTPError as exc:
+        # Brevo puts the actual reason in the body — "unrecognised sender", an
+        # exhausted quota. Without reading it every failure looked identical.
+        try:
+            detail = exc.read().decode()[:300]
+        except Exception:
+            detail = ""
+        print("Email provider rejected the message:", exc, detail)
+        return {"status": "failed", "message_id": "",
+                "error": f"HTTP {exc.code}: {detail or exc.reason}"[:500]}
     except Exception as exc:
         print("Could not reach the email provider:", exc)
-        return "failed"
+        return {"status": "failed", "message_id": "", "error": str(exc)[:500]}
 
 
 def _deliver(db: sqlite3.Connection, *, email, subject: str, body: str,
-             html: str | None = None, attachments=None, cc=None) -> dict:
+             html: str | None = None, attachments=None, cc=None,
+             category: str = "other", project_id: int | None = None,
+             sent_by: int | None = None) -> dict:
+    """Send one message and record it, then keep recording what happens to it.
+
+    The `emails` row is written *before* the provider call, not after. It has to
+    be: the row id is stamped into an X-Mailin-custom header so Brevo's webhook
+    events can be matched back to it, and a row created afterwards would have no
+    id to stamp. It also means a send that hangs or crashes still leaves a
+    'queued' row behind rather than vanishing — a message we can't account for
+    is worse than one we know we lost.
+    """
     to_list = _as_addresses(email)
     cc_list = _as_addresses(cc)
-
-    if SMTP_HOST:
-        delivery = _send_via_smtp(email=to_list, subject=subject, body=body, html=html,
-                                  attachments=attachments, cc=cc_list)
-    elif BREVO_API_KEY:
-        delivery = _send_via_brevo(email=to_list, subject=subject, body=body, html=html,
-                                   attachments=attachments, cc=cc_list)
-    else:
-        delivery = "outbox"
-
     to_logged = ", ".join(to_list)
     cc_logged = ", ".join(cc_list) or None
+
     cur = db.execute(
-        "INSERT INTO emails (to_email, cc_email, subject, body) VALUES (?, ?, ?, ?)",
-        (to_logged, cc_logged, subject, body),
+        """INSERT INTO emails (to_email, cc_email, subject, body, html_body,
+                               category, status, provider, attachment_count,
+                               project_id, sent_by)
+           VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)""",
+        (to_logged, cc_logged, subject, body, html, category,
+         "smtp" if SMTP_HOST else ("brevo" if BREVO_API_KEY else "outbox"),
+         len(attachments or []), project_id, sent_by),
     )
-    row = db.execute("SELECT * FROM emails WHERE id = ?", (cur.lastrowid,)).fetchone()
+    email_id = cur.lastrowid
+
+    if SMTP_HOST:
+        result = _send_via_smtp(email=to_list, subject=subject, body=body, html=html,
+                                attachments=attachments, cc=cc_list, email_id=email_id)
+    elif BREVO_API_KEY:
+        result = _send_via_brevo(email=to_list, subject=subject, body=body, html=html,
+                                 attachments=attachments, cc=cc_list, email_id=email_id,
+                                 category=category)
+    else:
+        result = {"status": "outbox", "message_id": "", "error": None}
+
+    delivery = result["status"]
+    # message_id is written unconditionally, but status/error only while the row
+    # is still 'queued'. The row id went out in a header before the provider call
+    # returned, so Brevo can (and on a slow response does) deliver the message
+    # and fire its `delivered` webhook while we are still blocked on urlopen.
+    # Writing 'sent' over that afterwards would rewind the row, and would erase a
+    # bounce reason the webhook had already recorded.
+    db.execute(
+        """UPDATE emails
+              SET message_id    = ?,
+                  status        = CASE WHEN status = 'queued' THEN ? ELSE status END,
+                  error         = CASE WHEN status = 'queued' THEN ? ELSE error END,
+                  last_event_at = GREATEST(COALESCE(last_event_at, datetime('now')),
+                                           datetime('now'))
+            WHERE id = ?""",
+        (result.get("message_id") or None, delivery, result.get("error"), email_id),
+    )
+
+    row = db.execute("SELECT * FROM emails WHERE id = ?", (email_id,)).fetchone()
     if delivery == "outbox":
         note = " (+1 attachment)" if attachments else ""
         print("=" * 64)
@@ -220,6 +310,8 @@ def send_report_email(
     pdf_filename: str,
     html: str | None = None,
     cc=None,
+    project_id: int | None = None,
+    sent_by: int | None = None,
 ) -> dict:
     """Send one report email. `email` may be a single address or a list.
 
@@ -236,6 +328,9 @@ def send_report_email(
         html=html,
         cc=cc,
         attachments=[{"filename": pdf_filename, "content": pdf_bytes, "mime": "application/pdf"}],
+        category="report",
+        project_id=project_id,
+        sent_by=sent_by,
     )
 
 
@@ -254,7 +349,7 @@ def send_invite_email(db: sqlite3.Connection, *, name: str, email: str, role: st
         "",
         "If you weren't expecting this, you can ignore this email.",
     ])
-    return _deliver(db, email=email, subject=subject, body=body)
+    return _deliver(db, email=email, subject=subject, body=body, category="invite")
 
 
 def send_password_code_email(db: sqlite3.Connection, *, name: str, email: str, code: str) -> dict:
@@ -268,7 +363,7 @@ def send_password_code_email(db: sqlite3.Connection, *, name: str, email: str, c
         "",
         "If you didn't request this, ignore this email — your password stays the same.",
     ])
-    return _deliver(db, email=email, subject=subject, body=body)
+    return _deliver(db, email=email, subject=subject, body=body, category="password_code")
 
 
 def send_login_code_email(db: sqlite3.Connection, *, name: str, email: str, code: str) -> dict:
@@ -282,4 +377,4 @@ def send_login_code_email(db: sqlite3.Connection, *, name: str, email: str, code
         "",
         "If you didn't just try to sign in, change your password right away.",
     ])
-    return _deliver(db, email=email, subject=subject, body=body)
+    return _deliver(db, email=email, subject=subject, body=body, category="login_code")
