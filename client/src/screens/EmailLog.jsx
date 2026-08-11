@@ -502,7 +502,7 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
               className={`${INPUT_CLS} pl-9`}
             />
           </div>
-          <select
+          {/* <select
             value={status}
             onChange={(e) => { setStatus(e.target.value); setPage(0); }}
             className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700 focus:outline-none focus:ring-2 focus:ring-orange-500"
@@ -522,7 +522,7 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
             {Object.entries(CATEGORY_LABELS).map(([v, l]) => (
               <option key={v} value={v}>{l}</option>
             ))}
-          </select>
+          </select> */}
           <div className="flex rounded-lg border border-stone-300 bg-white overflow-hidden">
             {RANGES.map((r) => (
               <button

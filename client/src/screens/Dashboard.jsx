@@ -1,4 +1,6 @@
 import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+// Same import as ui.jsx uses — Vite dedupes it to one fingerprinted file in assets/.
+import logoUrl from "../infapp-logo.png";
 import {
   BarChart3,
   RefreshCw,
@@ -181,7 +183,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
       <aside className="hidden lg:flex fixed inset-y-0 left-0 w-64 bg-white border-r border-stone-200 flex-col">
         <div className="p-4 border-b border-stone-200">
           <button onClick={onBack} aria-label="Back to projects" title="Back to projects" className="block mb-4 cursor-pointer">
-            <img src="/infapp-logo.png" alt="InfyApp" className="h-7 w-auto" />
+            <img src={logoUrl} alt="InfyApp" className="h-7 w-auto" />
           </button>
           <button
             onClick={onBack}
@@ -294,7 +296,7 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
       <div className="lg:hidden bg-white border-b border-stone-200 sticky top-0 z-20">
         <div className="px-4 pt-3 flex justify-center border-b border-stone-100">
           <button onClick={onBack} aria-label="Back to projects" title="Back to projects" className="cursor-pointer">
-            <img src="/infapp-logo.png" alt="InfyApp" className="h-6 w-auto" />
+            <img src={logoUrl} alt="InfyApp" className="h-6 w-auto" />
           </button>
         </div>
         <div className="px-4 pt-4 pb-3 flex items-center justify-between gap-3">
