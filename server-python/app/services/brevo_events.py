@@ -44,10 +44,19 @@ EVENTS_URL = "https://api.brevo.com/v3/smtp/statistics/events"
 #: Brevo's documented ceiling for this endpoint.
 MAX_PAGE = 2500
 
-#: How many days back a run looks by default. Two, not one, so a run just after
-#: midnight still sees yesterday evening's events — the endpoint's window is
-#: date-granular, so there is no finer knob than this.
-DEFAULT_DAYS = 2
+#: How many days back a run looks by default.
+#:
+#: Seven, not two. A `delivered` event lands within seconds of the send, but an
+#: open or a click happens whenever the recipient gets round to reading — often
+#: days later. A short window catches the delivery and permanently misses the
+#: engagement, which is the half anyone actually cares about: an account with 11
+#: clicks in a week showed none at all through a 1-day window.
+#:
+#: Widening it is close to free. Re-reading a window that has already been read
+#: stores nothing (ingest dedupes on message_id + event + recipient + time), and
+#: a week of this account's traffic is ~565 events — one API request, since the
+#: page size is 1000.
+DEFAULT_DAYS = 7
 
 
 class BrevoEventsError(RuntimeError):

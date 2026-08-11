@@ -113,34 +113,7 @@ function StatCard({ icon: Icon, label, value, sub, tone = "stone" }) {
 
 
 function Sparkline({ series }) {
-  if (!series?.length) return null;
-  const peak = Math.max(...series.map((d) => d.sent), 1);
-  return (
-    <div className="bg-white rounded-xl border border-stone-200 px-4 py-3.5">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-stone-400 uppercase tracking-wider">Sent per day</span>
-        <span className="flex items-center gap-3 text-xs text-stone-400">
-          <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-sm bg-stone-300" /> sent</span>
-          <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-sm bg-emerald-400" /> opened</span>
-        </span>
-      </div>
-      <div className="flex items-end gap-[3px] h-16 mt-3">
-        {series.map((d) => (
-          <div
-            key={d.day}
-            title={`${d.day} · ${d.sent} sent, ${d.opened} opened`}
-            className="flex-1 min-w-[3px] relative bg-stone-200 rounded-sm hover:bg-stone-300 transition-colors"
-            style={{ height: `${Math.max((d.sent / peak) * 100, 4)}%` }}
-          >
-            <div
-              className="absolute bottom-0 inset-x-0 bg-emerald-400 rounded-sm"
-              style={{ height: `${d.sent ? (d.opened / d.sent) * 100 : 0}%` }}
-            />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+ 
 }
 
 function TimelineRow({ event }) {
@@ -255,11 +228,6 @@ function DetailDrawer({ emailId, onClose }) {
               {detail.deliveredAt && <Field label="Delivered">{formatFull(detail.deliveredAt)}</Field>}
               <Field label="First opened">
                 {detail.firstOpenedAt ? formatFull(detail.firstOpenedAt) : (
-                  <span className="text-stone-400">Not recorded</span>
-                )}
-              </Field>
-              <Field label="First clicked">
-                {detail.firstClickedAt ? formatFull(detail.firstClickedAt) : (
                   <span className="text-stone-400">Not recorded</span>
                 )}
               </Field>
@@ -599,15 +567,6 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
                       </td>
                       <td className="px-5 py-3">
                         <StatusPill status={m.status} />
-                        {/* The pill already reads "Clicked" once a click event
-                            lands — it outranks "Opened". This adds the when,
-                            which is the part the pill can't carry. */}
-                        {m.firstClickedAt && (
-                          <span className="flex items-center gap-1 text-xs text-stone-500 mt-1">
-                            <MousePointerClick size={11} />
-                            {formatWhen(m.firstClickedAt)}
-                          </span>
-                        )}
                         {m.error && (
                           <span className="block text-xs text-red-500 mt-1 truncate max-w-[12rem]">
                             {m.error}
@@ -616,7 +575,16 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
                       </td>
                       <td className="px-5 py-3 whitespace-nowrap">
                         {m.firstOpenedAt ? (
-                          <span className="text-stone-700">{formatWhen(m.firstOpenedAt)}</span>
+                          <span className="text-stone-700">
+                            {formatWhen(m.firstOpenedAt)}
+                            <span className="flex items-center gap-2 text-xs text-stone-400 mt-0.5">
+                              {m.clickCount > 0 && (
+                                <span className="inline-flex items-center gap-1">
+                                  <MousePointerClick size={11} />{m.clickCount}
+                                </span>
+                              )}
+                            </span>
+                          </span>
                         ) : (
                           <span className="text-stone-300">—</span>
                         )}
