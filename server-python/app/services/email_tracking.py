@@ -322,9 +322,15 @@ def _apply_rollup(db, row, *, event: str, status: str | None,
             (occurred_at, occurred_at, occurred_at, occurred_at, row["id"]),
         )
     elif event == "click":
+        # LEAST/COALESCE rather than "set it if null", for the same reason the
+        # open timestamps use it: events arrive out of order, so a click that
+        # overtakes an earlier one must not claim to be the first.
         db.execute(
-            "UPDATE emails SET click_count = click_count + 1 WHERE id = ?",
-            (row["id"],),
+            """UPDATE emails
+                  SET click_count      = click_count + 1,
+                      first_clicked_at = LEAST(COALESCE(first_clicked_at, ?), ?)
+                WHERE id = ?""",
+            (occurred_at, occurred_at, row["id"]),
         )
     elif event == "delivered":
         db.execute(

@@ -258,6 +258,11 @@ function DetailDrawer({ emailId, onClose }) {
                   <span className="text-stone-400">Not recorded</span>
                 )}
               </Field>
+              <Field label="First clicked">
+                {detail.firstClickedAt ? formatFull(detail.firstClickedAt) : (
+                  <span className="text-stone-400">Not recorded</span>
+                )}
+              </Field>
            
             
               {detail.error && (
@@ -594,6 +599,15 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
                       </td>
                       <td className="px-5 py-3">
                         <StatusPill status={m.status} />
+                        {/* The pill already reads "Clicked" once a click event
+                            lands — it outranks "Opened". This adds the when,
+                            which is the part the pill can't carry. */}
+                        {m.firstClickedAt && (
+                          <span className="flex items-center gap-1 text-xs text-stone-500 mt-1">
+                            <MousePointerClick size={11} />
+                            {formatWhen(m.firstClickedAt)}
+                          </span>
+                        )}
                         {m.error && (
                           <span className="block text-xs text-red-500 mt-1 truncate max-w-[12rem]">
                             {m.error}
@@ -602,16 +616,7 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
                       </td>
                       <td className="px-5 py-3 whitespace-nowrap">
                         {m.firstOpenedAt ? (
-                          <span className="text-stone-700">
-                            {formatWhen(m.firstOpenedAt)}
-                            <span className="flex items-center gap-2 text-xs text-stone-400 mt-0.5">
-                              {m.clickCount > 0 && (
-                                <span className="inline-flex items-center gap-1">
-                                  <MousePointerClick size={11} />{m.clickCount}
-                                </span>
-                              )}
-                            </span>
-                          </span>
+                          <span className="text-stone-700">{formatWhen(m.firstOpenedAt)}</span>
                         ) : (
                           <span className="text-stone-300">—</span>
                         )}

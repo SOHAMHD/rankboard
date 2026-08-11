@@ -357,6 +357,11 @@ ALTER TABLE emails ADD COLUMN IF NOT EXISTS last_opened_at  TEXT;
 ALTER TABLE emails ADD COLUMN IF NOT EXISTS last_event_at   TEXT;
 ALTER TABLE emails ADD COLUMN IF NOT EXISTS open_count  INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE emails ADD COLUMN IF NOT EXISTS click_count INTEGER NOT NULL DEFAULT 0;
+-- When the first link was clicked. click_count alone answered "did they" but not
+-- "when", which is the more useful half: a click hours after delivery says
+-- something different from one in the same minute. Only the first is recorded —
+-- a last_clicked_at would be a column nothing reads.
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS first_clicked_at TEXT;
 
 -- One-time backfill for rows that predate the columns above. ADD COLUMN fills
 -- every existing row with the default, so without this the whole history reads

@@ -81,6 +81,7 @@ def _row_to_item(row) -> dict:
         "deliveredAt": row["delivered_at"],
         "firstOpenedAt": row["first_opened_at"],
         "lastOpenedAt": row["last_opened_at"],
+        "firstClickedAt": row["first_clicked_at"],
         "lastEventAt": row["last_event_at"],
         "openCount": row["open_count"],
         "clickCount": row["click_count"],
@@ -135,8 +136,8 @@ def _filters(q: str | None, status: str | None, category: str | None, days: int)
 _LIST_COLUMNS = """
     e.id, e.to_email, e.cc_email, e.subject, e.category, e.status, e.provider,
     e.message_id, e.error, e.sent_at, e.delivered_at, e.first_opened_at,
-    e.last_opened_at, e.last_event_at, e.open_count, e.click_count,
-    e.attachment_count, e.project_id
+    e.last_opened_at, e.first_clicked_at, e.last_event_at, e.open_count,
+    e.click_count, e.attachment_count, e.project_id
 """
 
 
