@@ -558,6 +558,34 @@ function toYMD(d) {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * Today, and the current month, as the ceiling for any date picker.
+ *
+ * The custom-range inputs had relative bounds only — From was capped at To, and
+ * To floored at From — so nothing stopped you choosing a range a month into the
+ * future. GA4 and Search Console have no data for dates that haven't happened,
+ * so the result was an empty report that looked like a bug rather than an
+ * impossible question.
+ *
+ * Computed per call rather than once at module load: a tab left open overnight
+ * would otherwise keep yesterday's ceiling.
+ */
+export const todayYMD = () => toYMD(new Date());
+export const currentMonthValue = () => todayYMD().slice(0, 7);
+
+/** The earlier of two YYYY-MM-DD strings, ignoring blanks. Lexical works here. */
+function earliest(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return a < b ? a : b;
+}
+
+/** Clamp a picked date to today, so a typed-in future date can't get through. */
+function noFuture(value) {
+  const cap = todayYMD();
+  return value && value > cap ? cap : value;
+}
+
 function presetRange(days) {
   // start/end are for DISPLAY only and are computed in the viewer's timezone.
   // `preset` is what actually drives the GA4 query: the server turns it into
@@ -664,13 +692,23 @@ function TrafficTool({ project, view }) {
     const [y, m] = ym.split("-").map(Number);
     const lastDay = new Date(y, m, 0).getDate();
     setActivePreset(null);
-    setRange({ start: `${ym}-01`, end: `${ym}-${String(lastDay).padStart(2, "0")}`, preset: null });
+    setRange({
+      start: `${ym}-01`,
+      // Clamped to today. Picking the current month otherwise set the end to its
+      // last day — the 31st on the 13th — so the range ran a fortnight into the
+      // future and the tail of it could only ever come back empty.
+      end: noFuture(`${ym}-${String(lastDay).padStart(2, "0")}`),
+      preset: null,
+    });
   };
 
   const applyCustom = (which, value) => {
     if (!value) return;
+    // Clamped as well as bounded by `max`: typing into a date input fires
+    // onChange even when the value is out of range.
+    const clamped = noFuture(value);
     setActivePreset(null);
-    setRange((r) => ({ ...r, [which]: value, preset: null }));
+    setRange((r) => ({ ...r, [which]: clamped, preset: null }));
   };
 
   const monthValue = (() => {
@@ -734,6 +772,7 @@ function TrafficTool({ project, view }) {
                 <input
                   type="month"
                   value={monthValue}
+                  max={currentMonthValue()}
                   onChange={(e) => applyMonth(e.target.value)}
                   aria-label="Pick a month"
                   className={RANGE_FIELD_CLS}
@@ -749,7 +788,7 @@ function TrafficTool({ project, view }) {
                   <input
                     type="date"
                     value={range.start}
-                    max={range.end}
+                    max={earliest(range.end, todayYMD())}
                     onChange={(e) => applyCustom("start", e.target.value)}
                     aria-label="From date"
                     className={RANGE_FIELD_CLS}
@@ -761,6 +800,7 @@ function TrafficTool({ project, view }) {
                     type="date"
                     value={range.end}
                     min={range.start}
+                    max={todayYMD()}
                     onChange={(e) => applyCustom("end", e.target.value)}
                     aria-label="To date"
                     className={RANGE_FIELD_CLS}
@@ -1650,8 +1690,11 @@ function SearchConsoleTool({ project }) {
   };
   const applyCustom = (which, value) => {
     if (!value) return;
+    // Clamped as well as bounded by `max`: typing into a date input fires
+    // onChange even when the value is out of range.
+    const clamped = noFuture(value);
     setActivePreset(null);
-    setRange((r) => ({ ...r, [which]: value, preset: null }));
+    setRange((r) => ({ ...r, [which]: clamped, preset: null }));
   };
 
   const toggleMetric = (key) =>
@@ -1755,7 +1798,7 @@ function SearchConsoleTool({ project }) {
                 <input
                   type="date"
                   value={range.start}
-                  max={range.end}
+                  max={earliest(range.end, todayYMD())}
                   onChange={(e) => applyCustom("start", e.target.value)}
                   aria-label="From date"
                   className={RANGE_FIELD_CLS}
@@ -1767,6 +1810,7 @@ function SearchConsoleTool({ project }) {
                   type="date"
                   value={range.end}
                   min={range.start}
+                  max={todayYMD()}
                   onChange={(e) => applyCustom("end", e.target.value)}
                   aria-label="To date"
                   className={RANGE_FIELD_CLS}

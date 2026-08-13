@@ -112,3 +112,34 @@ def require_project_access(
     if not user_can_access_project(user, project_id, db):
         raise HTTPException(403, "You don't have access to this project.")
     return user
+
+
+def require_open_project(
+    project_id: int,
+    user: sqlite3.Row = Depends(require_project_access),
+    db: sqlite3.Connection = Depends(get_db),
+) -> sqlite3.Row:
+    """Access, plus the project not being archived.
+
+    `projects.active` used to be decorative: it was stored and shown as a pill,
+    and nothing anywhere read it. An "inactive" project could still be opened,
+    have ranks recorded, and have a report generated and emailed to a client you
+    had stopped working for.
+
+    Deliberately NOT folded into require_project_access, which guards all ~33
+    project-scoped routes — including the PATCH that flips this flag back on and
+    the DELETE that removes the project. Those have to keep working on an archived
+    project, or it could never be reactivated or cleaned up.
+
+    409 rather than 403: the caller has permission, the project is just in the
+    wrong state, and the client distinguishes the two.
+    """
+    row = db.execute("SELECT active FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Project not found.")
+    if not row["active"]:
+        raise HTTPException(
+            409,
+            "This project is inactive. Reactivate it from the projects list to open it.",
+        )
+    return user

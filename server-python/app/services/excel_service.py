@@ -62,25 +62,71 @@ def build_sample_workbook() -> bytes:
     return buffer.getvalue()
 
 
+#: Read at most this many rows off the sheet. A workbook whose stored dimension
+#: is wrong — or which has a stray format applied a million rows down — reports a
+#: max_row far past the last real value, and read_only iteration walks every one
+#: of them. MAX_ROWS is the keyword limit; this is the hard stop on how far we
+#: look for them, generous enough to survive a file with gaps and blank rows.
+_MAX_SCAN_ROWS = 50_000
+
+
+def _iter_terms(ws) -> list[tuple[int, object]]:
+    """Materialise (row number, first cell) pairs.
+
+    Returned as a list rather than a generator so that a sheet which fails
+    mid-parse fails inside the caller's try block. read_only iteration is lazy:
+    as a generator the exception surfaced later, in the middle of the validation
+    loop, where nothing was catching it.
+    """
+    out: list[tuple[int, object]] = []
+    for excel_row, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        if excel_row > _MAX_SCAN_ROWS:
+            break
+        out.append((excel_row, row[0] if row else None))
+    return out
+
+
 def parse_keyword_workbook(file_bytes: bytes) -> tuple[list[dict], list[dict]]:
     try:
         wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     except Exception:
         raise ValueError("That file couldn't be read as an Excel (.xlsx) workbook.")
 
-    ws = wb.active
     valid: list[dict] = []
     errors: list[dict] = []
     seen_terms: set[str] = set()
     data_rows = 0
 
-    for excel_row, row in enumerate(ws.iter_rows(values_only=True), start=1):
+    try:
+        # `wb.active` is None when the workbook records no active sheet — rare
+        # from Excel itself, common from exporters and "save as xlsx" tools.
+        # Falling back to the first sheet beats an AttributeError deep in the
+        # loop, which surfaced as a bare 500 with no hint that the file was the
+        # problem.
+        ws = wb.active
+        if ws is None:
+            ws = next(iter(wb.worksheets), None)
+        if ws is None:
+            raise ValueError("That workbook has no sheets to read.")
+
+        rows = _iter_terms(ws)
+    except ValueError:
+        wb.close()
+        raise
+    except Exception:
+        # read_only parsing is lazy: a malformed sheet doesn't fail in
+        # load_workbook above, it fails here, mid-iteration. Everything past this
+        # point used to escape as an unhandled 500.
+        wb.close()
+        raise ValueError("That file couldn't be read as an Excel (.xlsx) workbook.")
+
+    # read_only mode holds the workbook's zip open. Every import leaked one file
+    # handle until the process recycled.
+    wb.close()
+
+    for excel_row, term_raw in rows:
         if excel_row == 1:
             continue
-        if row is None:
-            continue
-
-        term_raw = row[0] if len(row) > 0 else None
 
         if term_raw is None or str(term_raw).strip() == "":
             continue

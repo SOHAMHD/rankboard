@@ -350,26 +350,39 @@ function ProjectCard({ project, user, onOpen, onEdit, onToggle, onDelete }) {
   const showDelete = can(user, "deleteProject");
   const country = project.locationLabel || (project.locationCode ? `Code ${project.locationCode}` : null);
 
+  // An inactive project can't be opened — the API refuses GET /projects/{id} with
+  // a 409. Reflecting that here means the card doesn't invite a click that will
+  // only produce an error.
+  const openable = project.active;
+
   return (
     // The card stays clickable as an affordance, but the title below is a real
     // button — this was a bare <div onClick>, which made opening a project
     // impossible without a mouse.
     <div
-      onClick={onOpen}
-      className={`group bg-white rounded-xl border p-5 cursor-pointer transition-all hover:shadow-md border-stone-200 hover:border-orange-400 focus-within:border-orange-400 ${
-        project.active ? "" : "opacity-70 hover:opacity-100"
+      onClick={openable ? onOpen : undefined}
+      className={`group bg-white rounded-xl border p-5 transition-all border-stone-200 focus-within:border-orange-400 ${
+        openable
+          ? "cursor-pointer hover:shadow-md hover:border-orange-400"
+          : "opacity-75 hover:opacity-100"
       }`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="font-semibold text-stone-900 truncate font-display">
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onOpen(); }}
-              className="text-left hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 rounded"
-            >
-              {project.name}
-            </button>
+            {openable ? (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onOpen(); }}
+                className="text-left hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 rounded"
+              >
+                {project.name}
+              </button>
+            ) : (
+              <span title="Inactive — reactivate it to open" className="text-stone-600">
+                {project.name}
+              </span>
+            )}
           </h3>
           {project.clientName && <p className="text-xs text-stone-600 truncate mt-0.5">{project.clientName}</p>}
           {project.domain && <p className="text-xs text-stone-500 font-data truncate mt-0.5">{project.domain}</p>}
@@ -379,8 +392,9 @@ function ProjectCard({ project, user, onOpen, onEdit, onToggle, onDelete }) {
         </div>
         <span
           className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${
-            project.active ? "bg-blue-100 text-blue-700" : "bg-stone-200 text-stone-500"
+            project.active ? "bg-blue-100 text-blue-700" : "bg-stone-200 text-stone-600"
           }`}
+          title={project.active ? undefined : "Inactive — can't be opened, and reports can't be generated or sent"}
         >
           {project.active ? "Active" : "Inactive"}
         </span>
@@ -390,6 +404,16 @@ function ProjectCard({ project, user, onOpen, onEdit, onToggle, onDelete }) {
         <span className="font-semibold text-stone-700 font-data">{project.keywordCount}</span>{" "}
         keyword{project.keywordCount === 1 ? "" : "s"} tracked
       </p>
+
+      {/* Says what the toggle does. It used to be purely cosmetic — an inactive
+          project opened normally and could still have a report emailed to the
+          client — so nothing on screen explained what turning it off achieved. */}
+      {!openable && (
+        <p className="text-xs text-stone-500 mt-2 rounded-lg bg-stone-50 border border-stone-200 px-2.5 py-2">
+          Archived. It can&apos;t be opened, and reports can&apos;t be generated or sent
+          until it&apos;s switched back on. Existing reports stay readable.
+        </p>
+      )}
 
       {(showToggle || showEdit || showDelete) && (
         <div className="mt-4 pt-4 border-t border-stone-100 flex items-center justify-between">

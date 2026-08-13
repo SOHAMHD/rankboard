@@ -154,6 +154,8 @@ const [month, setMonth] = useState(currentMonth);
                      <input
               type="month"
               value={month}
+              // A post can't have been published in a month that hasn't started.
+              max={new Date().toISOString().slice(0, 7)}
               onChange={(e) => setMonth(e.target.value)}
               className={`${INPUT_CLS} sm:w-44`}
               aria-label="Month"

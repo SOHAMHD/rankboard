@@ -73,6 +73,23 @@ def _require_version_access(db: sqlite3.Connection, user: sqlite3.Row, version_i
     return _require_project_access(db, user, row["project_id"])
 
 
+def _require_active_project(db: sqlite3.Connection, project_id: int) -> None:
+    """Refuse work on an archived project.
+
+    Applied to generating and sending only — not to reading an existing report or
+    downloading its PDF. A report that was produced while the project was live is
+    a record of work done, and should stay readable after the project is archived.
+    What must not happen is a *new* report being produced, or one being emailed to
+    a client you have stopped working for.
+    """
+    row = db.execute("SELECT active FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if row is not None and not row["active"]:
+        raise HTTPException(
+            409,
+            "This project is inactive. Reactivate it before generating or sending reports.",
+        )
+
+
 class GenerateIn(BaseModel):
     projectId: int
     periodKey: str | None = None
@@ -85,6 +102,7 @@ def generate_report(
     db: sqlite3.Connection = Depends(get_db),
 ):
     _require_project_access(db, user, body.projectId)
+    _require_active_project(db, body.projectId)
     version = report_service.generate(db, body.projectId, body.periodKey, user["id"])
     return {"version": version}
 
@@ -263,6 +281,7 @@ def send_report(
     with db_session() as db:
         _require_version_access(db, user, version_id)
         version = report_service.get_version(db, version_id, include_data=True)
+        _require_active_project(db, version["projectId"])
         blobs = report_service.available_blobs(db, version_id)
         proj = db.execute(
             "SELECT name, client_name, domain FROM projects WHERE id = ?", (version["projectId"],)

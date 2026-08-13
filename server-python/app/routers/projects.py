@@ -1,4 +1,6 @@
+import re
 import sqlite3
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -10,6 +12,7 @@ from ..db import INTEGRITY_ERRORS, get_db
 from ..permissions import SENDER_ROLES
 from ..security import (
     require_active_user,
+    require_open_project,
     require_permission,
     require_project_access,
     require_roles,
@@ -100,7 +103,11 @@ def list_projects(
     return {"projects": [row_to_project(r, r["keyword_count"]) for r in rows]}
 
 
-@router.get("/{project_id}", dependencies=[Depends(require_project_access)])
+# require_open_project, not require_project_access: this is the call the dashboard
+# makes to open a project, so refusing it here is what makes "inactive" mean
+# something rather than being a coloured pill. The PATCH that reactivates and the
+# DELETE that removes still use the plain access check.
+@router.get("/{project_id}", dependencies=[Depends(require_open_project)])
 def project_detail(project_id: int, db: sqlite3.Connection = Depends(get_db)):
     project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
@@ -146,6 +153,30 @@ class ReportIn(AnalyticsIn):
 _MAX_PRESET_DAYS = 730
 
 
+#: A plain calendar date. GA4 also accepts relative tokens ("yesterday"),
+#: which must pass through untouched.
+_YMD_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _clamp_to_today(value: str | None) -> str | None:
+    """Trim a YYYY-MM-DD to today, since no provider has tomorrow's data.
+
+    The date pickers now cap themselves, but this is the server saying the same
+    thing: a range ending next month is not a question anyone can answer, and
+    silently returning an empty window for it reads as a broken integration
+    rather than an impossible request.
+
+    Clamped rather than rejected — the useful part of "1st to the 31st" on the
+    13th is the first thirteen days, and refusing the whole range would lose it.
+    Anything that isn't a plain date is passed through for the provider to judge;
+    GA4 also accepts relative tokens like "yesterday".
+    """
+    if not value or not _YMD_RE.match(value):
+        return value
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return today if value > today else value
+
+
 def _ga_range(body) -> tuple[str | None, str | None]:
     """The start/end to send to GA4.
 
@@ -163,7 +194,7 @@ def _ga_range(body) -> tuple[str | None, str | None]:
     preset = getattr(body, "preset", None)
     if isinstance(preset, int) and 1 <= preset <= _MAX_PRESET_DAYS:
         return f"{preset}daysAgo", "yesterday"
-    return body.start, body.end
+    return _clamp_to_today(body.start), _clamp_to_today(body.end)
 
 
 def _validate_filters(filters: list[ReportFilterIn], match: str) -> str | None:
@@ -337,8 +368,11 @@ def project_search_console_performance(
     # not exist and reads low. For preset windows, rebuild the range the way the
     # GSC UI does: N days ending at the last date with data. Explicit custom
     # dates are respected as given.
-    end = body.end
-    start = body.start
+    # Clamped for the same reason the GA4 range is: a custom window running into
+    # next month asks for days that cannot exist, and comes back looking like a
+    # broken integration rather than an impossible question.
+    end = _clamp_to_today(body.end)
+    start = _clamp_to_today(body.start)
     preset_days = getattr(body, "preset", None)
     if isinstance(preset_days, int) and 1 <= preset_days <= _MAX_PRESET_DAYS:
         start, end = sc_default_range(preset_days)
@@ -639,12 +673,22 @@ def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Connecti
     # connections are autocommit, an unguarded executemany then left part of the
     # batch committed and returned a 500. The transaction makes the batch
     # all-or-nothing, and DO NOTHING makes the race a no-op instead of an error.
+    #
+    # No conflict target on purpose. Naming one — ON CONFLICT (project_id, term)
+    # — requires that exact unique index to exist, and Postgres raises
+    # InvalidColumnReference ("no unique or exclusion constraint matching the ON
+    # CONFLICT specification") when it doesn't. idx_keywords_project_term is
+    # optional DDL: a database that already holds duplicate terms rejects it at
+    # boot, so on those installs every import died with a 500 before a single row
+    # was written. The bare form conflicts on whatever unique index happens to
+    # exist, which is the index where there is one and a no-op where there isn't
+    # — the same behaviour the Python diff above already provides.
     imported = 0
     if to_insert:
         with db.transaction():
             cur = db.executemany(
                 "INSERT INTO keywords (project_id, term) VALUES (?, ?)"
-                " ON CONFLICT (project_id, term) DO NOTHING",
+                " ON CONFLICT DO NOTHING",
                 [(project_id, v["term"]) for v in to_insert],
             )
             # rowcount counts rows actually written, so a term inserted by a
