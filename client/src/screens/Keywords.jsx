@@ -96,7 +96,7 @@ const KeywordRow = memo(function KeywordRow({
             onClick={() => onDelete(row)}
             aria-label={`Remove ${row.term}`}
             title="Remove keyword"
-            className="p-1 rounded text-stone-300 hover:text-red-500 transition-colors"
+            className="p-1 rounded text-stone-500 hover:text-red-500 transition-colors"
           >
             <Trash2 size={14} />
           </button>
@@ -106,7 +106,7 @@ const KeywordRow = memo(function KeywordRow({
   );
 });
 
-export function KeywordsView({ user, project }) {
+export function KeywordsView({ user, project, unsavedRef }) {
   const [monthCount, setMonthCount] = useState(3);
   const months = useMemo(() => recentMonths(monthCount), [monthCount]);
 
@@ -128,14 +128,22 @@ export function KeywordsView({ user, project }) {
   // `keepEdits` is for the conflict case: pull in the current numbers so the
   // next save is checked against them, without throwing away what the user
   // typed. A plain load() clears the pending edits.
+  // Bumped per request so a slow response for a window the user has already
+  // moved away from can't land last and repopulate the grid for the wrong months.
+  // Every other fetch in the codebase guards this; this one was the outlier.
+  const loadSeq = useRef(0);
+
   const load = async ({ keepEdits = false } = {}) => {
+    const seq = ++loadSeq.current;
     setError(null);
     try {
       const d = await api(`/projects/${project.id}/keyword-ranks?months=${months.join(",")}`);
+      if (seq !== loadSeq.current) return false;
       setRows(d.keywords);
       if (!keepEdits) setDirty({});
       return true;
     } catch (err) {
+      if (seq !== loadSeq.current) return false;
       setError(err.message);
       if (!keepEdits) setRows([]);
       return false;
@@ -144,8 +152,21 @@ export function KeywordsView({ user, project }) {
 
   useEffect(() => {
     load();
+    // Invalidate any in-flight request on unmount or a window change, so nothing
+    // writes state after this screen has gone.
+    return () => { loadSeq.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, monthCount]);
+
+  // Report the unsaved count upward so the dashboard can guard the exits it owns
+  // — switching tabs and going back to the projects list both unmount this grid,
+  // and React discards the edits without asking. A ref rather than a callback
+  // prop so a keystroke here doesn't re-render the whole dashboard.
+  useEffect(() => {
+    if (!unsavedRef) return undefined;
+    unsavedRef.current = () => dirtyCount;
+    return () => { unsavedRef.current = null; };
+  }, [unsavedRef, dirtyCount]);
 
   // Closing the tab or hitting back used to take unsaved cells with it silently.
   // The browser's own prompt is the only thing that can interrupt those.

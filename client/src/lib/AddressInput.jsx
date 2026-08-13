@@ -64,7 +64,11 @@ export default function AddressInput({
   const remove = (target) => onChange(values.filter((e) => e !== target));
 
   const onKeyDown = (e) => {
-    if (["Enter", ",", " ", "Tab"].includes(e.key)) {
+    // Tab commits the draft but must NOT preventDefault — swallowing it left a
+    // keyboard user typing an address, pressing Tab, and staying in the field.
+    if (e.key === "Tab") {
+      if (draft.trim()) commitDraft();
+    } else if (["Enter", ",", " "].includes(e.key)) {
       if (draft.trim()) {
         e.preventDefault();
         commitDraft();

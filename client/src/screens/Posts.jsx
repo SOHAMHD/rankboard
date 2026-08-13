@@ -210,7 +210,7 @@ const [month, setMonth] = useState(currentMonth);
                         onClick={() => remove(p.id)}
                         aria-label="Remove link"
                         title="Remove link"
-                        className="p-1.5 rounded-md text-stone-300 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
+                        className="p-1.5 rounded-md text-stone-500 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
                       >
                         <Trash2 size={15} />
                       </button>

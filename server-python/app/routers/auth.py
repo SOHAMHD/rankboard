@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from ..db import get_db
-from ..permissions import EMAIL_2FA_ROLES, PERMISSIONS
+from ..permissions import PERMISSIONS
 from ..services import throttle
 from ..security import (
     create_pending_token,
@@ -17,7 +17,10 @@ from ..security import (
     token_claims,
 )
 from ..services import totp, twofa
-from ..services.email_service import send_login_code_email, send_password_code_email
+# send_login_code_email is no longer imported: its only caller was the email-2FA
+# code issuer, removed with that flow. The sender itself stays in email_service
+# in case an email second factor is ever wanted again.
+from ..services.email_service import send_password_code_email
 
 router = APIRouter()
 
@@ -37,30 +40,35 @@ def _mask_email(email: str) -> str:
     return f"{shown}***@{domain}" if domain else email
 
 
-def _issue_email_code(user: sqlite3.Row, db: sqlite3.Connection) -> None:
-    code = f"{secrets.randbelow(1000000):06d}"
-    expires = (datetime.utcnow() + timedelta(minutes=EMAIL_CODE_TTL_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
-    db.execute("DELETE FROM email_otp WHERE user_id = ?", (user["id"],))
-    db.execute(
-        "INSERT INTO email_otp (user_id, code_hash, expires_at, attempts) VALUES (?, ?, ?, 0)",
-        (user["id"], twofa.hash_code(code), expires),
-    )
-    send_login_code_email(db, name=user["name"], email=user["email"], code=code)
+def _token_version(db: sqlite3.Connection, user_id: int) -> int:
+    """The user's current token_version, read fresh.
+
+    Every token must carry this. A token minted with a stale value is refused by
+    require_auth, so reading it at mint time is what keeps a password change from
+    locking out the very session that performed it.
+    """
+    row = db.execute("SELECT token_version FROM users WHERE id = ?", (user_id,)).fetchone()
+    return int((row["token_version"] if row is not None else 0) or 0)
+
+
+def _reissue(db: sqlite3.Connection, user: sqlite3.Row) -> str:
+    """A replacement token for the caller, after their token_version was bumped."""
+    return create_token(user["id"], user["role"],
+                        token_version=_token_version(db, user["id"]))
 
 
 def _advance(user: sqlite3.Row, db: sqlite3.Connection, extra: dict | None = None) -> dict:
+    """Issue a fully verified session token.
+
+    There was a second branch here for an email-code step gated on
+    EMAIL_2FA_ROLES, which was an empty frozenset — so it could never run. It has
+    been removed along with the /2fa/verify-email and /2fa/resend-email endpoints
+    and the email_otp table. TOTP two-factor is unaffected and still enforced.
+    """
     extra = extra or {}
-    if user["role"] in EMAIL_2FA_ROLES:
-        _issue_email_code(user, db)
-        return {
-            "token": create_token(user["id"], user["role"], tfa="email_pending", minutes=15),
-            "user": public_user(user),
-            "stage": "email",
-            "emailSentTo": _mask_email(user["email"]),
-            **extra,
-        }
     return {
-        "token": create_token(user["id"], user["role"]),
+        "token": create_token(user["id"], user["role"],
+                              token_version=_token_version(db, user["id"])),
         "user": public_user(user),
         "stage": "done",
         **extra,
@@ -110,7 +118,8 @@ def login(body: LoginIn, request: Request, db: sqlite3.Connection = Depends(get_
         raise HTTPException(401, "No account matches that email and password.")
 
     throttle.login_ok(key)
-    token = create_pending_token(user["id"], user["role"])
+    token = create_pending_token(user["id"], user["role"],
+                                 token_version=_token_version(db, user["id"]))
     return {
         "token": token,
         "user": public_user(user),
@@ -136,20 +145,31 @@ def set_password(
 ):
     if len(body.newPassword) < 8:
         raise HTTPException(400, "Password needs at least 8 characters.")
+    # bcrypt truncates silently past 72 bytes, so this is a real limit rather
+    # than a policy one.
     if len(body.newPassword.encode()) > 72:
         raise HTTPException(400, "Password is too long (72 bytes max).")
-    if len(body.newPassword.encode()) > 72:
-        raise HTTPException(400, "Password is too long (72 bytes max).")
+
     verified = (claims or {}).get("tfa") in (None, "verified")
+    # `must_change_password` is the invite bootstrap: a brand-new user has no TOTP
+    # enrolled yet, so the temporary password from the invite email is the only
+    # credential they have and it must be enough to set a permanent one. This is a
+    # deliberate trade-off — it does mean the invite email is a complete
+    # credential until first sign-in — and is why invites are throttled and the
+    # temporary password is redacted from the email log.
     if not verified and not user["must_change_password"]:
         raise HTTPException(403, "Finish two-step verification before changing your password.")
 
     new_hash = bcrypt.hashpw(body.newPassword.encode(), bcrypt.gensalt()).decode()
     db.execute(
-        "UPDATE users SET password_hash = ?, must_change_password = 0, status = 'active' WHERE id = ?",
+        "UPDATE users SET password_hash = ?, must_change_password = 0, status = 'active',"
+        "       token_version = token_version + 1 WHERE id = ?",
         (new_hash, user["id"]),
     )
-    return {"ok": True}
+    # The bump above invalidated every token for this user, this request's
+    # included. Hand back a replacement so the caller stays signed in while
+    # everyone else is signed out.
+    return {"ok": True, "token": _reissue(db, user)}
 
 
 class CodeIn(BaseModel):
@@ -240,50 +260,6 @@ def twofa_verify_backup(
     raise HTTPException(401, "That backup code isn't valid.")
 
 
-@router.post("/2fa/verify-email")
-def twofa_verify_email(
-    body: CodeIn,
-    user: sqlite3.Row = Depends(require_auth),
-    claims: dict = Depends(token_claims),
-    db: sqlite3.Connection = Depends(get_db),
-):
-    if user["role"] not in EMAIL_2FA_ROLES:
-        raise HTTPException(400, "No email step is required for this account.")
-    if claims.get("tfa") != "email_pending":
-        raise HTTPException(400, "Finish the authenticator step first.")
-    row = db.execute(
-        "SELECT code_hash, expires_at, attempts FROM email_otp WHERE user_id = ?", (user["id"],)
-    ).fetchone()
-    if row is None:
-        raise HTTPException(400, "No sign-in code is pending — request a new one.")
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    if now > row["expires_at"]:
-        db.execute("DELETE FROM email_otp WHERE user_id = ?", (user["id"],))
-        raise HTTPException(401, "That code has expired — request a new one.")
-    if row["attempts"] >= EMAIL_CODE_MAX_ATTEMPTS:
-        db.execute("DELETE FROM email_otp WHERE user_id = ?", (user["id"],))
-        raise HTTPException(429, "Too many attempts — request a new code.")
-    if not twofa.check_code(body.code, row["code_hash"]):
-        db.execute("UPDATE email_otp SET attempts = attempts + 1 WHERE user_id = ?", (user["id"],))
-        raise HTTPException(401, "That code isn't right. Try again.")
-    db.execute("DELETE FROM email_otp WHERE user_id = ?", (user["id"],))
-    return {"token": create_token(user["id"], user["role"]), "user": public_user(user), "stage": "done"}
-
-
-@router.post("/2fa/resend-email")
-def twofa_resend_email(
-    user: sqlite3.Row = Depends(require_auth),
-    claims: dict = Depends(token_claims),
-    db: sqlite3.Connection = Depends(get_db),
-):
-    if user["role"] not in EMAIL_2FA_ROLES:
-        raise HTTPException(400, "No email step is required for this account.")
-    if claims.get("tfa") != "email_pending":
-        raise HTTPException(400, "Finish the authenticator step first.")
-    _issue_email_code(user, db)
-    return {"ok": True, "emailSentTo": _mask_email(user["email"])}
-
-
 @router.get("/config")
 def auth_config():
     return {"passwordOtpRequired": PASSWORD_OTP_ENABLED}
@@ -347,9 +323,15 @@ def password_change(
             db.execute("UPDATE password_otp SET attempts = attempts + 1 WHERE user_id = ?", (user["id"],))
             raise HTTPException(401, "That code isn't right. Try again.")
     new_hash = bcrypt.hashpw(body.newPassword.encode(), bcrypt.gensalt()).decode()
-    db.execute("UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?", (new_hash, user["id"]))
+    db.execute(
+        # token_version bump ends every other session: see security.create_token.
+        "UPDATE users SET password_hash = ?, must_change_password = 0,"
+        "       token_version = token_version + 1 WHERE id = ?",
+        (new_hash, user["id"]),
+    )
+    fresh_token = _reissue(db, user)
     db.execute("DELETE FROM password_otp WHERE user_id = ?", (user["id"],))
-    return {"ok": True}
+    return {"ok": True, "token": fresh_token}
 
 
 class ForgotRequestIn(BaseModel):
@@ -405,6 +387,12 @@ def forgot_password_reset(body: ForgotResetIn, db: sqlite3.Connection = Depends(
         db.execute("UPDATE password_otp SET attempts = attempts + 1 WHERE user_id = ?", (user["id"],))
         raise invalid
     new_hash = bcrypt.hashpw(body.newPassword.encode(), bcrypt.gensalt()).decode()
-    db.execute("UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?", (new_hash, user["id"]))
+    db.execute(
+        # token_version bump ends every other session: see security.create_token.
+        "UPDATE users SET password_hash = ?, must_change_password = 0,"
+        "       token_version = token_version + 1 WHERE id = ?",
+        (new_hash, user["id"]),
+    )
+    fresh_token = _reissue(db, user)
     db.execute("DELETE FROM password_otp WHERE user_id = ?", (user["id"],))
-    return {"ok": True}
+    return {"ok": True, "token": fresh_token}

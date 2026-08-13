@@ -629,19 +629,31 @@ def bulk_import_keywords(project_id: int, file: UploadFile, db: sqlite3.Connecti
         for r in db.execute("SELECT term FROM keywords WHERE project_id = ?", (project_id,)).fetchall()
     }
     to_insert = [v for v in valid if v["term"] not in existing]
-    skipped_existing = len(valid) - len(to_insert)
 
     # One round trip instead of one per keyword. A 500-row import was previously
     # 500 separate statements against the database.
+    #
+    # ON CONFLICT rather than trusting the Python diff above: that diff is a
+    # read followed by a write, so a concurrent import — or one racing a single
+    # add — slipped between them and hit idx_keywords_project_term. Because
+    # connections are autocommit, an unguarded executemany then left part of the
+    # batch committed and returned a 500. The transaction makes the batch
+    # all-or-nothing, and DO NOTHING makes the race a no-op instead of an error.
+    imported = 0
     if to_insert:
-        db.executemany(
-            "INSERT INTO keywords (project_id, term) VALUES (?, ?)",
-            [(project_id, v["term"]) for v in to_insert],
-        )
+        with db.transaction():
+            cur = db.executemany(
+                "INSERT INTO keywords (project_id, term) VALUES (?, ?)"
+                " ON CONFLICT (project_id, term) DO NOTHING",
+                [(project_id, v["term"]) for v in to_insert],
+            )
+            # rowcount counts rows actually written, so a term inserted by a
+            # concurrent request is reported as skipped rather than imported.
+            imported = cur.rowcount if cur.rowcount is not None else len(to_insert)
 
     return {
-        "imported": len(to_insert),
-        "skippedExisting": skipped_existing,
+        "imported": imported,
+        "skippedExisting": len(valid) - imported,
         "errors": errors,
         "totalRows": len(valid) + len(errors),
     }

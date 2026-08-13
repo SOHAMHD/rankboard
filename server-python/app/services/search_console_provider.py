@@ -106,7 +106,14 @@ def _query(service, site_url: str, body: dict) -> list[dict]:
     """
     body = {"dataState": _DATA_STATE, **body}
     wanted = int(body.get("rowLimit") or _ROW_LIMIT)
-    page_size = min(wanted, _API_MAX_ROWS)
+    # Always request full pages, regardless of how many rows the caller wants.
+    # This was min(wanted, _API_MAX_ROWS), which meant a caller asking for 1000
+    # got page_size == 1000, the first response filled it exactly, and the
+    # short-page break below fired every time — so the loop could never reach a
+    # second page and results were silently capped at `wanted` while the code
+    # read as though pagination worked. `rows[:wanted]` at the end still honours
+    # the caller's limit.
+    page_size = _API_MAX_ROWS
 
     rows: list[dict] = []
     start_row = 0

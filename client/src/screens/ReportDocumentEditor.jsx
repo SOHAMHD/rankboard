@@ -285,11 +285,19 @@ function trimLogo(dataUrl) {
     const img = new Image();
     img.onload = () => {
       try {
+        // Downscale BEFORE scanning. This used to draw at naturalWidth ×
+        // naturalHeight and walk every pixel in a nested JS loop — a 12MP phone
+        // photo is ~12 million iterations with four typed-array reads each, which
+        // froze the tab for seconds with no spinner and no size guard. The trim is
+        // only ever used to find the content bounds, and those scale, so working
+        // at logo resolution gives the same answer for a fraction of the work.
+        const SCAN_MAX = 900;
+        const scale = Math.min(1, SCAN_MAX / Math.max(img.naturalWidth, img.naturalHeight));
         const c = document.createElement("canvas");
-        c.width = img.naturalWidth;
-        c.height = img.naturalHeight;
+        c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        c.height = Math.max(1, Math.round(img.naturalHeight * scale));
         const ctx = c.getContext("2d");
-        ctx.drawImage(img, 0, 0);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
         const { data } = ctx.getImageData(0, 0, c.width, c.height);
         let top = c.height, left = c.width, right = 0, bottom = 0, found = false;
         for (let y = 0; y < c.height; y++) {
@@ -321,11 +329,26 @@ function trimLogo(dataUrl) {
   });
 }
 
+//: Reject before decoding. A 25 MB image is a mistake, not a logo, and finding
+//: out after the decode means the user has already waited for it.
+const LOGO_MAX_BYTES = 8 * 1024 * 1024;
+
 function HeaderEditor({ block, onSetLogo }) {
   const toast = useToast();
+  const [busy, setBusy] = useState(false);
   const onFile = (e) => {
     const f = e.target.files && e.target.files[0];
     if (!f || !f.type.startsWith("image/")) return;
+    if (f.size > LOGO_MAX_BYTES) {
+      toast.error(
+        "That file is over 8 MB. Save it as a PNG or JPG a few hundred KB in size and try again.",
+        { title: "Image too large" }
+      );
+      return;
+    }
+    // The trim is CPU-bound even after downscaling, so say something while it
+    // runs — silence read as a broken upload.
+    setBusy(true);
     const reader = new FileReader();
     reader.onload = () => {
       trimLogo(reader.result).then((trimmed) => {
@@ -337,11 +360,14 @@ function HeaderEditor({ block, onSetLogo }) {
             "That image couldn't be resized. Save it as a PNG or JPG under about 2 MB and try again.",
             { title: "Logo too large" }
           );
+          setBusy(false);
           return;
         }
         onSetLogo(block.id, trimmed);
-      });
+        setBusy(false);
+      }).catch(() => setBusy(false));
     };
+    reader.onerror = () => setBusy(false);
     reader.readAsDataURL(f);
     e.target.value = "";
   };
@@ -354,11 +380,14 @@ function HeaderEditor({ block, onSetLogo }) {
           <img src={block.clientLogo} alt="Client logo"
                className="h-10 rounded border border-stone-200 bg-white p-1 object-contain" />
         ) : (
-          <span className="text-xs text-stone-400">none</span>
+          <span className="text-xs text-stone-500">none</span>
         )}
-        <label className="text-xs px-2 py-1 rounded-md border border-stone-200 text-stone-600 hover:bg-orange-50 hover:text-orange-700 cursor-pointer">
-          {block.clientLogo ? "Replace" : "Upload logo"}
-          <input type="file" accept="image/*" onChange={onFile} className="hidden" />
+        <label className={`text-xs px-2 py-1 rounded-md border border-stone-200 inline-flex items-center gap-1.5 ${
+          busy ? "text-stone-400 cursor-wait" : "text-stone-600 hover:bg-orange-50 hover:text-orange-700 cursor-pointer"
+        }`}>
+          {busy && <LoaderCircle size={12} className="animate-spin" />}
+          {busy ? "Processing…" : block.clientLogo ? "Replace" : "Upload logo"}
+          <input type="file" accept="image/*" onChange={onFile} disabled={busy} className="hidden" />
         </label>
         {block.clientLogo ? (
           <button type="button" onClick={() => onSetLogo(block.id, null)}
@@ -438,6 +467,23 @@ function EditableDoc({ version, blobs, canSend = false }) {
   const [savedAt, setSavedAt] = useState(null);
   const [saveError, setSaveError] = useState(null);
 
+  // The document lives in local state behind a manual Save draft button, so
+  // until this existed twenty minutes of narrative writing was one stray click
+  // or tab close from gone. The Keywords grid already guarded its edits; these
+  // editors didn't.
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const warn = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
   useEffect(() => {
     let cancelled = false;
     api(`/reports/${version.id}/template-blocks`)
@@ -449,7 +495,16 @@ function EditableDoc({ version, blobs, canSend = false }) {
   }, [version.id]);
 
   const onDocChange = useCallback((id, doc) => {
-    setBlocks((bs) => bs.map((b) => (b.id === id ? { ...b, doc } : b)));
+    setBlocks((bs) => {
+      const prev = bs.find((b) => b.id === id);
+      // NarrativeEditor fires this once on mount with the doc it just
+      // built from the block, which is not a user edit — comparing keeps
+      // the dirty flag honest so the unload guard doesn't fire on a
+      // report nobody touched.
+      if (prev && JSON.stringify(prev.doc) === JSON.stringify(doc)) return bs;
+      setDirty(true);
+      return bs.map((b) => (b.id === id ? { ...b, doc } : b));
+    });
   }, []);
   const onFocusEditor = useCallback((editor) => {
     activeEditorRef.current = editor;
@@ -457,6 +512,7 @@ function EditableDoc({ version, blobs, canSend = false }) {
 
   const rowsKey = (block) => (block.type === "backlinks_list" ? "items" : "rows");
   const setRowIncluded = useCallback((blockId, rowIndex, included) => {
+    setDirty(true);
     setBlocks((bs) =>
       syncAchievements(
         bs.map((b) => {
@@ -469,6 +525,7 @@ function EditableDoc({ version, blobs, canSend = false }) {
     );
   }, []);
   const setRowsBulk = useCallback((blockId, mode) => {
+    setDirty(true);
     setBlocks((bs) =>
       syncAchievements(
         bs.map((b) => {
@@ -485,14 +542,17 @@ function EditableDoc({ version, blobs, canSend = false }) {
   }, []);
 
   const setClientLogo = useCallback((blockId, dataUri) => {
+    setDirty(true);
     setBlocks((bs) => bs.map((b) => (b.id === blockId ? { ...b, clientLogo: dataUri } : b)));
   }, []);
 
   const setBlockTitle = useCallback((blockId, value) => {
+    setDirty(true);
     setBlocks((bs) => bs.map((b) => (b.id === blockId ? { ...b, title: value } : b)));
   }, []);
 
   const setCellValue = useCallback((blockId, rowIndex, colKey, value) => {
+    setDirty(true);
     setBlocks((bs) =>
       bs.map((b) => {
         if (b.id !== blockId) return b;
@@ -522,6 +582,7 @@ function EditableDoc({ version, blobs, canSend = false }) {
   }, []);
 
   const setTargetValue = useCallback((blockId, colKey, fieldKey, value) => {
+    setDirty(true);
     setBlocks((bs) =>
       bs.map((b) => {
         if (b.id !== blockId) return b;
@@ -574,6 +635,7 @@ function EditableDoc({ version, blobs, canSend = false }) {
       const content = { ...version.content, blocks };
       await api(`/reports/${version.id}/content`, { method: "PATCH", body: { content } });
       setSavedAt(new Date());
+      setDirty(false);
     } catch (e) {
       setSaveError(e.message);
       throw e;

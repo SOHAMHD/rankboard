@@ -879,8 +879,6 @@ def render_document(version, blobs=None, part="all") -> str:
         '</div>'
         '</div></div>'
     )
-    hdr_title = _js_str(f"{project} · MONTHLY SEO REPORT")
-    ft_left = _js_str(f"Reporting period: {period_range} · Prepared by {AGENCY_NAME} for {project}")
     heading_css = "h2,h3,h4,h5,h6,.card-title,.card-kicker{color:#0067A6;}"
     breaks = "@media print{.card,svg,h4,h5{break-inside:avoid}tr{break-inside:avoid}}"
     print_css_body = f"@page{{size:A4;margin:24mm 14mm 16mm;}}html,body{{background:#fff;margin:0;}}{heading_css}{breaks}"
@@ -902,10 +900,6 @@ def render_document(version, blobs=None, part="all") -> str:
     if part == "thankyou":
         return head + f'<style>{print_css_cover}</style></head><body>' + thankyou + '</body></html>'
     return head + f'<style>{print_css_all}</style></head><body>' + cover + "".join(body) + thankyou + '</body></html>'
-
-
-def _js_str(s):
-    return (s or "").replace("\\", "\\\\").replace('"', '\\"')
 
 
 _GSC_COLORS = {

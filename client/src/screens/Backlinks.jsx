@@ -195,7 +195,7 @@ export function BacklinksView({ user, project }) {
                         onClick={() => remove(b.id)}
                         aria-label="Remove backlink"
                         title="Remove backlink"
-                        className="p-1 rounded text-stone-300 hover:text-red-500 transition-colors shrink-0"
+                        className="p-1 rounded text-stone-500 hover:text-red-500 transition-colors shrink-0"
                       >
                         <Trash2 size={14} />
                       </button>

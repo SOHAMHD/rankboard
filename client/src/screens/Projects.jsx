@@ -10,7 +10,7 @@ import {
   searchCities,
   searchRegions,
 } from "../locations";
-import { TopBar, Modal, ErrorNote, SmartSearch, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
+import { TopBar, Modal, ConfirmModal, ErrorNote, SmartSearch, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
 import ProjectRecipients from "../lib/ProjectRecipients";
 
 const TLD_COUNTRIES = {
@@ -180,7 +180,9 @@ export function ProjectsView({ user, onOpenProject, onPeople, onEmailLog, onLogo
   const [error, setError] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [editProject, setEditProject] = useState(null);
-  const [confirmId, setConfirmId] = useState(null);
+  // The whole project, not just an id: the dialog names what's being destroyed.
+  const [confirmProject, setConfirmProject] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const refresh = async () => {
     try {
@@ -211,12 +213,15 @@ export function ProjectsView({ user, onOpenProject, onPeople, onEmailLog, onLogo
   };
 
   const deleteProject = async (id) => {
+    setDeleting(true);
     try {
       await api(`/projects/${id}`, { method: "DELETE" });
-      setConfirmId(null);
+      setConfirmProject(null);
       await refresh();
     } catch (err) {
       setError(err.message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -242,9 +247,23 @@ export function ProjectsView({ user, onOpenProject, onPeople, onEmailLog, onLogo
         </div>
 
       
+        {/* Without this the screen lied: a failed load left `projects` empty and
+            rendered "No projects yet", so a network error was indistinguishable
+            from a genuinely empty account — and a failed delete or toggle did
+            nothing visible at all. */}
+        <ErrorNote>{error}</ErrorNote>
+
         {loading ? (
           <div className="py-20 flex justify-center">
             <LoaderCircle size={22} className="text-orange-600 animate-spin" />
+          </div>
+        ) : error && projects.length === 0 ? (
+          <div className="bg-white rounded-xl border border-dashed border-stone-300 py-16 text-center px-6 mt-2">
+            <h3 className="font-semibold text-stone-800 font-display">Couldn&apos;t load projects</h3>
+            <p className="text-sm text-stone-500 mt-1 mb-5">
+              The list above is empty because the request failed, not because there are none.
+            </p>
+            <button onClick={refresh} className={`${BTN_PRIMARY} px-4 py-2`}>Try again</button>
           </div>
         ) : projects.length === 0 ? (
           <div className="bg-white rounded-xl border border-dashed border-stone-300 py-16 text-center px-6 mt-2">
@@ -267,21 +286,18 @@ export function ProjectsView({ user, onOpenProject, onPeople, onEmailLog, onLogo
                 key={p.id}
                 project={p}
                 user={user}
-                confirming={confirmId === p.id}
                 onOpen={() => onOpenProject(p.id)}
                 onEdit={(e) => {
                   e.stopPropagation();
                   setEditProject(p);
-                  setConfirmId(null);
                 }}
                 onToggle={(e) => {
                   e.stopPropagation();
                   toggleProject(p);
-                  setConfirmId(null);
                 }}
                 onDelete={(e) => {
                   e.stopPropagation();
-                  confirmId === p.id ? deleteProject(p.id) : setConfirmId(p.id);
+                  setConfirmProject(p);
                 }}
               />
             ))}
@@ -309,26 +325,52 @@ export function ProjectsView({ user, onOpenProject, onPeople, onEmailLog, onLogo
           }}
         />
       )}
+
+      {confirmProject && (
+        <ConfirmModal
+          title={`Delete “${confirmProject.name}”?`}
+          confirmLabel="Delete project"
+          busy={deleting}
+          onCancel={() => setConfirmProject(null)}
+          onConfirm={() => deleteProject(confirmProject.id)}
+        >
+          This permanently deletes the project and everything recorded against it —
+          every keyword and its full rank history, backlinks, posts and saved
+          recipients. Reports already generated keep their own frozen copy.
+          <span className="block mt-2 font-medium text-stone-700">This can&apos;t be undone.</span>
+        </ConfirmModal>
+      )}
     </div>
   );
 }
 
-function ProjectCard({ project, user, confirming, onOpen, onEdit, onToggle, onDelete }) {
+function ProjectCard({ project, user, onOpen, onEdit, onToggle, onDelete }) {
   const showToggle = can(user, "toggleProject");
   const showEdit = can(user, "toggleProject");
   const showDelete = can(user, "deleteProject");
   const country = project.locationLabel || (project.locationCode ? `Code ${project.locationCode}` : null);
 
   return (
+    // The card stays clickable as an affordance, but the title below is a real
+    // button — this was a bare <div onClick>, which made opening a project
+    // impossible without a mouse.
     <div
       onClick={onOpen}
-      className={`group bg-white rounded-xl border p-5 cursor-pointer transition-all hover:shadow-md border-stone-200 hover:border-orange-400 ${
+      className={`group bg-white rounded-xl border p-5 cursor-pointer transition-all hover:shadow-md border-stone-200 hover:border-orange-400 focus-within:border-orange-400 ${
         project.active ? "" : "opacity-70 hover:opacity-100"
       }`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="font-semibold text-stone-900 truncate font-display">{project.name}</h3>
+          <h3 className="font-semibold text-stone-900 truncate font-display">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onOpen(); }}
+              className="text-left hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 rounded"
+            >
+              {project.name}
+            </button>
+          </h3>
           {project.clientName && <p className="text-xs text-stone-600 truncate mt-0.5">{project.clientName}</p>}
           {project.domain && <p className="text-xs text-stone-500 font-data truncate mt-0.5">{project.domain}</p>}
           <p className="text-xs text-stone-400 mt-0.5">
@@ -353,34 +395,32 @@ function ProjectCard({ project, user, confirming, onOpen, onEdit, onToggle, onDe
         <div className="mt-4 pt-4 border-t border-stone-100 flex items-center justify-between">
           {showToggle ? <Toggle on={project.active} onClick={onToggle} /> : <span />}
           <span className="flex items-center gap-0.5">
+            {/* stone-500, not stone-300: at ~1.4:1 against white these icon
+                buttons were effectively invisible, and they're interactive. */}
             {showEdit && (
               <button
                 onClick={onEdit}
                 aria-label={`Edit ${project.name}`}
                 title="Edit project (domain, location & integrations)"
-                className="p-1.5 rounded-md text-stone-300 hover:text-orange-600 hover:bg-orange-50 transition-colors"
+                className="p-1.5 rounded-md text-stone-500 hover:text-orange-600 hover:bg-orange-50 transition-colors"
               >
                 <Pencil size={16} />
               </button>
             )}
-            {showDelete &&
-              (confirming ? (
-                <button
-                  onClick={onDelete}
-                  className="text-xs font-semibold text-white bg-red-500 hover:bg-red-600 px-2.5 py-1 rounded-md transition-colors"
-                >
-                  Confirm delete
-                </button>
-              ) : (
-                <button
-                  onClick={onDelete}
-                  aria-label={`Delete ${project.name}`}
-                  title="Delete project"
-                  className="p-1.5 rounded-md text-stone-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                >
-                  <Trash2 size={16} />
-                </button>
-              ))}
+            {/* One click opens a dialog that names what's destroyed. This used to
+                swap the trash icon for a "Confirm delete" button in the same
+                position, so a double-click permanently deleted a project and all
+                its keyword history. */}
+            {showDelete && (
+              <button
+                onClick={onDelete}
+                aria-label={`Delete ${project.name}`}
+                title="Delete project"
+                className="p-1.5 rounded-md text-stone-500 hover:text-red-500 hover:bg-red-50 transition-colors"
+              >
+                <Trash2 size={16} />
+              </button>
+            )}
           </span>
         </div>
       )}
@@ -494,6 +534,9 @@ function AddProjectModal({ onClose, onAdded }) {
       />
       <p className="text-xs text-stone-400 mt-2">URL-prefix property like "https://www.example.com/" (with trailing slash), or domain property like "sc-domain:example.com".</p>
 
+      {/* Was set on failure and never rendered, so "Create project" spun, stopped,
+          and nothing happened — server validation was invisible. */}
+      <ErrorNote>{error}</ErrorNote>
 
       <button onClick={submit} disabled={!name.trim() || busy} className={`${BTN_PRIMARY} w-full mt-4 py-2.5`}>
         {busy ? <LoaderCircle size={15} className="animate-spin" /> : "Create project"}

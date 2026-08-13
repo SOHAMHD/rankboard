@@ -1,15 +1,13 @@
 import traceback
 
-import jwt
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .config import CORS_ORIGINS, DEBUG, JWT_SECRET
-from .db import close_pool, get_db, init_db
-from .permissions import READ_ONLY_ROLES
+from .config import CORS_ORIGINS, DEBUG
+from .db import close_pool, init_db
+from .services import report_pdf
 from .routers import (
     auth,
     backlinks,
@@ -32,68 +30,21 @@ app = FastAPI(
     openapi_url="/openapi.json" if DEBUG else None,
 )
 
-WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-
-READ_ONLY_EXEMPT_PATHS = {
-    "/api/auth/login",
-    "/api/auth/set-password",
-    # Brevo's event webhook. It's a POST from a machine with no account here, so
-    # the role lookup below finds nothing and the check would 403 every event.
-    # Its own shared-secret check is in routers/webhooks.py.
-    "/api/webhooks/brevo",
-}
-
-READ_ONLY_EXEMPT_SUFFIXES = (
-    "/analytics",
-    "/analytics/breakdown",
-    "/analytics/report",
-    "/search-console/performance",
-)
-
-
-def _read_only_exempt(path: str) -> bool:
-    return path in READ_ONLY_EXEMPT_PATHS or path.endswith(READ_ONLY_EXEMPT_SUFFIXES)
-
-
-def _role_for_request(request: Request) -> str | None:
-    authorization = request.headers.get("authorization")
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
-    try:
-        payload = jwt.decode(authorization[7:], JWT_SECRET, algorithms=["HS256"])
-        user_id = int(payload["sub"])
-    except (jwt.PyJWTError, KeyError, ValueError):
-        return None
-    # Borrow from the pool rather than opening a dedicated connection — this runs
-    # on every write request once READ_ONLY_ROLES is non-empty.
-    gen = get_db()
-    conn = next(gen)
-    try:
-        row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
-    finally:
-        gen.close()
-    return row[0] if row else None
-
-
-@app.middleware("http")
-async def block_read_only_writes(request: Request, call_next):
-    if (
-        READ_ONLY_ROLES
-        and request.method in WRITE_METHODS
-        and not _read_only_exempt(request.url.path)
-    ):
-        role = await run_in_threadpool(_role_for_request, request)
-        if role in READ_ONLY_ROLES:
-            return JSONResponse(
-                status_code=403,
-                content={"error": "Your access is read-only — you can view everything but can't make changes."},
-            )
-    return await call_next(request)
+# The read-only-role middleware that used to live here was gated on
+# permissions.READ_ONLY_ROLES, an empty frozenset — so it never ran. It has been
+# removed along with READ_ONLY_EXEMPT_PATHS, _read_only_exempt and
+# _role_for_request. Note that re-adding it would put a database round trip in
+# front of every write request, which is why it was worth deleting rather than
+# leaving as scaffolding.
 
 
 ALLOWED_ORIGINS = list(dict.fromkeys([
     "https://rankboard-1.onrender.com",
-    "http://localhost:5173",
+    # The Vite dev server, only when DEBUG is on. It was unconditional, so
+    # production advertised a localhost origin with allow_credentials=True. The
+    # practical risk is small — auth is a Bearer token, not a cookie — but a dev
+    # origin has no business in a production Access-Control-Allow-Origin list.
+    *(["http://localhost:5173"] if DEBUG else []),
     *CORS_ORIGINS,
 ]))
 app.add_middleware(
@@ -123,6 +74,23 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=400, content={"error": "Invalid request body."})
+
+
+@app.exception_handler(report_pdf.RenderBusy)
+async def render_busy_handler(request: Request, exc: report_pdf.RenderBusy):
+    """503 with Retry-After, not a 500.
+
+    Rendering is serialised on one thread. Arriving behind a deep queue is a
+    capacity condition the client can sensibly retry, and saying so beats holding
+    the request open for 90 seconds and then failing.
+    """
+    return JSONResponse(status_code=503, content={"error": str(exc)},
+                        headers={"Retry-After": "20"})
+
+
+@app.exception_handler(report_pdf.RenderTimeout)
+async def render_timeout_handler(request: Request, exc: report_pdf.RenderTimeout):
+    return JSONResponse(status_code=504, content={"error": str(exc)})
 
 
 @app.exception_handler(Exception)

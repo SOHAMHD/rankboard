@@ -187,8 +187,12 @@ def gather(
                 _fetch_section, gsc_fetch, project["gsc_site_url"],
                 cur_range, prev_range, registry.SOURCE_GSC,
             )
-            ga4_section, ga4_outcome = ga4_future.result()
-            gsc_section, gsc_outcome = gsc_future.result()
+            # An outer budget as well as the per-call one inside the fan-out.
+            # _fetch_section can't raise, so a timeout here means the whole
+            # section's worth of calls overran together — degrade it the same way
+            # rather than letting the wait be unbounded.
+            ga4_section, ga4_outcome = _await_section(ga4_future, registry.SOURCE_GA4)
+            gsc_section, gsc_outcome = _await_section(gsc_future, registry.SOURCE_GSC)
 
     backlinks_data = backlink_service.backlinks_for_month(db, project_id, period_key)
     # The previous month's count as well, so the Key Metrics tile can show a
@@ -271,7 +275,29 @@ def gather(
     }
 
 
+#: Wall-clock budget for one provider section, covering all of its calls. Wider
+#: than report_google.GA4_CALL_TIMEOUT because a section is many calls; a report
+#: that takes longer than this is one nobody is still waiting for.
+SECTION_BUDGET = 120
+
+
+def _await_section(future, source) -> tuple[dict | None, dict]:
+    try:
+        return future.result(timeout=SECTION_BUDGET)
+    except concurrent.futures.TimeoutError:
+        return None, {
+            "ok": False,
+            "reason": f"{source} took longer than {SECTION_BUDGET}s — try generating the report again.",
+            "status": 503,
+        }
+
+
 def _fetch_section(fetch, target, cur_range, prev_range, source) -> tuple[dict | None, dict]:
+    """Fetch one provider section, or explain why it isn't available.
+
+    Never raises. A report with a missing GA4 section is a report the renderer
+    already knows how to draw; a report that 500s because Google was slow is not.
+    """
     try:
         section = fetch(target, cur_range, prev_range)
         section["source"] = source
@@ -279,6 +305,25 @@ def _fetch_section(fetch, target, cur_range, prev_range, source) -> tuple[dict |
     except report_google.GoogleFetchError as exc:
         status = 503 if exc.retryable else 422
         return None, {"ok": False, "reason": exc.reason_text(), "status": status}
+    except concurrent.futures.TimeoutError:
+        # Raised by the per-call timeout inside report_google's fan-out. Treated
+        # as retryable because that is what it is: the request was fine, Google
+        # was slow.
+        return None, {
+            "ok": False,
+            "reason": f"{source} did not respond in time — try generating the report again.",
+            "status": 503,
+        }
+    except Exception as exc:  # noqa: BLE001
+        # Anything unforeseen from a third-party client. The section is marked
+        # absent with the reason attached rather than taking the whole report
+        # down, and the traceback still reaches the log.
+        print(f"report {source} fetch failed:", repr(exc))
+        return None, {
+            "ok": False,
+            "reason": f"{source} could not be read ({exc.__class__.__name__}).",
+            "status": 502,
+        }
 
 
 def validate(gathered: dict) -> tuple[bool, str | None, int]:

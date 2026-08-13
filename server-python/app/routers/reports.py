@@ -15,7 +15,7 @@ from ..config import (
     REPORT_ASSET_DIR,
     UNSUBSCRIBE_URL,
 )
-from ..db import get_db
+from ..db import db_session, get_db
 from ..permissions import AUTHOR_ROLES, DELETER_ROLES, SENDER_ROLES
 from ..security import require_roles
 from ..access import user_can_access_project
@@ -185,11 +185,21 @@ def get_report_cover(name: str):
 def download_report_pdf(
     version_id: int,
     user: sqlite3.Row = Depends(require_roles(*AUTHOR_ROLES)),
-    db: sqlite3.Connection = Depends(get_db),
 ):
-    _require_version_access(db, user, version_id)
-    version = report_service.get_version(db, version_id, include_data=True)
-    blobs = report_service.available_blobs(db, version_id)
+    """Render one report to PDF.
+
+    Deliberately does NOT take `Depends(get_db)`. FastAPI holds a dependency's
+    connection until the response is finalised, so with the pool capped at 10 and
+    a Chromium render taking seconds, ten concurrent downloads starved every other
+    endpoint in the process of database connections. The reads happen inside
+    `db_session()` and the connection goes back before rendering starts.
+    """
+    with db_session() as db:
+        _require_version_access(db, user, version_id)
+        version = report_service.get_version(db, version_id, include_data=True)
+        blobs = report_service.available_blobs(db, version_id)
+
+    # No database connection held from here on.
     pdf_bytes = report_pdf.render_pdf(version, blobs)
     filename = report_pdf.pdf_filename(version)
     return Response(
@@ -232,9 +242,14 @@ def send_report(
     version_id: int,
     body: SendReportIn,
     user: sqlite3.Row = Depends(require_roles(*SENDER_ROLES)),
-    db: sqlite3.Connection = Depends(get_db),
 ):
-    _require_version_access(db, user, version_id)
+    """Render the report and email it.
+
+    No `Depends(get_db)` — see download_report_pdf. This handler is the worse of
+    the two: it holds a connection across a Chromium render *and* a base64 PDF
+    upload to the mail provider. All reads happen up front and the connection is
+    returned before either.
+    """
     # One `seen` set for both lists: To wins, so cc'ing someone already on the To
     # line is a no-op rather than a duplicate.
     seen: set[str] = set()
@@ -245,14 +260,18 @@ def send_report(
     if not valid:
         raise HTTPException(422, "Add at least one valid email address.")
 
-    version = report_service.get_version(db, version_id, include_data=True)
-    blobs = report_service.available_blobs(db, version_id)
+    with db_session() as db:
+        _require_version_access(db, user, version_id)
+        version = report_service.get_version(db, version_id, include_data=True)
+        blobs = report_service.available_blobs(db, version_id)
+        proj = db.execute(
+            "SELECT name, client_name, domain FROM projects WHERE id = ?", (version["projectId"],)
+        ).fetchone()
+
+    # No connection held across the render or the upload below. The send itself
+    # needs one to write the emails row, so it takes a fresh short-lived session.
     pdf_bytes = report_pdf.render_pdf(version, blobs)
     filename = report_pdf.pdf_filename(version)
-
-    proj = db.execute(
-        "SELECT name, client_name, domain FROM projects WHERE id = ?", (version["projectId"],)
-    ).fetchone()
     # Two different names, used in two different places:
     #   project_name  - who the mail is addressed to. client_name is the contact
     #                   person ("Dr. Anuranjan"), so this drives the greeting.
@@ -358,21 +377,25 @@ def send_report(
     # supporting Cc means sending together — and that makes recipients visible to
     # each other, which the previous per-recipient loop did not. Deliberate, and
     # called out in the send dialog so nobody discovers it from a client.
-    outcome = email_service.send_report_email(
-        db,
-        email=valid,
-        cc=cc_valid,
-        subject=subject,
-        body=email_body,
-        html=html_body,
-        pdf_bytes=pdf_bytes,
-        pdf_filename=filename,
-        # Attribution for the Email Log: which client this went out for, and who
-        # pressed send. Only the report path has both — the invite and code
-        # emails aren't tied to a project.
-        project_id=version["projectId"],
-        sent_by=user["id"],
-    )
+    # A fresh short-lived session for the write. The send itself is the slow part
+    # and it needs a connection to log the emails row, so this is scoped as
+    # tightly as it can be rather than spanning the render above.
+    with db_session() as db:
+        outcome = email_service.send_report_email(
+            db,
+            email=valid,
+            cc=cc_valid,
+            subject=subject,
+            body=email_body,
+            html=html_body,
+            pdf_bytes=pdf_bytes,
+            pdf_filename=filename,
+            # Attribution for the Email Log: which client this went out for, and who
+            # pressed send. Only the report path has both — the invite and code
+            # emails aren't tied to a project.
+            project_id=version["projectId"],
+            sent_by=user["id"],
+        )
     delivery = outcome["delivery"]
     ok = delivery in ("sent", "outbox")
 

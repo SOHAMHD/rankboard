@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Eye, KeyRound, LoaderCircle, LogOut, Mail, MailCheck, Search, Users, X } from "lucide-react";
-import { api } from "./api";
+import { Eye, KeyRound, LoaderCircle, LogOut, Mail, MailCheck, Search, Trash2, Users, X } from "lucide-react";
+import { api, setToken } from "./api";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
 
@@ -142,19 +142,88 @@ export function TopBar({ user, onLogout, onPeople, onEmailLog, onHome }) {
   );
 }
 
-export function Modal({ title, onClose, children, wide }) {
+let modalSeq = 0;
+
+/**
+ * The app's one dialog implementation.
+ *
+ * It previously had no `role`, no `aria-modal`, no Escape handler, no focus trap
+ * and no focus restore — so a keyboard or screen-reader user could Tab straight
+ * out of an "open" dialog into the page behind it and never find the close
+ * button. It also closed on any backdrop click, which meant a stray click behind
+ * the five-step onboarding wizard discarded name, email, project selection and
+ * per-project recipients with no confirmation. Hence `dismissOnBackdrop`.
+ */
+export function Modal({ title, onClose, children, wide, dismissOnBackdrop = true }) {
+  const panelRef = useRef(null);
+  const titleId = useRef(`modal-title-${++modalSeq}`).current;
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement;
+    // Focus the panel itself rather than the first control: reading the title
+    // before the fields is the point of announcing a dialog.
+    panelRef.current?.focus();
+
+    // The page behind must not scroll while a dialog is over it.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose?.();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      // Keep Tab inside the dialog. Without this the browser walks into the page
+      // behind, where every control is still focusable.
+      const focusable = panelRef.current?.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusable || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.body.style.overflow = prevOverflow;
+      // Send focus back where it came from, so closing a dialog doesn't dump the
+      // user at the top of the document.
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+    };
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0" style={{ backgroundColor: "rgba(15, 23, 42, 0.55)" }} onClick={onClose} />
       <div
-        className={`relative w-full ${wide ? "max-w-md" : "max-w-sm"} bg-white rounded-2xl shadow-2xl p-6 max-h-full overflow-y-auto`}
+        className="absolute inset-0"
+        style={{ backgroundColor: "rgba(15, 23, 42, 0.55)" }}
+        onClick={dismissOnBackdrop ? onClose : undefined}
+      />
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className={`relative w-full ${wide ? "max-w-md" : "max-w-sm"} bg-white rounded-2xl shadow-2xl p-6 max-h-full overflow-y-auto focus:outline-none`}
       >
         <div className="flex items-center justify-between mb-1">
-          <h2 className="text-lg font-bold text-stone-900 font-display">{title}</h2>
+          <h2 id={titleId} className="text-lg font-bold text-stone-900 font-display">{title}</h2>
           <button
             onClick={onClose}
             aria-label="Close"
-            className="p-1 rounded-md text-stone-400 hover:text-stone-600 hover:bg-stone-100 transition-colors"
+            className="p-1 rounded-md text-stone-500 hover:text-stone-700 hover:bg-stone-100 transition-colors"
           >
             <X size={18} />
           </button>
@@ -162,6 +231,36 @@ export function Modal({ title, onClose, children, wide }) {
         {children}
       </div>
     </div>
+  );
+}
+
+/**
+ * Confirmation for something irreversible.
+ *
+ * Project and user deletion used a two-click trash icon that turned into a
+ * "Confirm" button *in the same position*, so a double-click permanently deleted
+ * a project and all its keyword history with no dialog and no statement of what
+ * was lost. This exists so those paths can say what they destroy, the way the
+ * keyword and backlink screens already do.
+ */
+export function ConfirmModal({ title, onCancel, onConfirm, confirmLabel = "Delete", busy, children }) {
+  return (
+    <Modal title={title} onClose={onCancel} dismissOnBackdrop={!busy}>
+      <div className="text-sm text-stone-600">{children}</div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button onClick={onCancel} disabled={busy} className={`${BTN_GHOST} px-4 py-2`}>
+          Cancel
+        </button>
+        <button
+          onClick={onConfirm}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+        >
+          {busy ? <LoaderCircle size={15} className="animate-spin" /> : <Trash2 size={15} />}
+          {confirmLabel}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -435,7 +534,12 @@ export function ChangePasswordModal({ onClose }) {
     setError(null);
     try {
       const body = otpRequired ? { code: code.trim(), newPassword: pw1 } : { newPassword: pw1 };
-      await api("/auth/password/change", { method: "POST", body });
+      const d = await api("/auth/password/change", { method: "POST", body });
+      // The change signs out every other session by bumping the account's token
+      // version; this replacement keeps the current one alive. Without storing
+      // it, the next request 401s and the user is bounced to the login screen
+      // immediately after successfully changing their password.
+      if (d?.token) setToken(d.token);
       setPhase("done");
     } catch (err) {
       setError(err.message);

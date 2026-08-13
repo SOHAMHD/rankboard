@@ -18,10 +18,6 @@ AUTHOR_ROLES = frozenset({"Super Admin", "Admin", "Team"})
 SENDER_ROLES = frozenset({"Super Admin", "Admin"})
 DELETER_ROLES = frozenset({"Super Admin", "Admin"})
 
-EMAIL_2FA_ROLES = frozenset()
-
-READ_ONLY_ROLES = frozenset()
-
 
 def can(role: str, action: str) -> bool:
     return PERMISSIONS.get(role, {}).get(action, False)

@@ -36,7 +36,14 @@
   --color-stone-100: #fafafc;
   --color-stone-200: #e7eaf0;
   --color-stone-300: #d5dae3;
-  --color-stone-400: #99a1b0;
+  /* Darkened from #99a1b0, which measured 2.60:1 against white — well below the
+     4.5:1 WCAG AA minimum for body text, and used in 200+ places for hints,
+     table headers, timestamps and metric labels. #6f7786 is 4.51:1: the lightest
+     shade on this same cool hue that actually passes, so the token is fixed once
+     rather than at every call site.
+     stone-300 (1.40:1) stays as-is — it is a border colour. Where it was being
+     used for text or icon buttons, those call sites moved to stone-500 instead. */
+  --color-stone-400: #6f7786;
   --color-stone-500: #6a7383;
   --color-stone-600: #4b5563;
   --color-stone-700: #364152;

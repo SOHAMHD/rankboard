@@ -197,6 +197,8 @@ def update_user(
     if user is None:
         raise HTTPException(404, "User not found.")
 
+    # Validate everything before writing anything, so a bad project id can't
+    # leave a committed role change behind.
     if body.role is not None:
         if not can(me["role"], "manageUsers"):
             raise HTTPException(403, "Only a Super Admin can change roles.")
@@ -210,25 +212,30 @@ def update_user(
             ).fetchone()
             if admin_count <= 1:
                 raise HTTPException(400, f"Can't demote the last {ADMIN_ROLE} — promote someone else first.")
-        db.execute("UPDATE users SET role = ? WHERE id = ?", (body.role, user_id))
 
+    new_ids = None
     if body.project_ids is not None:
         new_ids = list(dict.fromkeys(body.project_ids))
         bad = missing_project_ids(db, new_ids)
         if bad:
             raise HTTPException(400, f"These projects don't exist: {', '.join(map(str, bad))}.")
-        db.execute("BEGIN")
-        try:
+
+    # One transaction over both writes. The role change used to be committed on
+    # its own — connections are autocommit — and the reassignment then ran in a
+    # separate raw BEGIN/COMMIT block, so a failure partway left the user with a
+    # new role and their old project access. Raw BEGIN on an autocommit psycopg3
+    # connection also bypasses the savepoint nesting db.transaction() provides.
+    with db.transaction():
+        if body.role is not None:
+            db.execute("UPDATE users SET role = ? WHERE id = ?", (body.role, user_id))
+
+        if new_ids is not None:
             db.execute("DELETE FROM user_projects WHERE user_id = ?", (user_id,))
             for pid in new_ids:
                 db.execute(
                     "INSERT OR IGNORE INTO user_projects (user_id, project_id) VALUES (?, ?)",
                     (user_id, pid),
                 )
-            db.execute("COMMIT")
-        except Exception:
-            db.execute("ROLLBACK")
-            raise
 
     return {"ok": True}
 

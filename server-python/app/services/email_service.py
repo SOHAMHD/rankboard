@@ -1,12 +1,14 @@
 import base64
 import json
 import smtplib
+import time
 import sqlite3
 import urllib.error
 import urllib.request
 from email.message import EmailMessage
 from email.utils import parseaddr
 
+from . import redaction
 from ..config import (
     APP_URL,
     BREVO_API_KEY,
@@ -94,6 +96,47 @@ def _send_via_smtp(*, email, subject: str, body: str, html: str | None = None,
         return {"status": "failed", "message_id": "", "error": str(exc)[:500]}
 
 
+#: Retry only what is worth retrying: rate limiting, provider-side faults, and
+#: transport failures. A 400 or 401 is our fault and will fail identically every
+#: time, so retrying one just delays the error.
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF = (1.0, 3.0)
+
+
+def _with_retries(post):
+    """Call `post()` with backoff on transient provider failures.
+
+    A report send is expensive — the PDF is already rendered and base64-encoded by
+    this point — and a single transient 5xx used to mark the row `failed` with no
+    recourse but pressing Send again, which re-rendered everything and created a
+    second `emails` row. Two extra attempts a few seconds apart cost nothing and
+    remove most of that.
+    """
+    last_exc = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            status, raw = post()
+            if status in _RETRY_STATUSES and attempt < _RETRY_ATTEMPTS - 1:
+                time.sleep(_RETRY_BACKOFF[attempt])
+                continue
+            return status, raw
+        except urllib.error.HTTPError as exc:
+            if exc.code in _RETRY_STATUSES and attempt < _RETRY_ATTEMPTS - 1:
+                time.sleep(_RETRY_BACKOFF[attempt])
+                last_exc = exc
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            # Connection reset, DNS blip, read timeout — all worth one more go.
+            if attempt < _RETRY_ATTEMPTS - 1:
+                time.sleep(_RETRY_BACKOFF[attempt])
+                last_exc = exc
+                continue
+            raise
+    raise last_exc if last_exc else RuntimeError("send failed with no exception")
+
+
 def _send_via_brevo(*, email, subject: str, body: str, html: str | None = None,
                     attachments=None, cc=None, email_id: int | None = None,
                     category: str | None = None) -> dict:
@@ -126,25 +169,29 @@ def _send_via_brevo(*, email, subject: str, body: str, html: str | None = None,
             # Shows up as `tag` on the webhook payload and in Brevo's own UI, so
             # the two views of the same send agree on what kind of mail it was.
             payload["tags"] = [category]
-        req = urllib.request.Request(
-            "https://api.brevo.com/v3/smtp/email",
-            data=json.dumps(payload).encode(),
-            headers={
-                "api-key": BREVO_API_KEY,
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": "SEODashboard/1.0",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=15) as res:
-            if not 200 <= res.status < 300:
-                return {"status": "failed", "message_id": "",
-                        "error": f"Brevo returned HTTP {res.status}"}
-            try:
-                data = json.loads(res.read().decode() or "{}")
-            except (ValueError, UnicodeDecodeError):
-                data = {}
+        def _post():
+            req = urllib.request.Request(
+                "https://api.brevo.com/v3/smtp/email",
+                data=json.dumps(payload).encode(),
+                headers={
+                    "api-key": BREVO_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "SEODashboard/1.0",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=15) as res:
+                return res.status, (res.read().decode() or "{}")
+
+        status, raw = _with_retries(_post)
+        if not 200 <= status < 300:
+            return {"status": "failed", "message_id": "",
+                    "error": f"Brevo returned HTTP {status}"}
+        try:
+            data = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            data = {}
         # A single-recipient send answers with `messageId`; a batch answers with
         # `messageIds`. Both are stored the same way — one `emails` row is one
         # message, and the batch form only appears for Brevo's batch endpoint,
@@ -186,12 +233,20 @@ def _deliver(db: sqlite3.Connection, *, email, subject: str, body: str,
     to_logged = ", ".join(to_list)
     cc_logged = ", ".join(cc_list) or None
 
+    # Redact before storing, not just before displaying. An invite body carries a
+    # working temporary password and an OTP body carries a live code; keeping
+    # either in the database serves nothing once the send has happened, and any
+    # dump or replica carried them indefinitely. email_log still redacts on read,
+    # for rows written before this.
+    stored_body = redaction.redact(body, category)
+    stored_html = redaction.redact(html, category)
+
     cur = db.execute(
         """INSERT INTO emails (to_email, cc_email, subject, body, html_body,
                                category, status, provider, attachment_count,
                                project_id, sent_by)
            VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)""",
-        (to_logged, cc_logged, subject, body, html, category,
+        (to_logged, cc_logged, subject, stored_body, stored_html, category,
          "smtp" if SMTP_HOST else ("brevo" if BREVO_API_KEY else "outbox"),
          len(attachments or []), project_id, sent_by),
     )

@@ -4,7 +4,6 @@ Super Admin only, enforced at the router level so a route added later can't
 forget the check. See `_redact` for the one thing even a Super Admin can't read.
 """
 
-import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -12,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..db import get_db
 from ..security import require_permission
+from ..services import redaction
 from ..services.email_tracking import (
     CATEGORIES,
     DELIVERED_STATUSES,
@@ -39,27 +39,19 @@ router = APIRouter(dependencies=[Depends(require_permission("viewEmailLog"))])
 
 MAX_LIMIT = 100
 
-#: Categories whose body is a live credential rather than correspondence.
-_SECRET_CATEGORIES = {"login_code", "password_code", "invite"}
-
-_CODE_RE = re.compile(r"\b\d{4,10}\b")
-_TEMP_PW_RE = re.compile(r"(?i)(temporary password:\s*)(\S+)")
-
-
 def _redact(body: str | None, category: str | None) -> str | None:
-    """Blank out sign-in codes and temporary passwords in a stored body.
+    """Read-side masking, for rows stored before write-side redaction existed.
+
+    Newly written rows are already masked (see services/redaction), so this is a
+    no-op on them. It stays for the history: removing it would expose exactly the
+    plaintext the write-side change was added to stop accumulating.
 
     A Super Admin can already reset anyone's password, so this is not about
-    trust — it's about what an unattended screen is worth to someone walking
-    past it, and about not turning a stolen admin session into a way to read
-    live 2FA codes for other accounts. The rest of the message is untouched, so
-    "was the code actually sent, and did they open it" still answers itself,
-    which is the reason anyone opens this row.
+    trust — it's about what an unattended screen is worth to someone walking past
+    it, and about not turning a stolen admin session into a way to read live
+    codes for other accounts.
     """
-    if not body or category not in _SECRET_CATEGORIES:
-        return body
-    body = _TEMP_PW_RE.sub(r"\1••••••••", body)
-    return _CODE_RE.sub("••••••", body)
+    return redaction.redact(body, category)
 
 
 def _cutoff(days: int) -> str:

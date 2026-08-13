@@ -2,9 +2,10 @@ import os
 import re
 import secrets
 import threading
+from contextlib import contextmanager
 from functools import lru_cache
 
-NO_ID_TABLES = {"email_otp", "password_otp", "user_projects", "locations"}
+NO_ID_TABLES = {"password_otp", "user_projects", "locations", "throttle_counters"}
 
 import bcrypt
 
@@ -237,6 +238,14 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_project_period
 CREATE INDEX IF NOT EXISTS idx_moz_metrics_project_fetched
   ON moz_metrics (project_id, fetched_at);
 
+-- Bumped on every password write. security.create_token embeds the current value
+-- as the "tv" claim and require_auth refuses any token behind it, so changing a
+-- password ends every other session. Without this, tokens are stateless and last
+-- 8 hours: the one action a compromised user takes left the attacker signed in.
+-- Defaults to 0, and tokens minted before the claim existed are read as 0, so a
+-- deploy doesn't sign everyone out.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
+
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled INTEGER NOT NULL DEFAULT 0;
 
@@ -248,11 +257,29 @@ CREATE TABLE IF NOT EXISTS twofa_backup_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_twofa_backup_user ON twofa_backup_codes (user_id);
 
-CREATE TABLE IF NOT EXISTS email_otp (
-  user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  code_hash   TEXT NOT NULL,
-  expires_at  TEXT NOT NULL,
-  attempts    INTEGER NOT NULL DEFAULT 0
+-- email_otp backed an email-code second factor gated on permissions.EMAIL_2FA_ROLES,
+-- which was an empty frozenset — so no row was ever written and the two endpoints
+-- that read it always returned 400. Dropped along with them. TOTP two-factor and
+-- the password_otp flow below are unaffected and both live.
+DROP TABLE IF EXISTS email_otp;
+
+-- Rate-limit counters for login, 2FA, password resets and code replay.
+--
+-- These lived in module-level dicts, which made every limit per-process: two
+-- workers doubled it, and a restart cleared an active lockout. Timestamps are
+-- epoch seconds rather than the TEXT format used elsewhere in this schema
+-- because the logic does arithmetic on them (window_start + window, now + lock),
+-- which is awkward and timezone-sensitive against formatted text.
+--
+-- No `id` column, so it must appear in NO_ID_TABLES — otherwise _translate
+-- appends RETURNING id to every insert and they all fail.
+CREATE TABLE IF NOT EXISTS throttle_counters (
+  scope        TEXT NOT NULL,
+  key          TEXT NOT NULL,
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  window_start DOUBLE PRECISION NOT NULL,
+  locked_until DOUBLE PRECISION,
+  PRIMARY KEY (scope, key)
 );
 
 CREATE TABLE IF NOT EXISTS password_otp (
@@ -688,6 +715,21 @@ def get_db():
         return
     with pool.connection() as raw:
         yield _PgConnection(raw, owned=False)
+
+
+#: `get_db` as a plain context manager, for handlers that must give the
+#: connection back before doing something slow.
+#:
+#: FastAPI keeps a `Depends(get_db)` connection checked out until the response is
+#: finalised. That is fine for a handler that only talks to the database, and
+#: actively harmful for one that then spends seconds rendering a PDF in Chromium
+#: or uploading an attachment to an email provider — with the pool capped at
+#: DB_POOL_MAX those handlers starve every other endpoint in the process.
+#:
+#:     with db_session() as db:
+#:         version = report_service.get_version(db, version_id)
+#:     pdf = render(version)        # no connection held
+db_session = contextmanager(get_db)
 
 
 def close_pool() -> None:

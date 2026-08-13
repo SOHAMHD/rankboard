@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { LoaderCircle } from "lucide-react";
-import { api, getToken, setToken } from "./api";
+import { api, getToken, setToken, SESSION_EXPIRED } from "./api";
 import { can } from "./ui";
 import { useToast } from "./toast.jsx";
 import { LoginView, SetPasswordView, TwoFactorView } from "./screens/Auth.jsx";
@@ -45,6 +45,21 @@ export default function App() {
       .catch(() => setToken(null))
       .finally(() => setBooting(false));
   }, []);
+
+  // The token lasts 8 hours, so it routinely expires while someone is using the
+  // app. api() clears it and fires this on the first 401; without the listener
+  // the app stayed "signed in" and every screen just failed in its own quiet way.
+  useEffect(() => {
+    const onExpired = () => {
+      setUser(null);
+      setTwofa(null);
+      setOpenProjectId(null);
+      setView("projects");
+      toast.error("Your session expired. Please sign in again.", { title: "Signed out" });
+    };
+    window.addEventListener(SESSION_EXPIRED, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED, onExpired);
+  }, [toast]);
 
   // Warm the Dashboard chunk, but only once the browser is actually idle and not
   // on a connection where the extra download would hurt. A fixed 1200ms timer

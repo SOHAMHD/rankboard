@@ -1,4 +1,4 @@
-import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 // Same import as ui.jsx uses — Vite dedupes it to one fingerprinted file in assets/.
 import logoUrl from "../infapp-logo.png";
 import {
@@ -120,7 +120,25 @@ const SearchConsoleToolMemo = memo(SearchConsoleTool);
 export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
   const [project, setProject] = useState(null);
   const [error, setError] = useState(null);
-  const [activeNav, setActiveNav] = useState("traffic-overview");
+  const [activeNav, setActiveNavRaw] = useState("traffic-overview");
+
+  // Keywords.jsx guards its own two exits — the browser unload and the month
+  // selector — but not this one: switching tabs unmounts the grid, and React
+  // throws away every edited cell with no prompt. The child reports whether it
+  // has unsaved work through this ref so the guard lives where the navigation is.
+  const unsavedRef = useRef(null);
+  const confirmLeave = useCallback(() => {
+    const count = unsavedRef.current?.();
+    if (!count) return true;
+    return window.confirm(
+      `You have ${count} unsaved change${count === 1 ? "" : "s"} on this screen. Leave without saving?`
+    );
+  }, []);
+  const setActiveNav = useCallback(
+    (id) => { if (confirmLeave()) setActiveNavRaw(id); },
+    [confirmLeave]
+  );
+  const guardedBack = useCallback(() => { if (confirmLeave()) onBack(); }, [confirmLeave, onBack]);
   const [showPw, setShowPw] = useState(false);
   const [openGroups, setOpenGroups] = useState(() => {
     const g = groupOf("traffic-overview");
@@ -186,8 +204,8 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
             <img src={logoUrl} alt="InfyApp" className="h-7 w-auto" />
           </button>
           <button
-            onClick={onBack}
-            className="flex items-center gap-1 text-xs text-stone-400 hover:text-stone-700 mb-4 transition-colors"
+            onClick={guardedBack}
+            className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-700 mb-4 transition-colors"
           >
             <ChevronLeft size={14} /> All projects
           </button>
@@ -338,7 +356,9 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
             </div>
           }
         >
-          {activeNav === "keywords" && <KeywordsView user={user} project={project} />}
+          {activeNav === "keywords" && (
+            <KeywordsView user={user} project={project} unsavedRef={unsavedRef} />
+          )}
           {activeNav === "backlinks" && <BacklinksView user={user} project={project} />}
           {activeNav === "posts-blogs" && <PostsView user={user} project={project} kind="blog" />}
           {activeNav === "posts-linkedin" && <PostsView user={user} project={project} kind="linkedin" />}
@@ -579,6 +599,9 @@ function TrafficTool({ project, view }) {
   const [activePreset, setActivePreset] = useState(28);
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  // Bumped by the retry button so a failed load can be re-attempted without
+  // making the user change the date range to force the effect to re-run.
+  const [reloadNonce, setReloadNonce] = useState(0);
   const toast = useToast();
 
   useEffect(() => {
@@ -594,7 +617,10 @@ function TrafficTool({ project, view }) {
     return () => {
       cancelled = true;
     };
-  }, [project.id, range.start, range.end]);
+    // range.preset is in here deliberately: it changes how the server resolves
+    // the window (in the property's timezone rather than from literal dates), so
+    // two ranges with identical start/end can legitimately mean different things.
+  }, [project.id, range.start, range.end, range.preset, reloadNonce]);
 
   // NOTE: the dependency array belongs to useEffect, not to toast.error. Passing
   // it as a third argument left this effect with no deps, so it re-ran after every
@@ -748,7 +774,20 @@ function TrafficTool({ project, view }) {
             </p>
           </div>
 
-          {view === "overview" &&
+          {/* A failed request left `data` null forever, so a GA4 timeout or a 500
+              showed as a spinner that never stopped. Only a 200 carrying
+              data.error was ever surfaced. */}
+          {error && data === null && (
+            <div className="bg-white rounded-xl border border-red-200 py-12 text-center px-6">
+              <h3 className="font-semibold text-stone-800 font-display">Couldn&apos;t load traffic</h3>
+              <p className="text-sm text-red-600 mt-1 mb-5">{error}</p>
+              <button onClick={() => setReloadNonce((n) => n + 1)} className={`${BTN_PRIMARY} px-4 py-2`}>
+                Try again
+              </button>
+            </div>
+          )}
+
+          {view === "overview" && !(error && data === null) &&
             (data === null ? (
               <div className="flex justify-center py-16">
                 <LoaderCircle size={22} className="text-orange-600 animate-spin" />
@@ -1084,7 +1123,7 @@ function EventsReport({ projectId, range, runNonce }) {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
+      <div className="bg-white rounded-xl border border-stone-200 overflow-x-auto">
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-stone-200">
           <h3 className="text-sm font-semibold text-stone-800 font-display">Events</h3>
           <span className="text-xs text-stone-400">{formatRangeLabel(range.start, range.end)}</span>
@@ -1870,6 +1909,11 @@ function SearchConsoleTool({ project }) {
   );
 }
 
+//: How many Search Console rows to draw before the "show all" control. GSC
+//: routinely returns 1000+, and rendering every one made each sort click
+//: reconcile five thousand cells for data nobody scrolls to.
+const ROWS_VISIBLE = 100;
+
 function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
   const [sort, setSort] = useState({ col: "clicks", dir: "desc" });
 
@@ -1898,6 +1942,12 @@ function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
     return copy;
   }, [rows, sort.col, sort.dir]);
 
+  // Search Console commonly returns 1000+ rows and every one of them was
+  // rendered, so each sort click reconciled 5,000+ cells. Showing the top slice
+  // is also the honest default — nobody reads past the first page of queries.
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? sorted : sorted.slice(0, ROWS_VISIBLE);
+
   const cols = [
     { col: "key", head: label, metric: false },
     { col: "clicks", head: "Clicks", fmt: formatCount },
@@ -1907,8 +1957,11 @@ function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
   ];
 
   return (
-    <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
-      <table className="w-full text-sm table-fixed">
+    // overflow-x-auto, not overflow-hidden. The colgroup below pins ~416px of
+    // fixed metric columns, so on a narrow phone the last columns were simply
+    // unreachable — no scroll, no wrap. Every other table in the app scrolls.
+    <div className="bg-white rounded-xl border border-stone-200 overflow-x-auto">
+      <table className="w-full min-w-[38rem] text-sm table-fixed">
         <colgroup>
           <col />
           <col className="w-24" />
@@ -1945,12 +1998,12 @@ function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
         <tbody className="divide-y divide-stone-100">
           {sorted.length === 0 ? (
             <tr>
-              <td colSpan={5} className="px-5 py-8 text-center text-sm text-stone-400">
+              <td colSpan={5} className="px-5 py-8 text-center text-sm text-stone-500">
                 No data for this range.
               </td>
             </tr>
           ) : (
-            sorted.map((r, i) => {
+            visible.map((r, i) => {
               const cell = r.key || "(not set)";
               const pending = pendingKey != null && r.key === pendingKey;
               return (
@@ -1984,6 +2037,19 @@ function SearchConsoleRowsTable({ label, rows, onPick, pendingKey }) {
           )}
         </tbody>
       </table>
+
+      {sorted.length > ROWS_VISIBLE && (
+        <div className="border-t border-stone-100 px-5 py-3 text-center">
+          <button
+            onClick={() => setShowAll((v) => !v)}
+            className="text-xs font-medium text-orange-700 hover:text-orange-800 hover:underline"
+          >
+            {showAll
+              ? `Show top ${ROWS_VISIBLE} only`
+              : `Show all ${sorted.length.toLocaleString()} rows`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

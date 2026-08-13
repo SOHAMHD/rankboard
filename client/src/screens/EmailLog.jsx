@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
-import { TopBar, ErrorNote, INPUT_CLS } from "../ui";
+import { TopBar, ErrorNote, INPUT_CLS, BTN_PRIMARY } from "../ui";
 
 
 const STATUS_STYLES = {
@@ -204,6 +204,17 @@ function DetailDrawer({ emailId, onClose }) {
           </div>
         )}
 
+        {/* The spinner was already suppressed on error but nothing replaced it,
+            so a failed detail fetch opened a blank white panel titled "…". */}
+        {!detail && error && (
+          <div className="px-6 py-16 text-center">
+            <p className="text-sm text-red-600">{error}</p>
+            <p className="text-xs text-stone-500 mt-2">
+              Close this panel and try again, or reload the log.
+            </p>
+          </div>
+        )}
+
         {detail && (
           <div className="px-6 py-5 space-y-5">
             <div className="bg-white rounded-xl border border-stone-200 divide-y divide-stone-100">
@@ -228,7 +239,12 @@ function DetailDrawer({ emailId, onClose }) {
               {detail.deliveredAt && <Field label="Delivered">{formatFull(detail.deliveredAt)}</Field>}
               <Field label="First opened">
                 {detail.firstOpenedAt ? formatFull(detail.firstOpenedAt) : (
-                  <span className="text-stone-400">Not recorded</span>
+                  <span className="text-stone-500">Not recorded</span>
+                )}
+              </Field>
+              <Field label="First clicked">
+                {detail.firstClickedAt ? formatFull(detail.firstClickedAt) : (
+                  <span className="text-stone-500">Not recorded</span>
                 )}
               </Field>
            
@@ -517,9 +533,22 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
 
 
 
+        {/* Previously a failed query rendered "No emails match these filters",
+            which is the one wrong thing to tell someone auditing whether a
+            client's report actually went out. */}
+        <ErrorNote>{error}</ErrorNote>
+
         {loading ? (
           <div className="py-24 flex justify-center">
             <LoaderCircle size={22} className="text-orange-600 animate-spin" />
+          </div>
+        ) : error && items.length === 0 ? (
+          <div className="bg-white rounded-xl border border-red-200 py-20 text-center mt-4">
+            <p className="text-sm text-stone-700 font-medium">Couldn&apos;t load the email log</p>
+            <p className="text-xs text-stone-500 mt-1">
+              This list is empty because the request failed, not because nothing was sent.
+            </p>
+            <button onClick={refreshAll} className={`${BTN_PRIMARY} px-4 py-2 mt-5`}>Try again</button>
           </div>
         ) : (
           <>
@@ -545,12 +574,21 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
                     <tr
                       key={m.id}
                       onClick={() => setOpenId(m.id)}
-                      className="hover:bg-stone-50 cursor-pointer"
+                      className="hover:bg-stone-50 cursor-pointer focus-within:bg-stone-50"
                     >
                       <td className="px-5 py-3 max-w-[15rem]">
-                        <span className="block font-medium text-stone-800 truncate font-data text-[13px]">
+                        {/* A real button, so the drawer can be opened from the
+                            keyboard. The row keeps its click handler as an
+                            affordance, but a <tr onClick> alone was unreachable
+                            without a mouse. */}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setOpenId(m.id); }}
+                          aria-label={`Open details for ${m.subject}, sent to ${m.to}`}
+                          className="block w-full text-left font-medium text-stone-800 truncate font-data text-[13px] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 rounded"
+                        >
                           {m.to}
-                        </span>
+                        </button>
                         {m.cc && (
                           <span className="block text-xs text-stone-400 truncate">
                             +{m.cc.split(",").length} cc
@@ -567,6 +605,15 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
                       </td>
                       <td className="px-5 py-3">
                         <StatusPill status={m.status} />
+                        {/* The pill already reads "Clicked" once a click event
+                            lands — it outranks "Opened". This adds the when,
+                            which the pill can't carry. */}
+                        {m.firstClickedAt && (
+                          <span className="flex items-center gap-1 text-xs text-stone-500 mt-1">
+                            <MousePointerClick size={11} />
+                            {formatWhen(m.firstClickedAt)}
+                          </span>
+                        )}
                         {m.error && (
                           <span className="block text-xs text-red-500 mt-1 truncate max-w-[12rem]">
                             {m.error}
@@ -574,19 +621,16 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
                         )}
                       </td>
                       <td className="px-5 py-3 whitespace-nowrap">
+                        {/* When it was first opened, not how many times. Clients
+                            that cache the pixel report one open however often
+                            it's read, while ones that don't inflate it on every
+                            scroll past — so the count invites a precision it
+                            doesn't have. The click time now lives beside the
+                            status pill instead. */}
                         {m.firstOpenedAt ? (
-                          <span className="text-stone-700">
-                            {formatWhen(m.firstOpenedAt)}
-                            <span className="flex items-center gap-2 text-xs text-stone-400 mt-0.5">
-                              {m.clickCount > 0 && (
-                                <span className="inline-flex items-center gap-1">
-                                  <MousePointerClick size={11} />{m.clickCount}
-                                </span>
-                              )}
-                            </span>
-                          </span>
+                          <span className="text-stone-700">{formatWhen(m.firstOpenedAt)}</span>
                         ) : (
-                          <span className="text-stone-300">—</span>
+                          <span className="text-stone-400">—</span>
                         )}
                       </td>
                       <td className="px-5 py-3 whitespace-nowrap text-stone-500">

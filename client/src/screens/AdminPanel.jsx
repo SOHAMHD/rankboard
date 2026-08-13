@@ -13,6 +13,7 @@ import { api } from "../api";
 import {
   TopBar,
   Modal,
+  ConfirmModal,
   ErrorNote,
   ROLES,
   CONTACT_ONLY,
@@ -31,7 +32,9 @@ export function AdminPanelView({ user, onBack, onEmailLog, onLogout }) {
   const [error, setError] = useState(null);
   const [showWizard, setShowWizard] = useState(false);
   const [emailModal, setEmailModal] = useState(null);
-  const [confirmId, setConfirmId] = useState(null);
+  // The whole user, so the dialog can name them and say what is removed.
+  const [confirmUser, setConfirmUser] = useState(null);
+  const [removing, setRemoving] = useState(false);
   const [manageUser, setManageUser] = useState(null);
   const canManage = can(user, "manageUsers");
 
@@ -61,12 +64,15 @@ export function AdminPanelView({ user, onBack, onEmailLog, onLogout }) {
   };
 
   const removeUser = async (id) => {
+    setRemoving(true);
     try {
       await api(`/users/${id}`, { method: "DELETE" });
-      setConfirmId(null);
+      setConfirmUser(null);
       await refresh();
     } catch (err) {
       setError(err.message);
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -224,31 +230,26 @@ export function AdminPanelView({ user, onBack, onEmailLog, onLogout }) {
                               aria-label={`Resend invite to ${u.name}`}
                               className={`p-1.5 rounded-md transition-colors ${
                                 u.status === "active"
-                                  ? "text-stone-300 hover:text-amber-600 hover:bg-amber-50"
+                                  ? "text-stone-500 hover:text-amber-600 hover:bg-amber-50"
                                   : "text-stone-400 hover:text-stone-700 hover:bg-stone-100"
                               }`}
                             >
                               <Mail size={15} />
                             </button>
                           )}
-                          {canManage && !isSelf &&
-                            (confirmId === u.id ? (
-                              <button
-                                onClick={() => removeUser(u.id)}
-                                className="text-xs font-semibold text-white bg-red-500 hover:bg-red-600 px-2.5 py-1 rounded-md transition-colors whitespace-nowrap"
-                              >
-                                Confirm
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => setConfirmId(u.id)}
-                                title="Remove person"
-                                aria-label={`Remove ${u.name}`}
-                                className="p-1.5 rounded-md text-stone-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            ))}
+                          {/* One click opens a dialog. This used to swap the trash
+                              icon for a "Confirm" button in the same position, so
+                              a double-click removed a person outright. */}
+                          {canManage && !isSelf && (
+                            <button
+                              onClick={() => setConfirmUser(u)}
+                              title="Remove person"
+                              aria-label={`Remove ${u.name}`}
+                              className="p-1.5 rounded-md text-stone-500 hover:text-red-500 hover:bg-red-50 transition-colors"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          )}
                         </span>
                       </td>
                     </tr>
@@ -267,6 +268,24 @@ export function AdminPanelView({ user, onBack, onEmailLog, onLogout }) {
 
       {canManage && showWizard && <OnboardWizard onClose={() => setShowWizard(false)} onCreated={refresh} />}
 
+      {confirmUser && (
+        <ConfirmModal
+          title={`Remove ${confirmUser.name}?`}
+          confirmLabel="Remove person"
+          busy={removing}
+          onCancel={() => setConfirmUser(null)}
+          onConfirm={() => removeUser(confirmUser.id)}
+        >
+          <span className="block">
+            {confirmUser.email} loses access immediately and any project assignments
+            are cleared.
+          </span>
+          <span className="block mt-2">
+            Reports and emails they created stay in the log, attributed to them.
+          </span>
+        </ConfirmModal>
+      )}
+
       {manageUser && (
         <ManageProjectsModal user={manageUser} onClose={() => setManageUser(null)} onSaved={refresh} />
       )}
@@ -280,12 +299,22 @@ export function AdminPanelView({ user, onBack, onEmailLog, onLogout }) {
   );
 }
 
-function ProjectChecklist({ projects, selected, onToggle, loading }) {
+function ProjectChecklist({ projects, selected, onToggle, loading, error }) {
   if (loading) {
     return (
       <div className="py-8 flex justify-center">
         <LoaderCircle size={20} className="text-orange-600 animate-spin" />
       </div>
+    );
+  }
+  // Distinguish "couldn't load" from "none exist". Conflating them told the admin
+  // there were no projects and let them finish the invite with no access granted.
+  if (error) {
+    return (
+      <p className="text-sm text-red-600 rounded-xl border border-red-200 bg-red-50 px-4 py-6 text-center">
+        Couldn&apos;t load the project list — {error} Close this and try again;
+        don&apos;t send the invite until you can pick projects.
+      </p>
     );
   }
   if (!projects.length) {
@@ -439,12 +468,19 @@ function OnboardWizard({ onClose, onCreated }) {
   const [ccDraft, setCcDraft] = useState("");
   const [clientIndex, setClientIndex] = useState(0);
 
+  // Was `catch {}`. On a network failure `projects` stayed empty and the
+  // checklist rendered "No projects exist yet. Create one first" — a factual lie,
+  // after which the admin sent the invite with no project access.
+  const [projectsError, setProjectsError] = useState(null);
+
   useEffect(() => {
     (async () => {
       try {
         const d = await api("/projects");
         setProjects(d.projects);
-      } catch {
+        setProjectsError(null);
+      } catch (err) {
+        setProjectsError(err.message);
       } finally {
         setProjectsLoading(false);
       }
@@ -646,10 +682,14 @@ function OnboardWizard({ onClose, onCreated }) {
   };
 
   return (
+    // dismissOnBackdrop={false}: this is a multi-step form, and a stray click on
+    // the backdrop used to discard the name, email, project selection and every
+    // per-project recipient list with no confirmation.
     <Modal
       title={step === "sent" ? (sentEmail ? "Invite sent" : "Recipients saved") : "Onboard someone"}
       onClose={onClose}
       wide
+      dismissOnBackdrop={step === "sent"}
     >
       {step !== "sent" && (
         <div className="flex items-center mb-6 mt-1">
@@ -872,8 +912,14 @@ function OnboardWizard({ onClose, onCreated }) {
               ? "You'll set the addresses for each project you pick — you can change them later."
               : "They'll only see the projects you select here — you can change this later."}
           </p>
-          <ProjectChecklist projects={projects} selected={selected} onToggle={toggleProject} loading={projectsLoading} />
-          <p className="text-xs text-stone-400 mt-2">{selected.size} selected</p>
+          <ProjectChecklist
+            projects={projects}
+            selected={selected}
+            onToggle={toggleProject}
+            loading={projectsLoading}
+            error={projectsError}
+          />
+          <p className="text-xs text-stone-500 mt-2">{selected.size} selected</p>
           <ErrorNote>{error}</ErrorNote>
           <div className="flex justify-end gap-2 mt-5">
             <button

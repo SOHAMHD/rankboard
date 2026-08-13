@@ -29,7 +29,8 @@ build/
 Thumbs.db
 
 
-rankboard-admin/client/dist/
+SEO Dashboard/client/dist/
 
+tests/
 
 .claude/

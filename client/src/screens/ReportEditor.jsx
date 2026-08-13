@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TabIndent } from "../lib/tabIndent";
@@ -455,6 +455,24 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
   const [savedAt, setSavedAt] = useState(null);
   const [saveError, setSaveError] = useState(null);
 
+  // The whole document is local state behind a manual Save draft button, so
+  // without this a tab close or a stray "Back to reports" discarded everything
+  // written since the last save.
+  const [dirty, setDirty] = useState(false);
+  const docTimer = useRef(null);
+  useEffect(() => () => clearTimeout(docTimer.current), []);
+
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const warn = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
   const suggestion = useMemo(() => makeSuggestion({ paletteItems, setSugg }), [paletteItems]);
   const BlobNode = useMemo(() => createBlobNode(blobsByName), [blobsByName]);
 
@@ -469,7 +487,17 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
           class: "report-prose focus:outline-none min-h-[300px] px-4 py-3",
         },
       },
-      onUpdate: ({ editor }) => setDoc(editor.getJSON()),
+      // Debounced. `doc` drives findUnresolved over the whole document and the
+      // live PreviewPane, so extracting and re-rendering on every keystroke made
+      // typing visibly lag on a long report. The editor itself stays
+      // uncontrolled, so input is never held up — only the derived views settle
+      // a moment later. `dirty` is set immediately: the unload guard must not
+      // depend on a timer.
+      onUpdate: ({ editor }) => {
+        setDirty(true);
+        clearTimeout(docTimer.current);
+        docTimer.current = setTimeout(() => setDoc(editor.getJSON()), 300);
+      },
     },
     []
   );
@@ -489,6 +517,7 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
       const content = editor.getJSON();
       await api(`/reports/${version.id}/content`, { method: "PATCH", body: { content } });
       setSavedAt(new Date());
+      setDirty(false);
     } catch (e) {
       setSaveError(e.message);
     } finally {
@@ -633,18 +662,11 @@ function FinalizeGate({ unresolved, isDraft }) {
           <>All inserted data resolves.</>
         )}
       </p>
-      <button
-        type="button"
-        disabled
-        title={
-          blocked
-            ? "Resolve the broken data blobs first."
-            : "Submit / review arrives in a later slice."
-        }
-        className={`${BTN_GHOST} px-3 py-1.5 ${blocked || !isDraft ? "opacity-40 cursor-not-allowed" : "opacity-60 cursor-not-allowed"}`}
-      >
-        Finalize
-      </button>
+      {/* The Finalize button that used to sit here was hard-coded `disabled`
+          with the tooltip "Submit / review arrives in a later slice" — shipped UI
+          promising an action nobody could take. The validation message above is
+          the useful half and stays; put the button back when the review flow
+          actually exists. */}
     </div>
   );
 }

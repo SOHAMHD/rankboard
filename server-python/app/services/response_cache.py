@@ -43,6 +43,16 @@ def _prune(now: float, force: bool = False) -> None:
             _store.pop(k, None)
 
 
+#: Keys currently being computed, so concurrent callers can wait instead of
+#: duplicating the work. Each value is an Event the leader sets on completion.
+_inflight: dict[str, threading.Event] = {}
+
+#: How long a follower waits for the leader before giving up and calling `fn`
+#: itself. A ceiling rather than a policy: without it a leader that hangs would
+#: block every follower indefinitely.
+FOLLOWER_TIMEOUT = 60
+
+
 def cached(name: str):
     def decorate(fn):
         @functools.wraps(fn)
@@ -51,20 +61,56 @@ def cached(name: str):
                 return fn(*args, **kwargs)
 
             k = _key(name, args, kwargs)
-            now = time.time()
 
-            if not refresh:
-                with _lock:
-                    hit = _store.get(k)
-                    if hit and hit[0] > now:
-                        return hit[1]
+            while True:
+                now = time.time()
 
-            value = fn(*args, **kwargs)
+                if not refresh:
+                    with _lock:
+                        hit = _store.get(k)
+                        if hit and hit[0] > now:
+                            return hit[1]
 
-            with _lock:
-                _prune(now)
-                _store[k] = (now + (ERROR_TTL if _looks_like_error(value) else TTL), value)
-            return value
+                        # Somebody else is already computing this key. Wait for
+                        # them rather than issuing the same GA4/GSC report run —
+                        # opening one project screen fires ~6 endpoints, so a cold
+                        # cache used to send several identical requests against the
+                        # same quota at once, and it was worst exactly when the TTL
+                        # expired.
+                        waiting = _inflight.get(k)
+                        if waiting is not None:
+                            leader = None
+                        else:
+                            leader = _inflight[k] = threading.Event()
+
+                    if leader is None:
+                        if waiting.wait(timeout=FOLLOWER_TIMEOUT):
+                            # Leader finished — loop round and read the cache. If
+                            # it failed and stored nothing, we become the leader.
+                            continue
+                        # Leader is taking too long; fall through and do it
+                        # ourselves rather than block forever.
+                        return fn(*args, **kwargs)
+                else:
+                    with _lock:
+                        leader = _inflight.get(k) or threading.Event()
+                        _inflight[k] = leader
+
+                try:
+                    value = fn(*args, **kwargs)
+                    with _lock:
+                        _prune(now)
+                        _store[k] = (
+                            now + (ERROR_TTL if _looks_like_error(value) else TTL),
+                            value,
+                        )
+                    return value
+                finally:
+                    # Always release the followers, success or not — a leader that
+                    # raised must not leave them waiting out the full timeout.
+                    with _lock:
+                        _inflight.pop(k, None)
+                    leader.set()
 
         return wrapper
     return decorate

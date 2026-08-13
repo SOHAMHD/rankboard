@@ -94,7 +94,12 @@ export function SetPasswordView({ user, onDone, onLogout }) {
     setBusy(true);
     setError(null);
     try {
-      await api("/auth/set-password", { method: "POST", body: { newPassword: pw1 } });
+      const d = await api("/auth/set-password", { method: "POST", body: { newPassword: pw1 } });
+      // Changing a password invalidates every token for the account, this one
+      // included — the server hands back a replacement so this session survives
+      // while any others are signed out. Storing it must happen before onDone(),
+      // which immediately makes authenticated requests.
+      if (d?.token) setToken(d.token);
       await onDone();
     } catch (err) {
       setError(err.message);

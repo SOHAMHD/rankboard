@@ -46,9 +46,32 @@ def refresh_moz(project_id: int, db: sqlite3.Connection = Depends(get_db)):
         raise HTTPException(400, "This project has no domain set, so there's nothing to look up on Moz.")
 
     try:
-        metrics = fetch_moz_metrics(project["domain"])
+        # refresh=True bypasses the 900-second response cache. Without it this
+        # endpoint didn't refresh anything: pressing the button twice inside the
+        # TTL returned the cached numbers and inserted a second moz_metrics row
+        # with identical values and a newer fetched_at. report_service's
+        # _pick_prev_moz then chose that duplicate as "previous month", so every
+        # Moz delta in the next report rendered as zero.
+        metrics = fetch_moz_metrics(project["domain"], refresh=True)
     except MozApiError as exc:
         raise HTTPException(502, str(exc))
+
+    # A genuinely unchanged reading is not worth a row. Moz updates monthly, so
+    # most refreshes return the same figures, and each duplicate is another
+    # candidate for _pick_prev_moz to mistake for the previous period.
+    latest = db.execute(
+        "SELECT * FROM moz_metrics WHERE project_id = ?"
+        " ORDER BY fetched_at DESC, id DESC LIMIT 1",
+        (project_id,),
+    ).fetchone()
+    if latest is not None and (
+        latest["domain_authority"] == metrics["domain_authority"]
+        and latest["linking_domains"] == metrics["linking_domains"]
+        and latest["inbound_links"] == metrics["inbound_links"]
+        and latest["spam_score"] == metrics["spam_score"]
+    ):
+        # Same response shape as the insert path — the client reads `data`.
+        return {"data": row_to_moz(latest), "unchanged": True}
 
     fetched_at = datetime.now(timezone.utc).isoformat()
     cur = db.execute(

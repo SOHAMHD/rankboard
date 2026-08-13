@@ -20,6 +20,12 @@ _pool = concurrent.futures.ThreadPoolExecutor(
     max_workers=_GA4_FANOUT, thread_name_prefix="google-fanout"
 )
 
+#: Per-call ceiling for a GA4 request made through the fan-out pool. Generous
+#: enough that a healthy-but-slow property still succeeds, short enough that a
+#: hung call gives the connection and threadpool slot back rather than holding
+#: them for the client library's own multi-minute default.
+GA4_CALL_TIMEOUT = 45
+
 GA4_MAX_METRICS = 10
 GA4_MAX_DIMENSIONS = 9
 
@@ -284,11 +290,17 @@ def _ga4_collect(resource, date_range, property_id) -> dict:
 
     # .result() re-raises worker exceptions here, so failures propagate exactly
     # as they did when this ran sequentially.
+    #
+    # The timeout is not optional. Without one, a report issues 24+ GA4 calls
+    # through this pool — each with the client library's own generous default —
+    # and a slow or hung Google response pinned a database connection and a
+    # threadpool slot for minutes. report_service._fetch_section already knows
+    # how to degrade a section gracefully; a bare .result() never let it.
     for future, key in future_to_key.items():
-        sections[key] = future.result()
+        sections[key] = future.result(timeout=GA4_CALL_TIMEOUT)
 
     if returning_future is not None:
-        returning = returning_future.result()
+        returning = returning_future.result(timeout=GA4_CALL_TIMEOUT)
         for sec in needs_returning:
             sections[sec["key"]]["totals"]["returningUsers"] = returning
 
