@@ -1675,12 +1675,13 @@ function SearchConsoleTool({ project }) {
   // Was previously written after the `return` above, inside the effect body, so it
   // never ran — and it referenced `error.data`, which would have thrown (`error`
   // is null until a request fails).
+  // Reports the server's actual reason. This used to assert the project wasn't
+  // configured and tell the user to check the domain, which was wrong for every
+  // cause except one — a 403 on a correctly-spelled property sent people editing
+  // a field that was already right.
   useEffect(() => {
     if (data?.error) {
-      toast.error(
-        "Google Search Console isn't configured for this project. Please check the project domain.",
-        { title: "Search Console" }
-      );
+      toast.error(String(data.error), { title: "Search Console" });
     }
   }, [data?.error, toast]);
 
@@ -1840,10 +1841,32 @@ function SearchConsoleTool({ project }) {
               <LoaderCircle size={22} className="text-orange-600 animate-spin" />
             </div>
           ) : failed ? (
-            <div className="bg-white rounded-xl border border-stone-200 p-6">
-              <p className="text-sm text-stone-400">
-                Search Console isn&apos;t connected for this project yet, or there&apos;s no data for this search type, range and filters.
+            // The server always says *why* — no property set, no service-account
+            // key, or the verbatim Google error (a 403 means the service account
+            // isn't a user on the property; a 400 means site_url doesn't match it
+            // exactly). All of it used to be replaced with one sentence that
+            // guessed at two causes and named neither, so a fixable
+            // misconfiguration was indistinguishable from a genuinely empty range.
+            <div className="bg-white rounded-xl border border-stone-200 p-6 space-y-3">
+              <p className="text-sm font-medium text-stone-800">
+                Search Console returned an error for this project.
               </p>
+              <p className="break-words rounded-lg bg-stone-50 px-3 py-2 font-mono text-xs text-stone-600">
+                {typeof failed === "string" ? failed : "Unknown error"}
+              </p>
+              <div className="space-y-1 text-xs text-stone-500">
+                <p>
+                  Configured property:{" "}
+                  <span className="font-mono text-stone-700">{project.gscSiteUrl}</span>
+                </p>
+                <p>
+                  This has to match the property in Search Console character for
+                  character — <span className="font-mono">sc-domain:example.com</span> for a
+                  domain property, or <span className="font-mono">https://example.com/</span>{" "}
+                  (with the trailing slash) for a URL-prefix one. The service account also
+                  needs to be added as a user on that exact property.
+                </p>
+              </div>
             </div>
           ) : (
             <div
