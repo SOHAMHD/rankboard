@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,7 @@ from ..services.analytics_provider import (
 from ..services.search_console_provider import (
     default_range as sc_default_range,
     get_search_console,
+    list_sites,
     query_performance,
 )
 from ..services.excel_service import build_sample_workbook, parse_keyword_workbook
@@ -44,11 +45,6 @@ def row_to_project(p: sqlite3.Row, keyword_count: int | None = None) -> dict:
         "name": p["name"],
         "clientName": p["client_name"],
         "domain": p["domain"],
-        "locationCode": p["location_code"],
-        "countryCode": p["country_code"],
-        "regionCode": p["region_code"],
-        "cityCode": p["city_code"],
-        "locationLabel": p["location_label"],
         "gaPropertyId": p["ga_property_id"],
         "gscSiteUrl": p["gsc_site_url"],
         "active": bool(p["active"]),
@@ -437,9 +433,150 @@ def normalize_ga_property_id(raw: str | None) -> str | None:
 
 
 def normalize_gsc_site_url(raw: str | None) -> str | None:
+    """Tidy the obvious, deterministic mistakes. Nothing that changes meaning.
+
+    A URL-prefix property in Search Console always ends in `/`; Google rejects
+    the same URL without it. That one is safe to add. `www` is NOT — bare and
+    www are genuinely different properties, so guessing would point the project
+    at someone else's data. `verify_gsc_site_url` catches those.
+    """
     if not raw or not raw.strip():
         return None
-    return raw.strip()
+    value = raw.strip()
+    if value.lower().startswith("sc-domain:"):
+        # Domain properties take no path and no slash.
+        return "sc-domain:" + value.split(":", 1)[1].strip().strip("/").lower()
+    if value.startswith(("http://", "https://")) and "/" not in value.split("://", 1)[1]:
+        value += "/"
+    return value
+
+
+def verify_gsc_site_url(value: str | None) -> None:
+    """Refuse a property the service account can't actually read.
+
+    Saving an unusable value used to be silent: the project looked configured and
+    every Search Console request failed later with a raw Google 403/400, which
+    reads like broken credentials rather than a typo. Two of this install's
+    projects sat mistyped for months for exactly that reason — one with a
+    spurious `www.`, one missing its trailing slash.
+
+    Advisory, deliberately: if Google can't be reached, or no key is configured,
+    the value is accepted. Editing a project must not depend on a third party
+    being up, and an install with no key at all still needs to record the URL.
+    """
+    if not value:
+        return
+    sites, err = list_sites()
+    if err or not sites:
+        return
+    if value in sites:
+        return
+
+    def core(s: str) -> str:
+        s = s.split("://", 1)[-1].strip("/").lower()
+        return s[4:] if s.startswith("www.") else s
+
+    near = [s for s in sites if core(s) == core(value)]
+    detail = f" Did you mean “{near[0]}”?" if near else ""
+    raise HTTPException(
+        400,
+        f"“{value}” isn't a Search Console property this service account can read."
+        f"{detail} It has to match the property exactly — https://example.com/ with the"
+        " trailing slash for a URL-prefix property, sc-domain:example.com for a domain"
+        " one — and the service account must be added as a user on it.",
+    )
+
+
+def _property_core(value: str) -> str:
+    """A property string reduced to the host it refers to.
+
+    `sc-domain:example.com`, `https://example.com/` and `https://www.example.com/`
+    all reduce to `example.com`, which is what lets a plain domain be matched
+    against whatever form the property actually takes.
+    """
+    if value.lower().startswith("sc-domain:"):
+        host = value.split(":", 1)[1]
+    else:
+        host = value.split("://", 1)[-1].split("/")[0]
+    host = host.strip().strip("/").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def match_gsc_properties(domain: str | None) -> list[str]:
+    """Search Console properties that refer to `domain`.
+
+    Empty when nothing matches or Google can't be reached — callers treat that as
+    "couldn't decide", never as "no property".
+    """
+    if not domain or not domain.strip():
+        return []
+    sites, err = list_sites()
+    if err or not sites:
+        return []
+    wanted = _property_core(domain)
+    return [s for s in sites if _property_core(s) == wanted]
+
+
+def resolve_gsc_site_url(
+    domain: str | None,
+    explicit: str | None,
+    current: str | None = None,
+) -> str | None:
+    """Decide a project's Search Console property.
+
+    Replaces a second free-text field that asked for the same site in a different
+    notation — the source of both of this install's misconfigurations (one with a
+    spurious `www.`, one missing the trailing slash a URL-prefix property always
+    carries).
+
+    `current` is what the project has now, and it is the answer whenever this
+    can't do better. That matters more than it looks: returning None on an
+    inconclusive lookup would clear a working property every time Google was
+    briefly unreachable, from a form that no longer has a field to restore it
+    with.
+
+    Order:
+      1. an explicit override wins — a property need not be the domain in the
+         Moz/backlinks field (a subdirectory property, say)
+      2. no domain to match, or Google unreachable -> keep `current`
+      3. exactly one property matches the domain -> use it
+      4. several match (a bare *and* a www property) -> keep `current` if it is
+         one of them, otherwise give up rather than guess; picking one would
+         silently report a different site's numbers
+      5. none match -> None, the domain genuinely has no property
+    """
+    if explicit and explicit.strip():
+        return normalize_gsc_site_url(explicit)
+
+    if not domain or not domain.strip():
+        return current
+
+    sites, err = list_sites()
+    if err or not sites:
+        return current
+
+    matches = [s for s in sites if _property_core(s) == _property_core(domain)]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        return current if current in matches else None
+    return None
+
+
+@router.get("/gsc-properties/match")
+def gsc_properties_match(domain: str = Query("", description="Bare domain, e.g. example.com")):
+    """Powers the project form: what would be picked, and what else is available.
+
+    `properties` is the full list so the form can offer a choice when `matches`
+    isn't exactly one, instead of making the user retype a string Google has
+    already told us.
+    """
+    sites, err = list_sites()
+    return {
+        "matches": match_gsc_properties(domain),
+        "properties": sites,
+        "error": err,
+    }
 
 
 def _clean_recipients(primary: str, ccs: list[str] | None) -> tuple[str, list[str]]:
@@ -450,83 +587,14 @@ def _clean_recipients(primary: str, ccs: list[str] | None) -> tuple[str, list[st
         raise HTTPException(422, str(exc))
 
 
-def _lookup_location(db: sqlite3.Connection, code: int, kind: str) -> sqlite3.Row:
-    row = db.execute(
-        "SELECT location_code, name, full_name, kind, country_code, region_code"
-        " FROM locations WHERE location_code = ?",
-        (code,),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(400, f"Unknown location code {code}. Pick a suggestion from the list.")
-    if row["kind"] != kind:
-        raise HTTPException(400, f'"{row["name"]}" is a {row["kind"]}, not a {kind}.')
-    return row
-
-
-def _resolve_geo(
-    db: sqlite3.Connection,
-    country: int | None,
-    region: int | None,
-    city: int | None,
-) -> tuple[int | None, int | None, int | None, int | None, str | None]:
-    if region is not None and country is None:
-        raise HTTPException(400, "Choose a country before a region.")
-    if city is not None and country is None:
-        raise HTTPException(400, "Choose a country before a city.")
-
-    label_parts: list[str] = []
-    if country is not None:
-        label_parts.append(_lookup_location(db, country, "country")["name"])
-
-    if region is not None:
-        row = _lookup_location(db, region, "region")
-        if row["country_code"] != country:
-            raise HTTPException(400, f'"{row["name"]}" is not in the country you chose.')
-        label_parts.append(row["name"])
-
-    if city is not None:
-        row = _lookup_location(db, city, "city")
-        if row["country_code"] != country:
-            raise HTTPException(400, f'"{row["name"]}" is not in the country you chose.')
-        if region is not None and row["region_code"] not in (None, region):
-            raise HTTPException(400, f'"{row["name"]}" is not in the region you chose.')
-        label_parts.append(row["name"])
-
-    effective = city if city is not None else (region if region is not None else country)
-    label = " · ".join(label_parts) or None
-    return effective, country, region, city, label
-
-
-def _geo_from_body(db: sqlite3.Connection, body) -> tuple:
-    if body.countryCode is not None or body.regionCode is not None or body.cityCode is not None:
-        return _resolve_geo(db, body.countryCode, body.regionCode, body.cityCode)
-
-    if body.locationCode is None:
-        return None, None, None, None, None
-
-    row = db.execute(
-        "SELECT location_code, name, full_name, kind, country_code, region_code"
-        " FROM locations WHERE location_code = ?",
-        (body.locationCode,),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(400, f"Unknown location code {body.locationCode}. Pick a suggestion from the list.")
-    if row["kind"] == "country":
-        return _resolve_geo(db, row["location_code"], None, None)
-    if row["kind"] == "region":
-        return _resolve_geo(db, row["country_code"], row["location_code"], None)
-    return _resolve_geo(db, row["country_code"], row["region_code"], row["location_code"])
-
-
 class ProjectIn(BaseModel):
     name: str
     clientName: str | None = None
     domain: str | None = None
-    countryCode: int | None = None
-    regionCode: int | None = None
-    cityCode: int | None = None
-    locationCode: int | None = None
     gaPropertyId: str | None = None
+    #: Optional override. Normally the property is matched from `domain`; this is
+    #: for the cases where it can't be — an ambiguous domain, or a property that
+    #: isn't the domain (a subdirectory, say).
     gscSiteUrl: str | None = None
 
 
@@ -535,22 +603,18 @@ def create_project(body: ProjectIn, db: sqlite3.Connection = Depends(get_db)):
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "Project name is required.")
-    location_code, country_code, region_code, city_code, label = _geo_from_body(db, body)
+    domain = normalize_domain(body.domain)
+    gsc_site_url = resolve_gsc_site_url(domain, body.gscSiteUrl)
+    verify_gsc_site_url(gsc_site_url)
     cur = db.execute(
-        "INSERT INTO projects (name, client_name, domain, location_code, country_code, region_code,"
-        " city_code, location_label, ga_property_id, gsc_site_url, active)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+        "INSERT INTO projects (name, client_name, domain, ga_property_id, gsc_site_url, active)"
+        " VALUES (?, ?, ?, ?, ?, 1)",
         (
             name,
             normalize_client_name(body.clientName),
-            normalize_domain(body.domain),
-            location_code,
-            country_code,
-            region_code,
-            city_code,
-            label,
+            domain,
             normalize_ga_property_id(body.gaPropertyId),
-            normalize_gsc_site_url(body.gscSiteUrl),
+            gsc_site_url,
         ),
     )
     project = db.execute("SELECT * FROM projects WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -561,10 +625,6 @@ class ProjectUpdateIn(BaseModel):
     active: bool | None = None
     clientName: str | None = None
     domain: str | None = None
-    countryCode: int | None = None
-    regionCode: int | None = None
-    cityCode: int | None = None
-    locationCode: int | None = None
     gaPropertyId: str | None = None
     gscSiteUrl: str | None = None
 
@@ -575,27 +635,36 @@ def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connectio
     if body.active is not None:
         fields.append("active = ?")
         values.append(1 if body.active else 0)
+    domain = normalize_domain(body.domain) if body.domain is not None else None
     if body.domain is not None:
         fields.append("domain = ?")
-        values.append(normalize_domain(body.domain))
+        values.append(domain)
     # Keyed off model_fields_set, not "is not None", so sending null clears it.
     if "clientName" in body.model_fields_set:
         fields.append("client_name = ?")
         values.append(normalize_client_name(body.clientName))
-    geo_keys = {"countryCode", "regionCode", "cityCode", "locationCode"} & body.model_fields_set
-    if geo_keys:
-        location_code, country_code, region_code, city_code, label = _geo_from_body(db, body)
-        fields += [
-            "location_code = ?", "country_code = ?", "region_code = ?",
-            "city_code = ?", "location_label = ?",
-        ]
-        values += [location_code, country_code, region_code, city_code, label]
     if body.gaPropertyId is not None:
         fields.append("ga_property_id = ?")
         values.append(normalize_ga_property_id(body.gaPropertyId))
-    if body.gscSiteUrl is not None:
+
+    # Re-resolve when either side of the decision moved. Editing the domain alone
+    # used to leave gsc_site_url pointing at the old site, silently — and the form
+    # no longer has a field to correct it with, so resolution has to follow the
+    # domain. `current` is passed so an inconclusive lookup keeps what works.
+    if {"domain", "gscSiteUrl"} & body.model_fields_set:
+        row = db.execute(
+            "SELECT domain, gsc_site_url FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "Project not found.")
+        gsc_site_url = resolve_gsc_site_url(
+            domain if "domain" in body.model_fields_set else row["domain"],
+            body.gscSiteUrl,
+            current=row["gsc_site_url"],
+        )
+        verify_gsc_site_url(gsc_site_url)
         fields.append("gsc_site_url = ?")
-        values.append(normalize_gsc_site_url(body.gscSiteUrl))
+        values.append(gsc_site_url)
     if not fields:
         raise HTTPException(400, "Nothing to update.")
 

@@ -97,6 +97,25 @@ def _construct_service(Credentials, build):
     return service, None
 
 
+def list_sites() -> tuple[list[str], str | None]:
+    """Every property the service account can read, or (["…"], error).
+
+    Used to validate gsc_site_url when a project is saved. Google is strict about
+    the exact string — `https://example.com/` and `https://www.example.com/` are
+    separate properties, and a URL-prefix property always carries its trailing
+    slash — so a value that merely looks right fails at query time with a 403 or
+    400 that reads like a permissions problem.
+    """
+    service, err = _build_service()
+    if err:
+        return [], err
+    try:
+        entries = service.sites().list().execute().get("siteEntry", []) or []
+    except Exception as exc:
+        return [], f"Could not list Search Console properties: {exc}"
+    return sorted(e.get("siteUrl", "") for e in entries if e.get("siteUrl")), None
+
+
 def _query(service, site_url: str, body: dict) -> list[dict]:
     """Run one Search Analytics query, following startRow pagination.
 

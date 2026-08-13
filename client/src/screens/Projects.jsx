@@ -1,178 +1,8 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import { LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
-import {
-  filterLocal,
-  listCountries,
-  listRegions,
-  locationsStatus,
-  resolveLocation,
-  searchCities,
-  searchRegions,
-} from "../locations";
-import { TopBar, Modal, ConfirmModal, ErrorNote, SmartSearch, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
+import { TopBar, Modal, ConfirmModal, ErrorNote, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
 import ProjectRecipients from "../lib/ProjectRecipients";
-
-const TLD_COUNTRIES = {
-  ".au": { code: 2036, name: "Australia" },
-  ".in": { code: 2356, name: "India" },
-  ".uk": { code: 2826, name: "United Kingdom" },
-  ".ca": { code: 2124, name: "Canada" },
-  ".ae": { code: 2784, name: "United Arab Emirates" },
-  ".nz": { code: 2554, name: "New Zealand" },
-  ".sg": { code: 2702, name: "Singapore" },
-  ".za": { code: 2710, name: "South Africa" },
-};
-
-function countryFromDomain(domain) {
-  const d = (domain || "").trim().toLowerCase();
-  const hit = Object.keys(TLD_COUNTRIES).find((tld) => d.endsWith(tld));
-  return hit ? { ...TLD_COUNTRIES[hit], kind: "country" } : null;
-}
-
-function LocationPicker({ country, region, city, onCountry, onRegion, onCity }) {
-  const [status, setStatus] = useState(null);
-
-  useEffect(() => {
-    listCountries().catch(() => {});
-    locationsStatus().then(setStatus).catch(() => setStatus(null));
-  }, []);
-
-  useEffect(() => {
-    if (country) listRegions(country.code).catch(() => {});
-  }, [country?.code]);
-
-  const decorate = useCallback(
-    (rows) =>
-      rows.map((r) => ({
-        ...r,
-        hint:
-          r.fullName && r.fullName !== r.name
-            ? r.fullName.split(",").slice(1).join(", ").trim()
-            : null,
-      })),
-    []
-  );
-
-  // These are stable so SmartSearch's debounce effect never holds a stale
-  // closure. Previously a new function identity on every render meant that
-  // changing the country while the region box was open kept filtering against
-  // the old country until the next keystroke.
-  const searchCountry = useCallback(
-    (q) => listCountries().then((rows) => decorate(filterLocal(rows, q))),
-    [decorate]
-  );
-  const searchRegion = useCallback(
-    (q) => searchRegions(q, { country: country?.code }).then(decorate),
-    [country?.code, decorate]
-  );
-  const searchCity = useCallback(
-    (q) => searchCities(q, { country: country?.code, region: region?.code }).then(decorate),
-    [country?.code, region?.code, decorate]
-  );
-
-  return (
-    <div className="space-y-4">
-      <SmartSearch
-        label="Country"
-        value={country}
-        onChange={onCountry}
-        debounceMs={0}
-        onSearch={searchCountry}
-        placeholder="Type a country — e.g. Aus…"
-        emptyText="No country matches that."
-        hint="Which Google to check in. Leave all three empty to use the server default."
-      />
-
-      <SmartSearch
-        label="Region / State"
-        optional
-        value={region}
-        onChange={onRegion}
-        onSearch={searchRegion}
-        disabled={!country}
-        disabledHint="Pick a country first"
-        placeholder={`Type a region${country ? ` in ${country.name}` : ""}…`}
-        emptyText={
-          status && !status.imported
-            ? "No regions loaded yet — run `python -m scripts.import_locations` on the server."
-            : "No region matches that."
-        }
-        hint="Narrows the city list below, and can be the project's location on its own."
-      />
-
-      <SmartSearch
-        label="City"
-        optional
-        value={city}
-        onChange={onCity}
-        onSearch={searchCity}
-        disabled={!country}
-        disabledHint="Pick a country first"
-        placeholder={`Type a city${region ? ` in ${region.name}` : country ? ` in ${country.name}` : ""}…`}
-        emptyText="No city matches that."
-        hint="The most accurate target for local SEO — set it whenever the client is a local business."
-      />
-    </div>
-  );
-}
-
-const geoBody = (country, region, city) => ({
-  countryCode: country?.code ?? null,
-  regionCode: region?.code ?? null,
-  cityCode: city?.code ?? null,
-});
-
-function useGeoPicker(project) {
-  const [country, setCountry] = useState(null);
-  const [region, setRegion] = useState(null);
-  const [city, setCity] = useState(null);
-  const [touched, setTouched] = useState(project?.locationCode != null);
-
-  useEffect(() => {
-    if (project?.locationCode == null) return;
-    let live = true;
-    resolveLocation(project.locationCode)
-      .then((d) => {
-        if (!live) return;
-        setCountry(d.country);
-        setRegion(d.region);
-        setCity(d.city);
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [project?.locationCode]);
-
-  const onCountry = (item) => {
-    setTouched(true);
-    setCountry(item);
-    setRegion(null);
-    setCity(null);
-  };
-  const onRegion = (item) => {
-    setTouched(true);
-    setRegion(item);
-    setCity(null);
-  };
-  const onCity = (item) => {
-    setTouched(true);
-    setCity(item);
-  };
-
-  const guessFromDomain = (domain) => {
-    if (touched) return;
-    const guess = countryFromDomain(domain);
-    if (guess) {
-      setCountry(guess);
-      setRegion(null);
-      setCity(null);
-    }
-  };
-
-  return { country, region, city, onCountry, onRegion, onCity, guessFromDomain };
-}
 
 export function ProjectsView({ user, onOpenProject, onPeople, onEmailLog, onLogout }) {
   const [projects, setProjects] = useState([]);
@@ -344,11 +174,145 @@ export function ProjectsView({ user, onOpenProject, onPeople, onEmailLog, onLogo
   );
 }
 
+/** Which Search Console property a domain resolves to, asked of the server.
+ *
+ * Replaces a second free-text field that asked for the same site in Google's
+ * notation. That field is where both of this install's misconfigurations came
+ * from — one project carried a spurious `www.`, another was missing the trailing
+ * slash a URL-prefix property always has — and neither showed a symptom beyond
+ * an empty Search Console panel.
+ *
+ * `override` is only surfaced when the domain can't decide on its own: no
+ * property matches, or several do (a site with both a bare and a www property,
+ * where guessing would report the wrong numbers).
+ */
+function useGscProperty(domain, initialOverride = "") {
+  const [state, setState] = useState({ status: "idle", matches: [], properties: [], error: null });
+  const [override, setOverride] = useState(initialOverride);
+
+  const trimmed = (domain || "").trim();
+
+  useEffect(() => {
+    if (!trimmed) {
+      setState({ status: "idle", matches: [], properties: [], error: null });
+      return;
+    }
+    let live = true;
+    setState((s) => ({ ...s, status: "loading" }));
+    // Debounced: this fires per keystroke in the domain field, and each call is
+    // a round trip to Google's API on the server.
+    const t = setTimeout(() => {
+      api(`/projects/gsc-properties/match?domain=${encodeURIComponent(trimmed)}`)
+        .then((d) => {
+          if (!live) return;
+          setState({
+            status: "done",
+            matches: d.matches || [],
+            properties: d.properties || [],
+            error: d.error || null,
+          });
+        })
+        .catch((err) => live && setState({ status: "done", matches: [], properties: [], error: err.message }));
+    }, 500);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [trimmed]);
+
+  const auto = state.matches.length === 1 ? state.matches[0] : null;
+
+  // A stored value that happens to equal the automatic match isn't an override.
+  // Collapsing it keeps the dialog honest ("matched automatically") and lets the
+  // server re-resolve if the property is later renamed.
+  useEffect(() => {
+    if (auto && override === auto) setOverride("");
+  }, [auto, override]);
+
+  const needsChoice = state.status === "done" && !state.error && !auto && !override && !!trimmed;
+
+  return { ...state, auto, needsChoice, override, setOverride, resolved: override || auto };
+}
+
+function GscPropertyField({ gsc }) {
+  const { status, auto, needsChoice, properties, error, override, setOverride } = gsc;
+
+  return (
+    <div className="mt-4">
+      <span className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+        Search Console property
+      </span>
+
+      {status === "loading" && (
+        <p className="flex items-center gap-2 text-sm text-stone-500">
+          <LoaderCircle size={14} className="animate-spin" /> Looking up the property…
+        </p>
+      )}
+
+      {status === "idle" && (
+        <p className="text-sm text-stone-400">Enter a domain above and it'll be matched automatically.</p>
+      )}
+
+      {override ? (
+        <p className="text-sm text-stone-700">
+          <span className="font-data">{override}</span>{" "}
+          <span className="text-xs text-stone-400">— set explicitly</span>
+        </p>
+      ) : status === "done" && auto ? (
+        <p className="text-sm text-stone-700">
+          <span className="font-data">{auto}</span>{" "}
+          <span className="text-xs text-stone-400">— matched automatically</span>
+        </p>
+      ) : null}
+
+      {status === "done" && error && (
+        // Not fatal: the server saves the project either way and re-resolves the
+        // property the next time it can reach Google.
+        <p className="text-xs text-stone-500">
+          Couldn't reach Search Console to check ({error}). The project will save, and the
+          property gets matched on the next attempt.
+        </p>
+      )}
+
+      {needsChoice && (
+        <div className="space-y-2">
+          <p className="text-xs text-stone-500">
+            {properties.length
+              ? "No single property matches that domain — pick one, or leave it blank to set it later."
+              : "The service account can't see any properties yet. Add it as a user in Search Console, then reopen this."}
+          </p>
+          {properties.length > 0 && (
+            <select
+              value={override}
+              onChange={(e) => setOverride(e.target.value)}
+              className={INPUT_CLS}
+            >
+              <option value="">— none —</option>
+              {properties.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+
+      {override && (
+        <button
+          type="button"
+          onClick={() => setOverride("")}
+          className="mt-2 text-xs text-orange-600 hover:underline"
+        >
+          Clear and match from the domain instead
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ProjectCard({ project, user, onOpen, onEdit, onToggle, onDelete }) {
   const showToggle = can(user, "toggleProject");
   const showEdit = can(user, "toggleProject");
   const showDelete = can(user, "deleteProject");
-  const country = project.locationLabel || (project.locationCode ? `Code ${project.locationCode}` : null);
 
   // An inactive project can't be opened — the API refuses GET /projects/{id} with
   // a 409. Reflecting that here means the card doesn't invite a click that will
@@ -387,7 +351,7 @@ function ProjectCard({ project, user, onOpen, onEdit, onToggle, onDelete }) {
           {project.clientName && <p className="text-xs text-stone-600 truncate mt-0.5">{project.clientName}</p>}
           {project.domain && <p className="text-xs text-stone-500 font-data truncate mt-0.5">{project.domain}</p>}
           <p className="text-xs text-stone-400 mt-0.5">
-            {country ? `${country} · ` : ""}Added {project.createdAt?.slice(0, 10)}
+            Added {project.createdAt?.slice(0, 10)}
           </p>
         </div>
         <span
@@ -457,15 +421,9 @@ function AddProjectModal({ onClose, onAdded }) {
   const [clientName, setClientName] = useState("");
   const [domain, setDomain] = useState("");
   const [gaPropertyId, setGaPropertyId] = useState("");
-  const [gscSiteUrl, setGscSiteUrl] = useState("");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  const geo = useGeoPicker(null);
-
-  const onDomainChange = (val) => {
-    setDomain(val);
-    geo.guessFromDomain(val);
-  };
+  const gsc = useGscProperty(domain);
 
   const submit = async () => {
     if (!name.trim()) return;
@@ -478,9 +436,10 @@ function AddProjectModal({ onClose, onAdded }) {
           name: name.trim(),
           clientName: clientName.trim() || null,
           domain: domain.trim() || null,
-          ...geoBody(geo.country, geo.region, geo.city),
           gaPropertyId: gaPropertyId.trim() || null,
-          gscSiteUrl: gscSiteUrl.trim() || null,
+          // Only sent when the domain couldn't decide on its own; otherwise the
+          // server matches the property itself, from the list Google gives it.
+          gscSiteUrl: gsc.override || null,
         },
       });
       onAdded();
@@ -523,16 +482,14 @@ function AddProjectModal({ onClose, onAdded }) {
       </label>
       <input
         value={domain}
-        onChange={(e) => onDomainChange(e.target.value)}
+        onChange={(e) => setDomain(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
         placeholder="e.g. sattvaconnect.com"
         className={INPUT_CLS}
       />
       <p className="text-xs text-stone-400 mt-2">The client's website — used for Moz Authority, Search Console and Analytics.</p>
 
-      <div className="mt-4">
-        <LocationPicker {...geo} />
-      </div>
+      <GscPropertyField gsc={gsc} />
 
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         GA4 Property ID <span className="normal-case font-normal">(optional)</span>
@@ -545,18 +502,6 @@ function AddProjectModal({ onClose, onAdded }) {
         className={INPUT_CLS}
       />
       <p className="text-xs text-stone-400 mt-2">Google Analytics 4 property ID — powers the Traffic (GA4) panel for this project.</p>
-
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
-        Search Console Site URL <span className="normal-case font-normal">(optional)</span>
-      </label>
-      <input
-        value={gscSiteUrl}
-        onChange={(e) => setGscSiteUrl(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && submit()}
-        placeholder="e.g. https://www.example.com/"
-        className={INPUT_CLS}
-      />
-      <p className="text-xs text-stone-400 mt-2">URL-prefix property like "https://www.example.com/" (with trailing slash), or domain property like "sc-domain:example.com".</p>
 
       {/* Was set on failure and never rendered, so "Create project" spun, stopped,
           and nothing happened — server validation was invisible. */}
@@ -573,15 +518,12 @@ function EditProjectModal({ project, onClose, onSaved }) {
   const [clientName, setClientName] = useState(project.clientName || "");
   const [domain, setDomain] = useState(project.domain || "");
   const [gaPropertyId, setGaPropertyId] = useState(project.gaPropertyId || "");
-  const [gscSiteUrl, setGscSiteUrl] = useState(project.gscSiteUrl || "");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  const geo = useGeoPicker(project);
-
-  const onDomainChange = (val) => {
-    setDomain(val);
-    geo.guessFromDomain(val);
-  };
+  // Seeded with what's stored: if the saved property isn't what this domain
+  // resolves to, that's a deliberate override and reopening the dialog must not
+  // quietly replace it.
+  const gsc = useGscProperty(domain, project.gscSiteUrl || "");
 
   const submit = async () => {
     setBusy(true);
@@ -592,9 +534,8 @@ function EditProjectModal({ project, onClose, onSaved }) {
         body: {
           clientName: clientName.trim() || null,
           domain: domain.trim() || null,
-          ...geoBody(geo.country, geo.region, geo.city),
           gaPropertyId: gaPropertyId.trim() || null,
-          gscSiteUrl: gscSiteUrl.trim() || null,
+          gscSiteUrl: gsc.override || null,
         },
       });
       onSaved();
@@ -628,16 +569,14 @@ function EditProjectModal({ project, onClose, onSaved }) {
       </label>
       <input
         value={domain}
-        onChange={(e) => onDomainChange(e.target.value)}
+        onChange={(e) => setDomain(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
         placeholder="e.g. sattvaconnect.com"
         className={INPUT_CLS}
       />
       <p className="text-xs text-stone-400 mt-2">The client's website — used for Moz Authority, Search Console and Analytics.</p>
 
-      <div className="mt-4">
-        <LocationPicker {...geo} />
-      </div>
+      <GscPropertyField gsc={gsc} />
 
       <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         GA4 Property ID <span className="normal-case font-normal">(optional)</span>
@@ -650,18 +589,6 @@ function EditProjectModal({ project, onClose, onSaved }) {
         className={INPUT_CLS}
       />
       <p className="text-xs text-stone-400 mt-2">Google Analytics 4 property ID — powers the Traffic (GA4) panel for this project.</p>
-
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
-        Search Console Site URL <span className="normal-case font-normal">(optional)</span>
-      </label>
-      <input
-        value={gscSiteUrl}
-        onChange={(e) => setGscSiteUrl(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && submit()}
-        placeholder="e.g. https://www.example.com/"
-        className={INPUT_CLS}
-      />
-      <p className="text-xs text-stone-400 mt-2">URL-prefix property like "https://www.example.com/" (with trailing slash), or domain property like "sc-domain:example.com".</p>
 
       {/* Its own endpoint and its own save button — a rejected address here
           shouldn't stop you changing the domain above. */}

@@ -224,11 +224,13 @@ def gather(
         "period_key": period_key,
         "prev_period_key": prev_period,
         "prev2_period_key": prev2_period,
+        # `location_code` used to sit here too. Nothing downstream read it —
+        # not report_document, not report_blobs, not the PDF templates — so it was
+        # copied into every stored report blob and never looked at again.
         "project": {
             "id": project["id"],
             "name": project["name"],
             "domain": project["domain"],
-            "location_code": project["location_code"],
         },
         "rank_snapshot_id": None,
         "period_complete": period_complete,
