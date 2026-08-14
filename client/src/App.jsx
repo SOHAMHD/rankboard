@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { LoaderCircle } from "lucide-react";
 import { api, getToken, setToken, SESSION_EXPIRED } from "./api";
-import { can } from "./ui";
+import { can, BTN_PRIMARY, DarkShell } from "./ui";
 import { useToast } from "./toast.jsx";
 import { LoginView, SetPasswordView, TwoFactorView } from "./screens/Auth.jsx";
 import { ProjectsView } from "./screens/Projects.jsx";
@@ -31,19 +31,36 @@ export default function App() {
   const [view, setView] = useState("projects");
   const [openProjectId, setOpenProjectId] = useState(null);
   const [twofa, setTwofa] = useState(null);
+  const [unreachable, setUnreachable] = useState(false);
 
-  useEffect(() => {
+  const bootstrap = () => {
     if (!getToken()) {
       setBooting(false);
       return;
     }
+    setBooting(true);
+    setUnreachable(false);
     api("/auth/me")
       .then((d) => {
         setUser(d.user);
         setTwofa(d.twofa);
       })
-      .catch(() => setToken(null))
+      .catch((err) => {
+        // Only a 401 means the token is genuinely no good. Clearing it on any
+        // failure signed everybody out the moment the backend restarted or a
+        // proxy returned a 502 — the session was fine, the network wasn't.
+        if (err?.status === 401) {
+          setToken(null);
+        } else {
+          setUnreachable(true);
+        }
+      })
       .finally(() => setBooting(false));
+  };
+
+  useEffect(() => {
+    bootstrap();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // The token lasts 8 hours, so it routinely expires while someone is using the
@@ -113,6 +130,32 @@ export default function App() {
   };
 
   if (booting) return <FullScreenLoader />;
+
+  // The token is still valid as far as we know — we simply couldn't reach the
+  // server to confirm it. Showing the login screen here would be a lie, and
+  // would tempt the user into signing in again against a server that's down.
+  if (unreachable && !user) {
+    return (
+      <DarkShell>
+        <div className="bg-white rounded-2xl shadow-2xl p-6 text-center">
+          <h1 className="text-lg font-bold text-stone-900 font-display">Can&apos;t reach the server</h1>
+          <p className="text-sm text-stone-500 mt-2">
+            You&apos;re still signed in — the dashboard just couldn&apos;t load. Check your
+            connection and try again.
+          </p>
+          <button onClick={bootstrap} className={`${BTN_PRIMARY} w-full mt-5 py-2.5`}>
+            Try again
+          </button>
+          <button
+            onClick={logout}
+            className="w-full text-xs text-stone-400 hover:text-stone-600 mt-3 transition-colors"
+          >
+            Sign out instead
+          </button>
+        </div>
+      </DarkShell>
+    );
+  }
 
   if (!user) return <LoginView onLogin={handleLogin} />;
 

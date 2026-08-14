@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import secrets
@@ -10,6 +11,8 @@ NO_ID_TABLES = {"password_otp", "user_projects", "throttle_counters"}
 import bcrypt
 
 from . import config  # noqa: F401  (imported for the .env side effect)
+
+logger = logging.getLogger(__name__)
 
 _SEED_PW_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
 
@@ -631,7 +634,14 @@ _pool_lock = threading.Lock()
 _pool_unavailable = False
 
 POOL_MIN = int(os.environ.get("DB_POOL_MIN", "2"))
-POOL_MAX = int(os.environ.get("DB_POOL_MAX", "10"))
+#: Raised from 10. Every authenticated request holds a connection for its whole
+#: lifetime — the auth dependency takes one via Depends(get_db) and FastAPI only
+#: returns it once the response is finalised — so the ceiling is not "concurrent
+#: queries" but "concurrent requests", including the slow ones (a PDF download
+#: can sit in Chromium for up to 90s). At 10 a couple of report downloads starved
+#: every other endpoint in the process. See db_session below for the handlers
+#: that hand the connection back early.
+POOL_MAX = int(os.environ.get("DB_POOL_MAX", "25"))
 
 
 def _get_pool():
@@ -652,7 +662,7 @@ def _get_pool():
             from psycopg_pool import ConnectionPool
         except ImportError:
             _pool_unavailable = True
-            print(
+            logger.warning(
                 "psycopg_pool is not installed — falling back to one connection "
                 "per request, which is slow. Fix with: pip install 'psycopg_pool>=3.2'"
             )
@@ -748,13 +758,15 @@ def init_db() -> None:
             try:
                 raw.execute(statement)
             except psycopg.Error as exc:
-                print(f"Optional DDL skipped ({exc.__class__.__name__}): {statement[:60]}…")
+                logger.warning(
+                    "Optional DDL skipped (%s): %s…", exc.__class__.__name__, statement[:60]
+                )
                 if "idx_keywords_project_term" in statement:
                     # Plain ASCII on purpose. A Windows console defaults to
                     # cp1252, which has no U+2192, so an arrow here raised
                     # UnicodeEncodeError *inside the handler* and killed the
                     # whole server over what is only a warning.
-                    print(
+                    logger.warning(
                         "  -> this project has duplicate keyword terms. Merge them with:\n"
                         "      cd server-python && python -m scripts.dedupe_keywords\n"
                         "    (add --commit once the dry run looks right)"
@@ -770,7 +782,7 @@ def _seed(conn) -> None:
     if count == 0:
         env_pw = os.environ.get("SEED_ADMIN_PASSWORD", "").strip()
         if not env_pw:
-            print(
+            logger.warning(
                 "No users found and SEED_ADMIN_PASSWORD is unset — skipping the "
                 "Super Admin seed. Set SEED_ADMIN_PASSWORD and restart to create it."
             )

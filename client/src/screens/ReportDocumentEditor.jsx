@@ -593,10 +593,12 @@ function EditableDoc({ version, blobs, canSend = false }) {
     );
   }, []);
   const setTargetNotes = useCallback((blockId, value) => {
+    setDirty(true);
     setBlocks((bs) => bs.map((b) => (b.id === blockId ? { ...b, notes: value } : b)));
   }, []);
 
   const move = (index, dir) => {
+    setDirty(true);
     setBlocks((bs) => {
       const j = index + dir;
       if (j < 0 || j >= bs.length) return bs;
@@ -605,15 +607,24 @@ function EditableDoc({ version, blobs, canSend = false }) {
       return next;
     });
   };
-  const remove = (index) => setBlocks((bs) => bs.filter((_, i) => i !== index));
-  const addTextAt = (index) =>
+  const remove = (index) => {
+    setDirty(true);
+    setBlocks((bs) => bs.filter((_, i) => i !== index));
+  };
+  const addTextAt = (index) => {
+    setDirty(true);
     setBlocks((bs) => {
       const next = bs.slice();
       next.splice(index + 1, 0, newFreeTextBlock());
       return next;
     });
-  const addTextEnd = () => setBlocks((bs) => [...bs, newFreeTextBlock()]);
+  };
+  const addTextEnd = () => {
+    setDirty(true);
+    setBlocks((bs) => [...bs, newFreeTextBlock()]);
+  };
   const reAddSection = (tb) => {
+    setDirty(true);
     setBlocks((bs) => [...bs, JSON.parse(JSON.stringify(tb))]);
     setAddOpen(false);
   };

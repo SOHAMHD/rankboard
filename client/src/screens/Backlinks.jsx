@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, ExternalLink, Link2, LoaderCircle, Plus, Trash2, Upload } from "lucide-react";
 import { api } from "../api";
-import { Modal, ErrorNote, isAuthor, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
+import { Modal, ConfirmModal, ErrorNote, isAuthor, INPUT_CLS, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { useToast } from "../toast.jsx";
 
 const MONTH_NAMES = [
@@ -32,6 +32,9 @@ export function BacklinksView({ user, project }) {
   const [monthFilter, setMonthFilter] = useState("all");
   const [showImport, setShowImport] = useState(false);
   const [confirmClear, setConfirmClear] = useState(null);
+  // "Delete all" for a month already confirms; the per-row trash didn't, and
+  // it sits an inch from the link you were trying to open.
+  const [confirmLink, setConfirmLink] = useState(null);
   const [clearing, setClearing] = useState(false);
 
   const author = isAuthor(user);
@@ -192,7 +195,7 @@ export function BacklinksView({ user, project }) {
                     </a>
                     {author && (
                       <button
-                        onClick={() => remove(b.id)}
+                        onClick={() => setConfirmLink(b)}
                         aria-label="Remove backlink"
                         title="Remove backlink"
                         className="p-1 rounded text-stone-500 hover:text-red-500 transition-colors shrink-0"
@@ -214,6 +217,25 @@ export function BacklinksView({ user, project }) {
           onClose={() => setShowImport(false)}
           onImported={load}
         />
+      )}
+
+      {confirmLink && (
+        <ConfirmModal
+          title="Remove this backlink?"
+          confirmLabel="Remove backlink"
+          onCancel={() => setConfirmLink(null)}
+          onConfirm={() => {
+            const id = confirmLink.id;
+            setConfirmLink(null);
+            remove(id);
+          }}
+        >
+          <span className="block break-all text-xs font-data">{confirmLink.url}</span>
+          <span className="block mt-2">
+            It also disappears from this month&apos;s backlink list in future reports. Reports
+            already generated keep their own frozen copy.
+          </span>
+        </ConfirmModal>
       )}
 
       {confirmClear && (

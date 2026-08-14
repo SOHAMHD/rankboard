@@ -172,7 +172,19 @@ def resend_invite(user_id: int, db: sqlite3.Connection = Depends(get_db)):
 
     temp_password = generate_temp_password()
     db.execute(
-        "UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?",
+        # token_version bump ends every existing session, like every other
+        # password write: re-inviting someone must not leave a session running on
+        # the password we just replaced.
+        #
+        # The TOTP reset goes with it. must_change_password sends the user through
+        # /auth/set-password, which is reachable on a pending token — so leaving
+        # 2FA enrolled meant whoever held the invite email could set a password
+        # and then be stuck at a second factor they don't have, and worse, the
+        # bootstrap path became a way in around it. Re-inviting is a fresh start:
+        # they enrol again after signing in.
+        "UPDATE users SET password_hash = ?, must_change_password = 1,"
+        "       totp_enabled = 0, totp_secret = NULL,"
+        "       token_version = token_version + 1 WHERE id = ?",
         (bcrypt.hashpw(temp_password.encode(), bcrypt.gensalt()).decode(), user_id),
     )
     email_record = send_invite_email(

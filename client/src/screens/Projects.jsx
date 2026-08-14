@@ -453,10 +453,11 @@ function AddProjectModal({ onClose, onAdded }) {
     <Modal title="Add project" onClose={onClose} wide>
       <p className="text-sm text-stone-500 mb-4">One website or client you're doing SEO for.</p>
 
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+      <label htmlFor="proj-new-name" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
         Project name
       </label>
       <input
+        id="proj-new-name"
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -465,10 +466,11 @@ function AddProjectModal({ onClose, onAdded }) {
         className={INPUT_CLS}
       />
 
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
+      <label htmlFor="proj-new-client" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         Client name <span className="normal-case font-normal">(optional)</span>
       </label>
       <input
+        id="proj-new-client"
         value={clientName}
         onChange={(e) => setClientName(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -477,10 +479,11 @@ function AddProjectModal({ onClose, onAdded }) {
       />
       <p className="text-xs text-stone-400 mt-2">Who the work is for — the person or company behind this project.</p>
 
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
+      <label htmlFor="proj-new-domain" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         Website domain <span className="normal-case font-normal">(optional)</span>
       </label>
       <input
+        id="proj-new-domain"
         value={domain}
         onChange={(e) => setDomain(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -491,10 +494,11 @@ function AddProjectModal({ onClose, onAdded }) {
 
       <GscPropertyField gsc={gsc} />
 
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
+      <label htmlFor="proj-new-ga4" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         GA4 Property ID <span className="normal-case font-normal">(optional)</span>
       </label>
       <input
+        id="proj-new-ga4"
         value={gaPropertyId}
         onChange={(e) => setGaPropertyId(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -551,10 +555,11 @@ function EditProjectModal({ project, onClose, onSaved }) {
         Settings for <span className="font-medium text-stone-800">{project.name}</span>.
       </p>
 
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+      <label htmlFor="proj-edit-client" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
         Client name <span className="normal-case font-normal">(optional)</span>
       </label>
       <input
+        id="proj-edit-client"
         value={clientName}
         onChange={(e) => setClientName(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -564,10 +569,11 @@ function EditProjectModal({ project, onClose, onSaved }) {
       />
       <p className="text-xs text-stone-400 mt-2">Who the work is for — the person or company behind this project.</p>
 
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
+      <label htmlFor="proj-edit-domain" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         Website domain <span className="normal-case font-normal">(optional)</span>
       </label>
       <input
+        id="proj-edit-domain"
         value={domain}
         onChange={(e) => setDomain(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -578,10 +584,11 @@ function EditProjectModal({ project, onClose, onSaved }) {
 
       <GscPropertyField gsc={gsc} />
 
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
+      <label htmlFor="proj-edit-ga4" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         GA4 Property ID <span className="normal-case font-normal">(optional)</span>
       </label>
       <input
+        id="proj-edit-ga4"
         value={gaPropertyId}
         onChange={(e) => setGaPropertyId(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}

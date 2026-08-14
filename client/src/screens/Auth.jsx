@@ -115,13 +115,14 @@ export function SetPasswordView({ user, onDone, onLogout }) {
           <h1 className="text-xl font-bold text-stone-900 font-display">Set your password</h1>
         </div>
         <p className="text-sm text-stone-500 mt-1 mb-5">
-          Welcome, {user.name.split(" ")[0]}. Your temporary password worked — now replace it with one only you know.
+          Welcome, {user?.name?.split(" ")[0] || "there"}. Your temporary password worked — now replace it with one only you know.
         </p>
 
-        <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+        <label htmlFor="setpw-new" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
           New password
         </label>
         <input
+          id="setpw-new"
           type="password"
           autoComplete="new-password"
           value={pw1}
@@ -131,10 +132,11 @@ export function SetPasswordView({ user, onDone, onLogout }) {
           className={`${INPUT_CLS} mb-4`}
         />
 
-        <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+        <label htmlFor="setpw-confirm" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
           Confirm password
         </label>
         <input
+          id="setpw-confirm"
           type="password"
           autoComplete="new-password"
           value={pw2}
@@ -389,7 +391,7 @@ export function TwoFactorView({ user, enrolled, onVerified, onLogout }) {
         <p className="text-sm text-stone-500 mt-1 mb-5">
           {backup
             ? "Enter one of your backup codes."
-            : `Enter the 6-digit code from your authenticator app, ${user.name.split(" ")[0]}.`}
+            : `Enter the 6-digit code from your authenticator app, ${user?.name?.split(" ")[0] || "there"}.`}
         </p>
         <input
           type="text"
@@ -474,8 +476,9 @@ export function ForgotPasswordView({ initialEmail = "", onBack }) {
             <p className="text-sm text-stone-500 mt-1 mb-5">
               Enter your account email and we'll send you a one-time reset code.
             </p>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Email</label>
+            <label htmlFor="reset-email" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Email</label>
             <input
+              id="reset-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -499,8 +502,9 @@ export function ForgotPasswordView({ initialEmail = "", onBack }) {
             <p className="text-sm text-stone-500 mt-1 mb-5">
               If an account exists for {email}, we've sent a 6-digit code. Enter it and choose a new password.
             </p>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Code</label>
+            <label htmlFor="reset-code" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Code</label>
             <input
+              id="reset-code"
               type="text"
               inputMode="numeric"
               autoComplete="one-time-code"
@@ -511,8 +515,9 @@ export function ForgotPasswordView({ initialEmail = "", onBack }) {
               autoFocus
               className={`${INPUT_CLS} mb-4 text-center tracking-[0.4em]`}
             />
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">New password</label>
+            <label htmlFor="reset-new" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">New password</label>
             <input
+              id="reset-new"
               type="password"
           autoComplete="new-password"
               value={pw1}
@@ -520,8 +525,9 @@ export function ForgotPasswordView({ initialEmail = "", onBack }) {
               placeholder="At least 8 characters"
               className={`${INPUT_CLS} mb-4`}
             />
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Confirm new password</label>
+            <label htmlFor="reset-confirm" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Confirm new password</label>
             <input
+              id="reset-confirm"
               type="password"
           autoComplete="new-password"
               value={pw2}

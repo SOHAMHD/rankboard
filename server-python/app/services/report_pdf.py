@@ -3,6 +3,7 @@ import concurrent.futures
 import hashlib
 import html
 import json
+import logging
 import os
 import re
 import threading
@@ -11,6 +12,8 @@ from contextlib import contextmanager
 
 from functools import lru_cache
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
@@ -189,9 +192,29 @@ def _queue_slot(limit: int):
             _render_queue -= 1
 
 
+#: Set when a render blows its deadline. The worker thread keeps going — a
+#: Playwright call can't safely be cancelled mid-flight — so a Chromium that has
+#: hung stays connected and is_connected() alone will happily hand it back
+#: forever, queueing every later render behind the same dead process. This flag
+#: is the only signal we have that the browser is suspect; the next render on the
+#: worker discards it and launches a fresh one.
+_relaunch_browser = False
+
+
 def _shared_browser():
     """The long-lived Chromium owned by the render thread."""
+    global _relaunch_browser
     browser = getattr(_pw_state, "browser", None)
+    if browser is not None and _relaunch_browser:
+        _relaunch_browser = False
+        try:
+            browser.close()
+        except Exception:
+            pass
+        _pw_state.browser = None
+        browser = None
+    else:
+        _relaunch_browser = False
     if browser is not None:
         try:
             if browser.is_connected():
@@ -275,6 +298,13 @@ def render_pdf(version: dict, blobs: list | None = None) -> bytes:
         except concurrent.futures.TimeoutError:
             # The worker keeps going — cancelling a Playwright call mid-flight is
             # not safe — but this request stops waiting and gives its slot back.
+            # Mark the browser as suspect: a render that overran its deadline is
+            # the one symptom of a wedged Chromium we can actually observe, and
+            # without this the next render reuses it and times out too.
+            global _relaunch_browser
+            _relaunch_browser = True
+            logger.warning("PDF render exceeded %ss; browser marked for relaunch.",
+                           PDF_RENDER_TIMEOUT)
             raise RenderTimeout(
                 f"The report took longer than {PDF_RENDER_TIMEOUT}s to render."
             ) from None
@@ -306,8 +336,8 @@ def _render_pdf_on_worker(version: dict, blobs: list | None = None) -> bytes:
     # problem alone discarded a perfectly good render.
     try:
         agency = report_industry._agency_logo()
-    except Exception as exc:  # noqa: BLE001
-        print("report agency logo unavailable:", exc)
+    except Exception:  # noqa: BLE001
+        logger.warning("report agency logo unavailable", exc_info=True)
         agency = ""
 
     logo_img = f'<img src="{agency}" style="height:9mm">' if agency else ""
@@ -398,6 +428,10 @@ def render_cover_png(version: dict, blobs: list | None = None, width: int = 440)
         try:
             return future.result(timeout=COVER_RENDER_TIMEOUT)
         except concurrent.futures.TimeoutError:
+            global _relaunch_browser
+            _relaunch_browser = True
+            logger.warning("Cover render exceeded %ss; browser marked for relaunch.",
+                           COVER_RENDER_TIMEOUT)
             raise RenderTimeout(
                 f"The cover image took longer than {COVER_RENDER_TIMEOUT}s to render."
             ) from None

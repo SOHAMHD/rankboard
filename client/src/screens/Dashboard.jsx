@@ -1,6 +1,8 @@
 import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-// Same import as ui.jsx uses — Vite dedupes it to one fingerprinted file in assets/.
-import logoUrl from "../infapp-logo.png";
+// The same public-folder path ui.jsx uses. Importing a second copy from src/
+// shipped a byte-identical 172 KB file into assets/ alongside the public one,
+// both for a logo rendered at 28px.
+const logoUrl = "/infapp-logo.png";
 import {
   BarChart3,
   RefreshCw,
@@ -13,7 +15,6 @@ import {
   LoaderCircle,
   LogOut,
   Plus,
-  Search,
   SearchCheck,
   ShieldCheck,
   TrendingDown,
@@ -26,25 +27,8 @@ import {
   KeyRound,
   Newspaper,
 } from "lucide-react";
-import {
-  LineChart,
-  Line,
-  AreaChart,
-  Area,
-  BarChart,
-  Bar,
-  PieChart,
-  Pie,
-  Cell,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-} from "recharts";
 import { api } from "../api";
-import { ChangePasswordModal, can, isAuthor, isAdmin, isManager, BTN_PRIMARY, BTN_GHOST } from "../ui";
+import { ChangePasswordModal, can, isAuthor, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { useToast } from "../toast.jsx";
 // Only one of these is ever mounted at a time (see the activeNav switch below),
 // so they don't belong in the Dashboard's own chunk. Importing them eagerly meant
@@ -64,6 +48,29 @@ const PostsView = lazy(() =>
 const ReportsPanel = lazy(() =>
   import("./ReportEditor").then((m) => ({ default: m.ReportsPanel }))
 );
+
+// recharts is the single biggest dependency in the build, and App.jsx prefetches
+// this screen on idle for everyone — so the charts load only when one is about
+// to be drawn, not as a rider on that prefetch.
+const TrafficAreaChart = lazy(() =>
+  import("./DashboardCharts").then((m) => ({ default: m.TrafficAreaChart }))
+);
+const ExplorerChart = lazy(() =>
+  import("./DashboardCharts").then((m) => ({ default: m.ExplorerChart }))
+);
+const SearchConsoleTrendChart = lazy(() =>
+  import("./DashboardCharts").then((m) => ({ default: m.SearchConsoleTrendChart }))
+);
+
+// Reserves the chart's height while the module arrives, so the page doesn't
+// jump once it does.
+function ChartFallback({ height = 260 }) {
+  return (
+    <div className="flex items-center justify-center" style={{ height }}>
+      <LoaderCircle size={18} className="text-orange-600 animate-spin" />
+    </div>
+  );
+}
 
 const NAV_GROUPS = [
   {
@@ -513,7 +520,10 @@ const DURATION_METRICS = new Set([
 ]);
 
 function formatMetric(name, value) {
-  if (value == null) return "0";
+  // An em dash, not "0". A metric GA4 didn't return is missing, and printing it
+  // as zero made "no data for this dimension" read as a measured result — in the
+  // Totals row especially, where it silently understates the column.
+  if (value == null) return "—";
   if (RATE_METRICS.has(name)) return `${(Number(value) * 100).toFixed(1)}%`;
   if (DURATION_METRICS.has(name)) return formatEngagement(value);
   if (name === "totalRevenue") {
@@ -1289,27 +1299,9 @@ function TrafficTrendChart({ byDate }) {
       {chartData.length === 0 ? (
         <p className="py-12 text-center text-sm text-stone-400">No data for this range.</p>
       ) : (
-        <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
-            <defs>
-              <linearGradient id="fillActive" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={COLOR_ACTIVE} stopOpacity={0.28} />
-                <stop offset="100%" stopColor={COLOR_ACTIVE} stopOpacity={0} />
-              </linearGradient>
-              <linearGradient id="fillNew" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={COLOR_NEW} stopOpacity={0.18} />
-                <stop offset="100%" stopColor={COLOR_NEW} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#eef0f5" vertical={false} />
-            <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={{ stroke: "#e7eaf0" }} minTickGap={24} />
-            <YAxis tick={{ fontSize: 11, fill: "#99a1b0" }} tickLine={false} axisLine={false} allowDecimals={false} width={40} />
-            <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e7eaf0", boxShadow: "0 4px 16px rgba(18,24,38,0.08)" }} />
-            <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" />
-            <Area type="monotone" dataKey="activeUsers" name="Active users" stroke={COLOR_ACTIVE} strokeWidth={2.5} fill="url(#fillActive)" dot={false} activeDot={{ r: 4 }} />
-            <Area type="monotone" dataKey="newUsers" name="New users" stroke={COLOR_NEW} strokeWidth={2} fill="url(#fillNew)" dot={false} activeDot={{ r: 4 }} />
-          </AreaChart>
-        </ResponsiveContainer>
+        <Suspense fallback={<ChartFallback />}>
+          <TrafficAreaChart data={chartData} colorActive={COLOR_ACTIVE} colorNew={COLOR_NEW} />
+        </Suspense>
       )}
     </div>
   );
@@ -1432,46 +1424,21 @@ function ReportResult({ report, onDrill }) {
       <div className="bg-white rounded-xl border border-stone-200 p-4">
         {chartData.length === 0 ? (
           <p className="py-12 text-center text-sm text-stone-400">No data for this range.</p>
-        ) : chartType === "donut" ? (
-          <ResponsiveContainer width="100%" height={260}>
-            <PieChart>
-              <Pie data={donutData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={2} stroke="none">
-                {donutData.map((d, i) => (
-                  <Cell key={d.name} fill={d.name === "Other" ? "#a8a29e" : DONUT_COLORS[i % DONUT_COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip content={<DonutTooltip total={donutTotal} />} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-            </PieChart>
-          </ResponsiveContainer>
-        ) : chartType === "line" ? (
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={lineData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-              <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#a8a29e" }} tickLine={false} axisLine={{ stroke: "#e7e5e4" }} minTickGap={24} />
-              <YAxis tick={{ fontSize: 11, fill: "#a8a29e" }} tickLine={false} axisLine={false} allowDecimals={false} width={40} />
-              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e7e5e4" }} />
-              <Line type="monotone" dataKey="value" name={metricLabel(firstMetric)} stroke={COLOR_ACTIVE} strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
         ) : (
-          <ResponsiveContainer width="100%" height={Math.max(180, chartData.length * 44)}>
-            <BarChart data={chartData} layout="vertical" barCategoryGap="30%" margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
-              <XAxis type="number" tick={{ fontSize: 11, fill: "#a8a29e" }} tickLine={false} axisLine={{ stroke: "#e7e5e4" }} />
-              <YAxis
-                type="category"
-                dataKey="name"
-                tickLine={false}
-                axisLine={false}
-                width={YAXIS_LABEL_WIDTH}
-                interval={0}
-                tick={<WrappedYAxisTick />}
-              />
-              <Tooltip cursor={{ fill: "#fafaf9" }} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e7e5e4" }} />
-              <Bar dataKey="value" name={metricLabel(firstMetric)} fill={COLOR_ACTIVE} radius={[0, 4, 4, 0]} maxBarSize={22} />
-            </BarChart>
-          </ResponsiveContainer>
+          <Suspense fallback={<ChartFallback />}>
+            <ExplorerChart
+              chartType={chartType}
+              chartData={chartData}
+              donutData={donutData}
+              donutColors={DONUT_COLORS}
+              donutTooltip={<DonutTooltip total={donutTotal} />}
+              lineData={lineData}
+              seriesName={metricLabel(firstMetric)}
+              colorActive={COLOR_ACTIVE}
+              yAxisLabelWidth={YAXIS_LABEL_WIDTH}
+              yAxisTick={<WrappedYAxisTick />}
+            />
+          </Suspense>
         )}
       </div>
 
@@ -1914,30 +1881,13 @@ function SearchConsoleTool({ project }) {
                     {plotted.length === 0 ? "Select a metric above to plot it." : "No data for this range."}
                   </p>
                 ) : (
-                  <ResponsiveContainer width="100%" height={300}>
-                    <LineChart data={trendData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#a8a29e" }} tickLine={false} axisLine={{ stroke: "#e7e5e4" }} minTickGap={24} />
-                      <YAxis yAxisId="clicks" hide allowDecimals={false} />
-                      <YAxis yAxisId="impressions" hide allowDecimals={false} />
-                      <YAxis yAxisId="ctr" hide domain={[0, "auto"]} />
-                      <YAxis yAxisId="position" hide reversed domain={["auto", "auto"]} />
-                      <Tooltip content={<SCChartTooltip />} />
-                      <Legend wrapperStyle={{ fontSize: 12 }} />
-                      {plotted.map((m) => (
-                        <Line
-                          key={m.key}
-                          yAxisId={m.key}
-                          type="monotone"
-                          dataKey={m.key}
-                          name={m.label}
-                          stroke={m.color}
-                          strokeWidth={2}
-                          dot={false}
-                        />
-                      ))}
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <Suspense fallback={<ChartFallback height={300} />}>
+                    <SearchConsoleTrendChart
+                      data={trendData}
+                      plotted={plotted}
+                      tooltip={<SCChartTooltip />}
+                    />
+                  </Suspense>
                 )}
               </div>
 

@@ -1,4 +1,13 @@
 /* Industry — design-system tokens and component classes. This file is the source of truth for the system's look; retune it here and see readme.md. */
+/* EXTERNAL DEPENDENCY: Barlow is fetched from Google at render time, and the PDF
+   renderer loads pages with wait_until="networkidle" — so if fonts.googleapis.com
+   is slow the render waits on it, and if it's blocked the document silently comes
+   out in whatever the fallback stack resolves to. There are no Barlow files under
+   app/assets (only Poppins), so this can't be served locally without adding them;
+   drop Barlow woff2 files in app/assets/fonts and replace this @import with
+   @font-face rules to remove the dependency. Until then the fallback stacks below
+   are spelled out explicitly so a failed load degrades to a known, predictable
+   face on every platform rather than to the browser's default serif. */
 @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;700&family=Barlow+Condensed:wght@400;600&display=swap');
 
 :root {
@@ -41,9 +50,15 @@
   --color-accent-2-800: #314457;
   --color-accent-2-900: #1f2d3a;
 
-  --font-heading: "Barlow Condensed", system-ui, sans-serif;
+  /* Fallbacks in narrow-first order for the heading face, so a missing Barlow
+     Condensed lands on something with a similar set width rather than on a
+     full-width system sans. See the note on the @import at the top of the file. */
+  --font-heading: "Barlow Condensed", "Roboto Condensed", "Archivo Narrow",
+    "Liberation Sans Narrow", "Arial Narrow", system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-heading-weight: 600;
-  --font-body: "Barlow", system-ui, sans-serif;
+  --font-body: "Barlow", system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
 
   --space-1: 3.4px;
   --space-2: 6.8px;

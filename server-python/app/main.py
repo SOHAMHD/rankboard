@@ -1,4 +1,5 @@
-import traceback
+import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -6,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import CORS_ORIGINS, DEBUG
-from .db import close_pool, init_db
+from .db import close_pool, db_session, init_db
 from .services import report_pdf
 from .routers import (
     auth,
@@ -20,13 +21,39 @@ from .routers import (
     webhooks,
 )
 
+# Configure the root logger before anything else imports and starts logging.
+# Modules across the app log through logging.getLogger(__name__); without a
+# handler configured here those records went nowhere and the app's only visible
+# diagnostics were stray print()s on stdout with no timestamp or source.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 init_db()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: nothing to do — init_db() runs at import time, before the first
+    # worker is ready to accept a request.
+    yield
+    # Shutdown. Was @app.on_event("shutdown"), which Starlette deprecates.
+    close_pool()
+    try:
+        from .services.report_pdf import shutdown_renderer
+        shutdown_renderer()
+    except Exception:
+        logger.warning("PDF renderer did not shut down cleanly.", exc_info=True)
+
 
 app = FastAPI(
     title="SEO Dashboard API (Python)",
     docs_url="/docs" if DEBUG else None,
     redoc_url="/redoc" if DEBUG else None,
     openapi_url="/openapi.json" if DEBUG else None,
+    lifespan=lifespan,
 )
 
 # The read-only-role middleware that used to live here was gated on
@@ -55,14 +82,22 @@ app.add_middleware(
 )
 
 
-@app.on_event("shutdown")
-def _release_resources() -> None:
-    close_pool()
+@app.get("/health", include_in_schema=False)
+def health():
+    """Liveness/readiness probe. Unauthenticated and deliberately cheap.
+
+    A bare {"ok": true} would pass while the database was unreachable, which is
+    the failure a platform health check most needs to catch — so it takes a
+    pooled connection and runs SELECT 1. That is one round trip and no rows, and
+    it uses db_session so the connection goes straight back to the pool.
+    """
     try:
-        from .services.report_pdf import shutdown_renderer
-        shutdown_renderer()
+        with db_session() as db:
+            db.execute("SELECT 1").fetchone()
     except Exception:
-        pass
+        logger.warning("Health check failed: database unreachable.", exc_info=True)
+        return JSONResponse(status_code=503, content={"ok": False, "db": False})
+    return {"ok": True}
 
 
 @app.exception_handler(HTTPException)
@@ -102,7 +137,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     but the user saw the generic "Something went wrong." with nothing logged
     client-side. The detail is only exposed when DEBUG is on.
     """
-    traceback.print_exception(type(exc), exc, exc.__traceback__)
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path,
+                     exc_info=exc)
     detail = f"{exc.__class__.__name__}: {exc}" if DEBUG else "Something went wrong on the server."
     return JSONResponse(status_code=500, content={"error": detail})
 

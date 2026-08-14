@@ -10,9 +10,14 @@ from .db import get_db
 from .permissions import can
 
 
-def create_token(user_id: int, role: str, tfa: str = "verified",
+def create_token(user_id: int, role: str, tfa: str,
                  minutes: int | None = None, token_version: int = 0) -> str:
     """Mint a session token.
+
+    `tfa` has no default on purpose. It used to default to "verified", so any
+    caller that forgot to think about the second factor minted a fully verified
+    session — the safe-looking call was the unsafe one. Every caller now has to
+    say which it means.
 
     `token_version` is the user's current `users.token_version`, and require_auth
     rejects any token whose value is behind it. That is what makes changing a

@@ -3,7 +3,9 @@
 #   pip install -r requirements.txt -r requirements-dev.txt
 #   pytest
 #
-# The suite needs no database: the units under test take a connection as an
-# argument and the tests pass a fake (tests/fake_db.py).
+# The suite needs no database. The units under test take a connection as an
+# argument and each test passes its own in-module fake; tests/conftest.py sets
+# the DATABASE_URL / JWT_SECRET / SKIP_DB_INIT values that app.config and app.db
+# require at import time, so nothing ever opens a real connection.
 -r requirements.txt
 pytest==8.4.2

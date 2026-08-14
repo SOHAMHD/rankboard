@@ -7,11 +7,16 @@ export const TabIndent = Extension.create({
 
   addKeyboardShortcuts() {
     return {
+      // Only swallow Tab when there is a list item to indent. insertContent()
+      // always reports success, so returning it meant Tab never propagated and
+      // the editor became a keyboard trap — no way out of it without a mouse
+      // (WCAG 2.1.2). Outside a list, Tab now does what it does everywhere else
+      // and moves focus to the next control.
       Tab: () => {
         if (this.editor.can().sinkListItem("listItem")) {
           return this.editor.commands.sinkListItem("listItem");
         }
-        return this.editor.commands.insertContent(INDENT);
+        return false;
       },
 
       "Shift-Tab": () => {

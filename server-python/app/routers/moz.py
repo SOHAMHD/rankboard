@@ -1,4 +1,5 @@
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 
@@ -53,8 +54,11 @@ def refresh_moz(project_id: int, db: sqlite3.Connection = Depends(get_db)):
         # _pick_prev_moz then chose that duplicate as "previous month", so every
         # Moz delta in the next report rendered as zero.
         metrics = fetch_moz_metrics(project["domain"], refresh=True)
-    except MozApiError as exc:
-        raise HTTPException(502, str(exc))
+    except MozApiError:
+        # The provider's message can carry credential and account detail from
+        # Moz's response, so it stays in the log and the caller gets a fixed line.
+        logging.getLogger(__name__).exception("Moz refresh failed for project %s", project_id)
+        raise HTTPException(502, "Couldn't reach Moz — try again shortly.")
 
     # A genuinely unchanged reading is not worth a row. Moz updates monthly, so
     # most refreshes return the same figures, and each duplicate is another

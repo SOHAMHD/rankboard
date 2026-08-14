@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Eye, KeyRound, LoaderCircle, LogOut, Mail, MailCheck, Search, Trash2, Users, X } from "lucide-react";
+import { Eye, KeyRound, LoaderCircle, LogOut, Mail, MailCheck, Trash2, Users, X } from "lucide-react";
 import { api, setToken } from "./api";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
@@ -14,17 +14,6 @@ export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
  */
 export const CONTACT_ONLY = "Client contact";
 
-/**
- * No longer offered in the onboarding wizard — the role picker in AdminPanel
- * maps over ROLES instead, so nothing imports this. Kept, along with the wizard
- * machinery behind it, so re-enabling the option is a one-word change at that
- * one call site rather than a rebuild.
- *
- * Contacts who receive reports without an account are set up per project now,
- * via the recipients dialog (GET/PUT /api/projects/{id}/recipients).
- */
-export const ONBOARD_ROLES = [...ROLES, CONTACT_ONLY];
-
 export const ROLE = {
   ADMIN: "Super Admin",
   MANAGER: "Admin",
@@ -34,7 +23,9 @@ export const ROLE = {
 
 export const isAdmin = (user) => user?.role === ROLE.ADMIN;
 export const isManager = (user) => user?.role === ROLE.MANAGER;
-export const isTeamMember = (user) => user?.role === ROLE.TEAM_MEMBER;
+// Not exported: nothing outside this file asks "is this a team member?" — only
+// isAuthor below needs it.
+const isTeamMember = (user) => user?.role === ROLE.TEAM_MEMBER;
 export const isAuthor = (user) => isAdmin(user) || isManager(user) || isTeamMember(user);
 export const isReportDeleter = (user) => isAdmin(user) || isManager(user);
 export const isReportSender = (user) => isAdmin(user) || isManager(user);
@@ -243,7 +234,7 @@ export function Modal({ title, onClose, children, wide, dismissOnBackdrop = true
  * was lost. This exists so those paths can say what they destroy, the way the
  * keyword and backlink screens already do.
  */
-export function ConfirmModal({ title, onCancel, onConfirm, confirmLabel = "Delete", busy, children }) {
+export function ConfirmModal({ title, onCancel, onConfirm, confirmLabel = "Delete", busy, confirmDisabled, children }) {
   return (
     <Modal title={title} onClose={onCancel} dismissOnBackdrop={!busy}>
       <div className="text-sm text-stone-600">{children}</div>
@@ -253,7 +244,9 @@ export function ConfirmModal({ title, onCancel, onConfirm, confirmLabel = "Delet
         </button>
         <button
           onClick={onConfirm}
-          disabled={busy}
+          // confirmDisabled is for a caller that gates on something of its own
+          // — an "I understand" tick, say — where a spinner would be a lie.
+          disabled={busy || confirmDisabled}
           className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-60"
         >
           {busy ? <LoaderCircle size={15} className="animate-spin" /> : <Trash2 size={15} />}
@@ -313,190 +306,6 @@ export function Toggle({ on, onClick }) {
   );
 }
 
-export function SmartSearch({
-  label,
-  optional,
-  value,
-  onChange,
-  onSearch,
-  placeholder = "Start typing to search…",
-  hint,
-  disabled,
-  disabledHint,
-  emptyText = "No matches.",
-  autoFocus,
-  debounceMs = 160,
-}) {
-  const [text, setText] = useState("");
-  const [open, setOpen] = useState(false);
-  const [items, setItems] = useState([]);
-  const [active, setActive] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const boxRef = useRef(null);
-  const listRef = useRef(null);
-  const seq = useRef(0);
-  const query = useRef("");
-
-  const shown = open ? text : value?.name ?? "";
-
-  const run = (q) => {
-    const mine = ++seq.current;
-    query.current = q;
-    setBusy(true);
-    Promise.resolve(onSearch(q))
-      .then((rows) => {
-        if (mine !== seq.current) return;
-        setItems(rows || []);
-        setActive(0);
-      })
-      .catch(() => {
-        if (mine === seq.current) setItems([]);
-      })
-      .finally(() => {
-        if (mine === seq.current) setBusy(false);
-      });
-  };
-
-  // onSearch belongs in the deps: it closes over the parent's current scope (the
-  // selected country, for instance), so leaving it out meant that changing that
-  // scope while the box was open kept querying with the previous value until the
-  // next keystroke. Callers pass a useCallback'd function so this doesn't loop.
-  useEffect(() => {
-    if (!open) return;
-    if (text === query.current) return;
-    if (!debounceMs) return run(text);
-    const t = setTimeout(() => run(text), debounceMs);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, open, debounceMs, onSearch]);
-
-  useEffect(() => {
-    if (!open) return;
-    const away = (e) => {
-      if (!boxRef.current?.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener("mousedown", away);
-    return () => document.removeEventListener("mousedown", away);
-  }, [open]);
-
-  useEffect(() => {
-    listRef.current?.children[active]?.scrollIntoView({ block: "nearest" });
-  }, [active, items]);
-
-  const openWith = () => {
-    if (disabled) return;
-    setText("");
-    setOpen(true);
-    run("");
-  };
-
-  const pick = (item) => {
-    onChange(item);
-    setText("");
-    setOpen(false);
-  };
-
-  const onKeyDown = (e) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      if (!open) return openWith();
-      setActive((i) => Math.min(items.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1))));
-    } else if (e.key === "Enter") {
-      if (open && items[active]) {
-        e.preventDefault();
-        e.stopPropagation();
-        pick(items[active]);
-      }
-    } else if (e.key === "Escape") {
-      if (open) {
-        e.stopPropagation();
-        setOpen(false);
-      }
-    }
-  };
-
-  return (
-    <div ref={boxRef} className="relative">
-      {label && (
-        <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
-          {label} {optional && <span className="normal-case font-normal">(optional)</span>}
-        </label>
-      )}
-      <div className="relative">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 pointer-events-none" />
-        <input
-          value={shown}
-          disabled={disabled}
-          autoFocus={autoFocus}
-          onFocus={openWith}
-          onChange={(e) => {
-            setOpen(true);
-            setText(e.target.value);
-            if (e.target.value === "" && value) onChange(null);
-          }}
-          onKeyDown={onKeyDown}
-          placeholder={disabled ? disabledHint || placeholder : placeholder}
-          aria-autocomplete="list"
-          aria-expanded={open}
-          role="combobox"
-          className={`${INPUT_CLS} pl-8 ${value && !open ? "font-medium" : ""} disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed`}
-        />
-        {(value || busy) && !disabled && (
-          <span className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
-            {busy ? (
-              <LoaderCircle size={14} className="text-stone-400 animate-spin" />
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  onChange(null);
-                  setText("");
-                  setOpen(false);
-                }}
-                aria-label={`Clear ${label || "selection"}`}
-                className="p-1 rounded text-stone-400 hover:text-stone-600 hover:bg-stone-100"
-              >
-                <X size={13} />
-              </button>
-            )}
-          </span>
-        )}
-      </div>
-
-      {open && (
-        <ul
-          ref={listRef}
-          role="listbox"
-          className="absolute z-20 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-lg border border-stone-200 bg-white shadow-lg py-1"
-        >
-          {items.length === 0 ? (
-            <li className="px-3 py-2 text-xs text-stone-400">{busy ? "Searching…" : emptyText}</li>
-          ) : (
-            items.map((item, i) => (
-              <li
-                key={item.code}
-                role="option"
-                aria-selected={i === active}
-                onMouseEnter={() => setActive(i)}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => pick(item)}
-                className={`px-3 py-1.5 cursor-pointer flex items-baseline justify-between gap-3 ${
-                  i === active ? "bg-orange-50 text-stone-900" : "text-stone-700"
-                }`}
-              >
-                <span className="text-sm truncate">{item.name}</span>
-                {item.hint && <span className="text-xs text-stone-400 truncate shrink-0 max-w-[55%]">{item.hint}</span>}
-              </li>
-            ))
-          )}
-        </ul>
-      )}
-
-      {hint && <p className="text-xs text-stone-400 mt-2">{hint}</p>}
-    </div>
-  );
-}
-
 export function ChangePasswordModal({ onClose }) {
   const [otpRequired, setOtpRequired] = useState(null);
   const [phase, setPhase] = useState("request");
@@ -550,8 +359,9 @@ export function ChangePasswordModal({ onClose }) {
 
   const passwordFields = (
     <>
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">New password</label>
+      <label htmlFor="pw-new" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">New password</label>
       <input
+        id="pw-new"
         type="password"
           autoComplete="new-password"
         value={pw1}
@@ -560,8 +370,9 @@ export function ChangePasswordModal({ onClose }) {
         autoFocus
         className={`${INPUT_CLS} mb-4`}
       />
-      <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Confirm new password</label>
+      <label htmlFor="pw-confirm" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Confirm new password</label>
       <input
+        id="pw-confirm"
         type="password"
           autoComplete="new-password"
         value={pw2}
@@ -610,8 +421,9 @@ export function ChangePasswordModal({ onClose }) {
           <p className="text-sm text-stone-500 -mt-0.5 mb-4">
             Enter the 6-digit code we sent to {emailSentTo || "your email"}, then choose a new password.
           </p>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Code</label>
+          <label htmlFor="pw-otp" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Code</label>
           <input
+            id="pw-otp"
             type="text"
             inputMode="numeric"
             autoComplete="one-time-code"

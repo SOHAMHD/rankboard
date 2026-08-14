@@ -25,6 +25,7 @@ import {
   BTN_GHOST,
 } from "../ui";
 import AddressInput, { foldDraft, isEmail } from "../lib/AddressInput";
+import { useToast } from "../toast.jsx";
 
 export function AdminPanelView({ user, onBack, onEmailLog, onLogout }) {
   const [users, setUsers] = useState([]);
@@ -37,6 +38,7 @@ export function AdminPanelView({ user, onBack, onEmailLog, onLogout }) {
   const [removing, setRemoving] = useState(false);
   const [manageUser, setManageUser] = useState(null);
   const canManage = can(user, "manageUsers");
+  const toast = useToast();
 
   const refresh = async () => {
     try {
@@ -58,6 +60,13 @@ export function AdminPanelView({ user, onBack, onEmailLog, onLogout }) {
     try {
       await api(`/users/${id}`, { method: "PATCH", body: { role } });
       await refresh();
+      // The dropdown looks the same whether the change saved or silently didn't,
+      // so say so — this one alters what somebody can do to every project.
+      const who = users.find((u) => u.id === id);
+      toast.success(
+        `${who?.name || "This user"} is now ${roleLabel(role)}.`,
+        { title: "Role updated" }
+      );
     } catch (err) {
       setError(err.message);
     }
@@ -156,7 +165,7 @@ export function AdminPanelView({ user, onBack, onEmailLog, onLogout }) {
                       <td className="px-5 py-3 max-w-0 w-[45%]">
                         <span className="flex items-center gap-2.5">
                           <span className="h-8 w-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-semibold shrink-0">
-                            {u.name.charAt(0)}
+                            {u.name?.charAt(0) || "?"}
                           </span>
                           <span className="min-w-0">
                             <span className="flex items-center gap-2 font-medium text-stone-800 truncate">
@@ -406,7 +415,7 @@ function ManageProjectsModal({ user, onClose, onSaved }) {
       <p className="text-xs font-medium text-stone-400 mb-2">
         {selected.size} of {projects.length} assigned
       </p>
-      <ProjectChecklist projects={projects} selected={selected} onToggle={toggleProject} loading={loading} />
+      <ProjectChecklist projects={projects} selected={selected} onToggle={toggleProject} loading={loading} error={error} />
       <ErrorNote>{error}</ErrorNote>
       <div className="flex justify-end gap-2 mt-5">
         <button onClick={onClose} className={`${BTN_GHOST} px-4 py-2.5`}>
@@ -727,20 +736,22 @@ function OnboardWizard({ onClose, onCreated }) {
 
       {step === "details" && (
         <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+          <label htmlFor="onboard-name" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
             Full name
           </label>
           <input
+            id="onboard-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. Kavya Nair"
             autoFocus
             className={`${INPUT_CLS} mb-4`}
           />
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+          <label htmlFor="onboard-email" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
             Email address
           </label>
           <input
+            id="onboard-email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -827,10 +838,11 @@ function OnboardWizard({ onClose, onCreated }) {
             </p>
           )}
 
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+          <label htmlFor="onboard-client-name" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
             Client name
           </label>
           <input
+            id="onboard-client-name"
             value={current.clientName}
             onChange={(e) => patchCurrent({ clientName: e.target.value })}
             placeholder="e.g. Dr. Anuranjan"
@@ -841,7 +853,7 @@ function OnboardWizard({ onClose, onCreated }) {
             {clientProject?.clientName ? ` Currently "${clientProject.clientName}".` : ""}
           </p>
 
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mt-4 mb-1.5">
+          <label htmlFor="onboard-primary-email" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mt-4 mb-1.5">
             Primary report email
           </label>
           {!isContactOnly && (
@@ -857,6 +869,7 @@ function OnboardWizard({ onClose, onCreated }) {
           )}
           {(isContactOnly || !current.useLogin) && (
             <input
+              id="onboard-primary-email"
               type="email"
               value={current.primary}
               onChange={(e) => patchCurrent({ primary: e.target.value })}
@@ -865,7 +878,7 @@ function OnboardWizard({ onClose, onCreated }) {
             />
           )}
 
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mt-4 mb-1.5">
+          <label htmlFor="onboard-cc" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mt-4 mb-1.5">
             Cc <span className="normal-case tracking-normal font-normal text-stone-400">(optional)</span>
           </label>
           <AddressInput

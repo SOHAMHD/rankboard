@@ -17,7 +17,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, BASE, getToken } from "../api";
-import { ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor, isReportDeleter, isReportSender } from "../ui";
+import { ConfirmModal, ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor, isReportDeleter, isReportSender } from "../ui";
 import { useToast } from "../toast.jsx";
 import { createBlobNode } from "../lib/blobNode";
 import {
@@ -232,8 +232,9 @@ export function ReportsPanel({ user, project }) {
 
       <div className="mt-4 flex flex-wrap items-end gap-2 bg-white border border-stone-200 rounded-xl p-4">
         <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Report month</label>
+          <label htmlFor="report-month" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Report month</label>
           <input
+            id="report-month"
             type="month"
             value={period}
             max={currentMonth()}
@@ -324,74 +325,44 @@ export function ReportsPanel({ user, project }) {
         </div>
       )}
 
+      {/* Was a hand-rolled dialog: no focus trap, no Escape, and — because it
+          had no max-height — Cancel and Delete sat below the fold on a short
+          viewport with no way to scroll to them. ConfirmModal handles all
+          three, and every other destructive path in the app already uses it. */}
       {pendingDelete && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          role="dialog"
-          aria-modal="true"
+        <ConfirmModal
+          title="Delete this report?"
+          onCancel={closeDelete}
+          onConfirm={confirmDelete}
+          busy={deleting}
+          confirmDisabled={pendingDelete.status === "sent" && !sentAck}
+          confirmLabel={pendingDelete.status === "sent" ? "Permanently delete" : "Delete"}
         >
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5">
-            <div className="flex items-start gap-3">
-              <span className="shrink-0 rounded-full bg-red-100 text-red-600 p-2">
-                <AlertTriangle size={18} />
-              </span>
-              <div className="min-w-0">
-                <h3 className="text-base font-bold text-stone-900 font-display">
-                  Delete this report?
-                </h3>
-                {pendingDelete.status === "sent" ? (
-                  <p className="text-sm text-stone-600 mt-1">
-                    Report <span className="font-data">#{pendingDelete.id}</span> ({pendingDelete.periodKey}) was{" "}
-                    <strong>sent to the client</strong>. Deleting it permanently removes it and{" "}
-                    <strong>may break the client's link</strong>. This cannot be undone.
-                  </p>
-                ) : (
-                  <p className="text-sm text-stone-600 mt-1">
-                    Delete report <span className="font-data">#{pendingDelete.id}</span> ({pendingDelete.periodKey})?
-                    This can't be undone.
-                  </p>
-                )}
-              </div>
-            </div>
+          {pendingDelete.status === "sent" ? (
+            <p>
+              Report <span className="font-data">#{pendingDelete.id}</span> ({pendingDelete.periodKey}) was{" "}
+              <strong>sent to the client</strong>. Deleting it permanently removes it and{" "}
+              <strong>may break the client's link</strong>. This cannot be undone.
+            </p>
+          ) : (
+            <p>
+              Delete report <span className="font-data">#{pendingDelete.id}</span> ({pendingDelete.periodKey})?
+              This can't be undone.
+            </p>
+          )}
 
-            {pendingDelete.status === "sent" && (
-              <label className="flex items-start gap-2 mt-3 text-sm text-stone-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={sentAck}
-                  onChange={(e) => setSentAck(e.target.checked)}
-                  className="mt-0.5"
-                />
-                I understand this was sent and may break the client's link.
-              </label>
-            )}
-
-            <div className="flex justify-end gap-2 mt-5">
-              <button onClick={closeDelete} disabled={deleting} className={`${BTN_GHOST} px-3 py-1.5`}>
-                Cancel
-              </button>
-              <button
-                onClick={confirmDelete}
-                disabled={deleting || (pendingDelete.status === "sent" && !sentAck)}
-                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {deleting ? (
-                  <>
-                    <LoaderCircle size={15} className="animate-spin" /> Deleting…
-                  </>
-                ) : pendingDelete.status === "sent" ? (
-                  <>
-                    <Trash2 size={15} /> Permanently delete
-                  </>
-                ) : (
-                  <>
-                    <Trash2 size={15} /> Delete
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
+          {pendingDelete.status === "sent" && (
+            <label className="flex items-start gap-2 mt-3 text-sm text-stone-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={sentAck}
+                onChange={(e) => setSentAck(e.target.checked)}
+                className="mt-0.5"
+              />
+              I understand this was sent and may break the client's link.
+            </label>
+          )}
+        </ConfirmModal>
       )}
     </div>
   );
@@ -621,7 +592,13 @@ export function BlobPalette({ items, onInsert }) {
   return (
     <div className="lg:sticky lg:top-4 self-start">
       <p className="text-[11px] font-semibold uppercase tracking-wider text-stone-400 mb-1.5">Insert data</p>
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search fields…" className={INPUT_CLS} />
+      <input
+        aria-label="Search fields"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Search fields…"
+        className={INPUT_CLS}
+      />
       <div className="mt-2 max-h-[60vh] overflow-y-auto pr-1">
         {groups.length === 0 && <p className="text-xs text-stone-400 py-3">No matching fields.</p>}
         {groups.map(([group, gi]) => (

@@ -30,7 +30,8 @@ def import_backlinks(db, project_id: int, month: str, urls: list[str]) -> dict:
         ).fetchall()
     }
 
-    added, skipped, rejected = 0, 0, 0
+    to_insert: list[str] = []
+    skipped, rejected = 0, 0
     for line in urls or []:
         url = (line or "").strip()
         if not url:
@@ -41,16 +42,32 @@ def import_backlinks(db, project_id: int, month: str, urls: list[str]) -> dict:
         if url in existing:
             skipped += 1
             continue
+        existing.add(url)   # also de-dupes repeats inside this one paste
+        to_insert.append(url)
+
+    # One round trip instead of one per URL, and atomic. This was an INSERT per
+    # URL on an autocommit connection, so a failure partway through a paste of a
+    # few hundred links left the earlier ones committed and returned an error —
+    # the user then had no way to tell which half had landed.
+    #
+    # ON CONFLICT DO NOTHING for the same reason as bulk_import_keywords: the
+    # `existing` diff above is a read followed by a write, so a concurrent import
+    # can slip between them. No conflict target named on purpose — the bare form
+    # works whether or not a matching unique index exists on this install.
+    added = 0
+    if to_insert:
         try:
-            db.execute(
-                "INSERT INTO backlinks (project_id, url, month) VALUES (?, ?, ?)",
-                (project_id, url, month),
-            )
+            with db.transaction():
+                cur = db.executemany(
+                    "INSERT INTO backlinks (project_id, url, month) VALUES (?, ?, ?)"
+                    " ON CONFLICT DO NOTHING",
+                    [(project_id, u, month) for u in to_insert],
+                )
+                added = cur.rowcount if cur.rowcount is not None else len(to_insert)
         except INTEGRITY_ERRORS:
-            skipped += 1
-            continue
-        existing.add(url)
-        added += 1
+            # Nothing was written — the transaction rolled the whole batch back.
+            raise HTTPException(409, "Could not import these backlinks. Try again.")
+    skipped += len(to_insert) - added
 
     return {"month": month, "added": added, "skipped": skipped, "rejected": rejected}
 

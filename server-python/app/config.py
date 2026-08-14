@@ -59,7 +59,14 @@ MOZ_SECRET_KEY = os.environ.get("MOZ_SECRET_KEY", "").strip()
 # ranks are entered by hand (see keyword_rank_service). The credentials can come
 # out of .env too.
 
-GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "seo-dashboard-499607-25e8ccaf16ad.json")
+#: Path to the GA4 / Search Console service-account key, or the key's JSON itself.
+#:
+#: Empty by default. It used to default to a specific key filename checked into
+#: one developer's working copy, so an unconfigured server looked configured: the
+#: providers passed their `if not GOOGLE_SERVICE_ACCOUNT_JSON` guard and then
+#: failed deeper down with a file-not-found that reads like a broken credential.
+#: Empty makes them report "not configured on the server", which is the truth.
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
 REPORT_ASSET_DIR = os.environ.get(
     "REPORT_ASSET_DIR",

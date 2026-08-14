@@ -1,3 +1,4 @@
+import logging
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -395,8 +396,12 @@ def project_search_console_performance(
         totals_rows = run([])
         trend_rows = run(["date"])
         rows_data = run([body.dimension])
-    except Exception as exc:
-        return {"error": str(exc)}
+    except Exception:
+        # Logged in full, reported as a fixed string. Google's errors quote the
+        # service-account principal and the quota project back at you, and this
+        # response goes to any user with access to the project.
+        logging.getLogger(__name__).exception("Search Console performance query failed")
+        return {"error": "Couldn't reach Search Console — check the project's property setting."}
 
     totals = metrics_only(totals_rows[0]) if totals_rows else {
         "clicks": 0, "impressions": 0, "ctr": 0, "position": 0,
@@ -563,13 +568,18 @@ def resolve_gsc_site_url(
     return None
 
 
-@router.get("/gsc-properties/match")
+@router.get("/gsc-properties/match",
+            dependencies=[Depends(require_permission("addProject"))])
 def gsc_properties_match(domain: str = Query("", description="Bare domain, e.g. example.com")):
     """Powers the project form: what would be picked, and what else is available.
 
     `properties` is the full list so the form can offer a choice when `matches`
     isn't exactly one, instead of making the user retype a string Google has
     already told us.
+
+    Gated on `addProject` because `properties` is every Search Console property
+    on the service account — i.e. every client's domain. It was previously open
+    to any signed-in user, including a Client who should only ever see their own.
     """
     sites, err = list_sites()
     return {

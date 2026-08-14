@@ -1,11 +1,15 @@
+import logging
 import secrets
 import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 
 from ..config import BREVO_WEBHOOK_SECRET
 from ..db import get_db
 from ..services import email_tracking
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -46,12 +50,25 @@ async def brevo_events(
     if isinstance(payload, dict) and isinstance(payload.get("events"), list):
         events = payload["events"]
 
+    # The handler has to be async — the body is read with `await request.json()` —
+    # but ingest_event is synchronous psycopg I/O, and a batch of them running on
+    # the event loop blocks every other request in the process for the duration.
+    # The loop is therefore handed to the threadpool, which is where sync database
+    # work belongs.
+    stored, duplicates, ignored = await run_in_threadpool(_ingest_batch, db, events)
+
+    return {"received": len(events), "stored": stored,
+            "duplicates": duplicates, "ignored": ignored}
+
+
+def _ingest_batch(db, events: list) -> tuple[int, int, int]:
+    """Record a batch of Brevo events. Runs on a worker thread, never the loop."""
     stored = duplicates = ignored = 0
     for item in events:
         try:
             result = email_tracking.ingest_event(db, item)
-        except Exception as exc:  # noqa: BLE001 — one bad event must not stop the batch
-            print("Brevo webhook: could not record event:", exc)
+        except Exception:  # noqa: BLE001 — one bad event must not stop the batch
+            logger.exception("Brevo webhook: could not record event")
             ignored += 1
             continue
         if result == "stored":
@@ -60,6 +77,4 @@ async def brevo_events(
             duplicates += 1
         else:
             ignored += 1
-
-    return {"received": len(events), "stored": stored,
-            "duplicates": duplicates, "ignored": ignored}
+    return stored, duplicates, ignored

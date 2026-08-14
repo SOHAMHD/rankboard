@@ -51,9 +51,15 @@ def _token_version(db: sqlite3.Connection, user_id: int) -> int:
     return int((row["token_version"] if row is not None else 0) or 0)
 
 
-def _reissue(db: sqlite3.Connection, user: sqlite3.Row) -> str:
-    """A replacement token for the caller, after their token_version was bumped."""
-    return create_token(user["id"], user["role"],
+def _reissue(db: sqlite3.Connection, user: sqlite3.Row, tfa: str = "verified") -> str:
+    """A replacement token for the caller, after their token_version was bumped.
+
+    `tfa` defaults to "verified" because most callers sit behind
+    require_active_user, which already refused anything else. Callers reachable
+    with a pending token must pass the caller's own claim through, or the
+    replacement quietly promotes a half-authenticated session.
+    """
+    return create_token(user["id"], user["role"], tfa,
                         token_version=_token_version(db, user["id"]))
 
 
@@ -67,7 +73,7 @@ def _advance(user: sqlite3.Row, db: sqlite3.Connection, extra: dict | None = Non
     """
     extra = extra or {}
     return {
-        "token": create_token(user["id"], user["role"],
+        "token": create_token(user["id"], user["role"], "verified",
                               token_version=_token_version(db, user["id"])),
         "user": public_user(user),
         "stage": "done",
@@ -112,6 +118,14 @@ def login(body: LoginIn, request: Request, db: sqlite3.Connection = Depends(get_
     user = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
 
     hashed = user["password_hash"] if user is not None else _DUMMY_PW_HASH
+    # bcrypt 5 raises on inputs past 72 bytes rather than truncating, so an
+    # over-long password would have come back as a 500 instead of a failed
+    # sign-in. No password we store can be longer than this, so it is simply
+    # wrong — treated as such, with the same generic message and the same
+    # throttle hit so it isn't a free probe.
+    if len(body.password.encode()) > 72:
+        throttle.login_failed(key)
+        raise HTTPException(401, "No account matches that email and password.")
     password_ok = bcrypt.checkpw(body.password.encode(), hashed.encode())
     if user is None or not password_ok:
         throttle.login_failed(key)
@@ -145,20 +159,26 @@ def set_password(
 ):
     if len(body.newPassword) < 8:
         raise HTTPException(400, "Password needs at least 8 characters.")
-    # bcrypt truncates silently past 72 bytes, so this is a real limit rather
-    # than a policy one.
+    # bcrypt raises past 72 bytes rather than truncating, so this is a real limit
+    # rather than a policy one.
     if len(body.newPassword.encode()) > 72:
         raise HTTPException(400, "Password is too long (72 bytes max).")
 
-    verified = (claims or {}).get("tfa") in (None, "verified")
-    # `must_change_password` is the invite bootstrap: a brand-new user has no TOTP
-    # enrolled yet, so the temporary password from the invite email is the only
-    # credential they have and it must be enough to set a permanent one. This is a
-    # deliberate trade-off — it does mean the invite email is a complete
-    # credential until first sign-in — and is why invites are throttled and the
-    # temporary password is redacted from the email log.
-    if not verified and not user["must_change_password"]:
-        raise HTTPException(403, "Finish two-step verification before changing your password.")
+    tfa = (claims or {}).get("tfa") or "verified"
+    # This endpoint is the invite bootstrap and nothing else. A brand-new user has
+    # no TOTP enrolled yet, so the temporary password from the invite email is the
+    # only credential they have and it must be enough to set a permanent one. That
+    # is a deliberate trade-off — the invite email is a complete credential until
+    # first sign-in — and is why invites are throttled and the temporary password
+    # is redacted from the email log.
+    #
+    # Outside that bootstrap there is nothing to allow: an established user goes
+    # through /password/change, which asks for an emailed code. So `must_change_password`
+    # is required either way, and the pending case gets the more specific message.
+    if not user["must_change_password"]:
+        if tfa == "pending":
+            raise HTTPException(403, "Finish two-step verification before changing your password.")
+        raise HTTPException(403, "Use the change-password flow instead.")
 
     new_hash = bcrypt.hashpw(body.newPassword.encode(), bcrypt.gensalt()).decode()
     db.execute(
@@ -168,8 +188,10 @@ def set_password(
     )
     # The bump above invalidated every token for this user, this request's
     # included. Hand back a replacement so the caller stays signed in while
-    # everyone else is signed out.
-    return {"ok": True, "token": _reissue(db, user)}
+    # everyone else is signed out — carrying the caller's own 2FA state, not a
+    # fresh "verified". Setting a password is not a second factor: a pending user
+    # stays pending and still has to complete TOTP.
+    return {"ok": True, "token": _reissue(db, user, tfa)}
 
 
 class CodeIn(BaseModel):
@@ -393,6 +415,8 @@ def forgot_password_reset(body: ForgotResetIn, db: sqlite3.Connection = Depends(
         "       token_version = token_version + 1 WHERE id = ?",
         (new_hash, user["id"]),
     )
-    fresh_token = _reissue(db, user)
     db.execute("DELETE FROM password_otp WHERE user_id = ?", (user["id"],))
-    return {"ok": True, "token": fresh_token}
+    # No replacement token. This route is unauthenticated — an emailed code is
+    # the only thing proving anything — so handing one back would let a reset
+    # skip both sign-in and the second factor. The frontend already discarded it.
+    return {"ok": True}

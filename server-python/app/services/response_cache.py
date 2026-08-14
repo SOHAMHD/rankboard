@@ -1,3 +1,4 @@
+import copy
 import functools
 import json
 import os
@@ -69,7 +70,13 @@ def cached(name: str):
                     with _lock:
                         hit = _store.get(k)
                         if hit and hit[0] > now:
-                            return hit[1]
+                            # A copy, not the stored object. Providers return
+                            # nested dicts and callers edit them in place — the
+                            # analytics summary picks up returningUsers after the
+                            # fact, for one — so handing out the cached value by
+                            # reference let one request's edits show up in every
+                            # later cache hit for the same key.
+                            return copy.deepcopy(hit[1])
 
                         # Somebody else is already computing this key. Wait for
                         # them rather than issuing the same GA4/GSC report run —

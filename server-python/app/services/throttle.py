@@ -136,12 +136,11 @@ def twofa_failed(user_id: int) -> None:
 
 
 def twofa_ok(user_id: int) -> None:
+    # Only the failure counter is cleared. This used to also wipe every replay
+    # marker for the user, which undid the mark_code_consumed() written moments
+    # earlier in the same request — so a TOTP code stayed replayable for the rest
+    # of its time step. The markers expire on their own after REPLAY_TTL.
     _clear(_SCOPE_TWOFA, user_id)
-    with db_session() as db:
-        db.execute(
-            "DELETE FROM throttle_counters WHERE scope = ? AND key LIKE ?",
-            (_SCOPE_REPLAY, f"{int(user_id)}:%"),
-        )
 
 
 # ── password reset requests ───────────────────────────────────────────

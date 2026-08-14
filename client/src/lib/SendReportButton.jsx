@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Send, LoaderCircle, X, Plus, Mail, Users, Save, Bookmark } from "lucide-react";
 import { api } from "../api";
 import { BTN_PRIMARY, BTN_GHOST, INPUT_CLS } from "../ui";
@@ -25,9 +25,37 @@ export default function SendReportButton({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
   const [loadingSaved, setLoadingSaved] = useState(false);
+  const [savedError, setSavedError] = useState(null);
   const [savingDefault, setSavingDefault] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
   const toast = useToast();
+  const panelRef = useRef(null);
+
+  // Focus into the panel on open, and back to whatever opened it on close —
+  // otherwise dismissing the dialog dumps a keyboard user at the top of the
+  // reports list, several rows away from the one they were on.
+  useEffect(() => {
+    if (!open) return undefined;
+    const previouslyFocused = document.activeElement;
+    panelRef.current?.focus();
+    return () => {
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+    };
+  }, [open]);
+
+  // Escape closes, matching every other dialog in the app.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (sending || savingDefault) return;
+      setOpen(false);
+      reset();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sending, savingDefault]);
 
   const reset = () => {
     setEmails([]);
@@ -39,6 +67,7 @@ export default function SendReportButton({
     setMessage("");
     setError(null);
     setSavedAt(null);
+    setSavedError(null);
   };
 
   // Prefill from the project's saved recipients.
@@ -53,6 +82,7 @@ export default function SendReportButton({
     if (!open || !projectId) return;
     let cancelled = false;
     setLoadingSaved(true);
+    setSavedError(null);
     api(`/projects/${projectId}/recipients`)
       .then((res) => {
         if (cancelled || !res.recipients) return;
@@ -62,7 +92,12 @@ export default function SendReportButton({
         setShowCc(ccEmails.length > 0);
         setSavedAt(updatedAt || null);
       })
-      .catch(() => {})
+      // A blank form is also what a project with no saved recipients looks
+      // like, so swallowing this made a failed load indistinguishable from an
+      // empty one — and the author would retype an address they already had.
+      .catch(() => {
+        if (!cancelled) setSavedError(true);
+      })
       .finally(() => {
         if (!cancelled) setLoadingSaved(false);
       });
@@ -209,14 +244,19 @@ export default function SendReportButton({
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
           role="dialog"
           aria-modal="true"
+          aria-labelledby="send-report-title"
         >
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto">
+          <div
+            ref={panelRef}
+            tabIndex={-1}
+            className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto focus:outline-none"
+          >
             <div className="flex items-start gap-3">
               <span className="shrink-0 rounded-full bg-orange-100 text-orange-600 p-2">
                 <Mail size={18} />
               </span>
               <div className="min-w-0 flex-1">
-                <h3 className="text-base font-bold text-stone-900 font-display">
+                <h3 id="send-report-title" className="text-base font-bold text-stone-900 font-display">
                   Send report by email
                 </h3>
                 <p className="text-sm text-stone-500 mt-0.5">
@@ -256,6 +296,12 @@ export default function SendReportButton({
                 ? "Loading this project's saved recipients…"
                 : "Press Enter, comma, or space to add each address. Add as many as you like."}
             </p>
+
+            {savedError && !loadingSaved && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-2 mt-1">
+                Couldn&apos;t load this project&apos;s saved recipients — check before sending.
+              </p>
+            )}
 
             {savedAt && !loadingSaved && (
               // Worth surfacing the date: a list nobody has touched in a year

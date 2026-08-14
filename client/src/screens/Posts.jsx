@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ExternalLink, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
-import { ErrorNote, INPUT_CLS, BTN_PRIMARY, isAuthor } from "../ui";
+import { ConfirmModal, ErrorNote, INPUT_CLS, BTN_PRIMARY, isAuthor } from "../ui";
 
 const KIND_META = {
   blog: { title: "Blogs", noun: "blog", placeholder: "https://yoursite.com/blog/post" },
@@ -33,15 +33,25 @@ const [month, setMonth] = useState(currentMonth);
   const [monthFilter, setMonthFilter] = useState("all");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Deleting a link was a single unguarded click, unlike every other delete in
+  // the app — and the row it sits on is the one you click to open the post.
+  const [confirmPost, setConfirmPost] = useState(null);
   const canEdit = isAuthor(user);
 
+  // Bumped per request: the effect below re-runs on `kind`, so switching
+  // Blogs↔LinkedIn quickly could let the slower first response land last and
+  // show the wrong list under the new heading. Same guard as Keywords uses.
+  const loadSeq = useRef(0);
+
   const load = async () => {
+    const seq = ++loadSeq.current;
     try {
       const d = await api(`/projects/${project.id}/posts?kind=${kind}`);
+      if (seq !== loadSeq.current) return;
       setPosts(d.posts);
       setError(null);
     } catch (err) {
-      setError(err.message);
+      if (seq === loadSeq.current) setError(err.message);
     }
   };
 
@@ -73,6 +83,7 @@ const [month, setMonth] = useState(currentMonth);
   };
 
   const remove = async (id) => {
+    setConfirmPost(null);
     try {
       await api(`/projects/${project.id}/posts/${id}`, { method: "DELETE" });
       await load();
@@ -138,6 +149,7 @@ const [month, setMonth] = useState(currentMonth);
       {canEdit && (
         <div className="bg-white rounded-xl border border-stone-200 p-4 mb-6 flex flex-col sm:flex-row gap-2">
           <input
+            aria-label={`${meta.noun} URL`}
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && add()}
@@ -145,6 +157,7 @@ const [month, setMonth] = useState(currentMonth);
             className={`${INPUT_CLS} sm:flex-1`}
           />
           <input
+            aria-label="Title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && add()}
@@ -199,7 +212,10 @@ const [month, setMonth] = useState(currentMonth);
                     <div className="min-w-0 flex-1">
                       {p.title && <p className="text-sm font-medium text-stone-800 truncate">{p.title}</p>}
                       <a
-                        href={p.url}
+                        // Same guard as Backlinks and the report document: a
+                        // stored value that isn't http(s) must not become a
+                        // javascript: link.
+                        href={/^https?:\/\//i.test(p.url) ? p.url : undefined}
                         target="_blank"
                         rel="noreferrer"
                         className="text-xs text-orange-700 hover:underline font-data break-all inline-flex items-center gap-1"
@@ -209,7 +225,7 @@ const [month, setMonth] = useState(currentMonth);
                     </div>
                     {canEdit && (
                       <button
-                        onClick={() => remove(p.id)}
+                        onClick={() => setConfirmPost(p)}
                         aria-label="Remove link"
                         title="Remove link"
                         className="p-1.5 rounded-md text-stone-500 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
@@ -223,6 +239,24 @@ const [month, setMonth] = useState(currentMonth);
             </div>
           ))}
         </div>
+      )}
+
+      {confirmPost && (
+        <ConfirmModal
+          title={`Remove this ${meta.noun}?`}
+          confirmLabel="Remove link"
+          onCancel={() => setConfirmPost(null)}
+          onConfirm={() => remove(confirmPost.id)}
+        >
+          {confirmPost.title ? (
+            <span className="block font-medium text-stone-700">{confirmPost.title}</span>
+          ) : null}
+          <span className="block font-data break-all text-xs mt-1">{confirmPost.url}</span>
+          <span className="block mt-2">
+            It also disappears from the report for {confirmPost.month ? monthLabel(confirmPost.month) : "no month"}.
+            Reports already generated keep their own frozen copy.
+          </span>
+        </ConfirmModal>
       )}
     </div>
   );

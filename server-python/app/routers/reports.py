@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import secrets
@@ -22,6 +23,8 @@ from ..access import user_can_access_project
 from ..services import report_service
 from ..services import report_pdf
 from ..services import email_service
+
+logger = logging.getLogger(__name__)
 
 
 _MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
@@ -358,7 +361,7 @@ def send_report(
     except _SkipCover:
         pass
     except Exception as exc:
-        print("report cover thumbnail failed:", exc)
+        logger.warning("report cover thumbnail failed: %s", exc)
 
     html_body = None
     try:
@@ -388,7 +391,7 @@ def send_report(
         }.items():
             html_body = html_body.replace("{{" + _key + "}}", _val or "")
     except Exception as exc:
-        print("report email template failed, sending text only:", exc)
+        logger.warning("report email template failed, sending text only: %s", exc)
         html_body = None
 
     # ONE message to the whole group, rather than the previous separate send per
@@ -415,7 +418,19 @@ def send_report(
             project_id=version["projectId"],
             sent_by=user["id"],
         )
-    delivery = outcome["delivery"]
+        delivery = outcome["delivery"]
+        # Nothing else in the app ever advanced report_version.status past
+        # 'draft', so a version stayed a draft forever: re-generating the same
+        # period kept 409-ing against a report that had already gone out, and a
+        # sent report stayed editable. Only "sent" counts — "outbox" means the
+        # provider hasn't confirmed anything yet, and a queued mail that later
+        # fails must not leave the version marked as delivered.
+        if delivery == "sent":
+            db.execute(
+                "UPDATE report_version SET status = 'sent' WHERE id = ?",
+                (version_id,),
+            )
+
     ok = delivery in ("sent", "outbox")
 
     # Per-address results are kept in the response even though delivery is now

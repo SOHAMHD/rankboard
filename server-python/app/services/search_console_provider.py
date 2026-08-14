@@ -125,14 +125,19 @@ def _query(service, site_url: str, body: dict) -> list[dict]:
     """
     body = {"dataState": _DATA_STATE, **body}
     wanted = int(body.get("rowLimit") or _ROW_LIMIT)
-    # Always request full pages, regardless of how many rows the caller wants.
-    # This was min(wanted, _API_MAX_ROWS), which meant a caller asking for 1000
-    # got page_size == 1000, the first response filled it exactly, and the
-    # short-page break below fired every time — so the loop could never reach a
-    # second page and results were silently capped at `wanted` while the code
-    # read as though pagination worked. `rows[:wanted]` at the end still honours
-    # the caller's limit.
-    page_size = _API_MAX_ROWS
+    # Never ask Google for more rows than the caller can use. This was
+    # _API_MAX_ROWS (25,000) unconditionally, so a table wanting 1,000 rows pulled
+    # 25,000 across the wire — three or four times per request, since a page of
+    # the UI fires several of these.
+    #
+    # The comment that used to sit here claimed min(wanted, _API_MAX_ROWS) "broke
+    # pagination" because the first full page tripped the short-page break. It
+    # doesn't: when page_size == wanted and the page comes back full, the second
+    # half of the break condition (len(rows) >= wanted) is already true, so the
+    # loop is finished on purpose — there is nothing more the caller asked for.
+    # Pagination still does its job whenever `wanted` exceeds _API_MAX_ROWS,
+    # which is the only case that needs more than one round trip.
+    page_size = min(max(int(wanted), 1), _API_MAX_ROWS)
 
     rows: list[dict] = []
     start_row = 0

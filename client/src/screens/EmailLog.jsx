@@ -7,7 +7,6 @@ import {
   LoaderCircle,
   MailCheck,
   MousePointerClick,
-  Paperclip,
   RefreshCw,
   Search,
   Send,
@@ -30,10 +29,6 @@ const STATUS_STYLES = {
   complaint:    { label: "Spam report",  cls: "bg-rose-100 text-rose-700" },
   unsubscribed: { label: "Unsubscribed", cls: "bg-stone-200 text-stone-600" },
 };
-
-const STATUS_FILTERS = [
-  "", "delivered", "opened", "clicked", "bounced", "failed", "complaint", "sent", "queued",
-];
 
 const CATEGORY_LABELS = {
   report: "Report",
@@ -111,11 +106,6 @@ function StatCard({ icon: Icon, label, value, sub, tone = "stone" }) {
   );
 }
 
-
-function Sparkline({ series }) {
- 
-}
-
 function TimelineRow({ event }) {
   const dot = {
     delivered: "bg-teal-400",
@@ -152,6 +142,8 @@ function DetailDrawer({ emailId, onClose }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("timeline");
+  const panelRef = useRef(null);
+  const titleId = "email-detail-title";
 
   useEffect(() => {
     let live = true;
@@ -167,10 +159,19 @@ function DetailDrawer({ emailId, onClose }) {
 
   // Escape closes. Without it the only way out is the X, which on a panel this
   // tall means scrolling back to the top first.
+  //
+  // The same effect sends focus into the panel on open and back to the row
+  // button on close, so opening a message from the keyboard doesn't strand the
+  // user at the top of the document when they close it again.
   useEffect(() => {
+    const previouslyFocused = document.activeElement;
+    panelRef.current?.focus();
     const onKey = (e) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+    };
   }, [onClose]);
 
   return (
@@ -180,11 +181,18 @@ function DetailDrawer({ emailId, onClose }) {
         style={{ backgroundColor: "rgba(15, 23, 42, 0.35)" }}
         onClick={onClose}
       />
-      <aside className="relative w-full max-w-xl bg-stone-50 h-full overflow-y-auto shadow-2xl">
+      <aside
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative w-full max-w-xl bg-stone-50 h-full max-h-screen overflow-y-auto shadow-2xl focus:outline-none"
+      >
         <header className="sticky top-0 bg-white/95 backdrop-blur border-b border-stone-200 px-6 py-4 flex items-start justify-between gap-4 z-10">
           <div className="min-w-0">
             <p className="text-xs text-stone-400 uppercase tracking-wider font-medium">Message</p>
-            <h2 className="text-base font-bold text-stone-900 font-display truncate">
+            <h2 id={titleId} className="text-base font-bold text-stone-900 font-display truncate">
               {detail?.subject || "…"}
             </h2>
           </div>
@@ -337,8 +345,6 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
 
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState("");
-  const [category, setCategory] = useState("");
   const [days, setDays] = useState(30);
   const [page, setPage] = useState(0);
 
@@ -356,10 +362,8 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
   const query = useMemo(() => {
     const p = new URLSearchParams({ days: String(days), limit: String(PAGE_SIZE) });
     if (q) p.set("q", q);
-    if (status) p.set("status", status);
-    if (category) p.set("category", category);
     return p;
-  }, [q, status, category, days]);
+  }, [q, days]);
 
   // Guards against an out-of-order response: a slow request for the previous
   // filter must not overwrite the results of the newer one behind it. One
@@ -494,21 +498,11 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
           />
         </div>
 
-        <div className="mt-3">
-          <Sparkline series={stats?.series} />
-        </div>
-{/* 
-        <p className="text-xs text-stone-400 mt-3 leading-relaxed">
-          Opens are counted from Brevo's tracking pixel. A recipient who blocks remote
-          images never registers one, and Apple's Mail Privacy Protection loads it whether
-          or not anyone read the message — so treat the open figure as a lower bound with
-          noise on top, not a headcount. Delivery, bounces and clicks are exact.
-        </p> */}
-
         <div className="flex flex-wrap items-center gap-2 mt-6">
           <div className="relative flex-1 min-w-[14rem]">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
             <input
+              aria-label="Search recipient or subject"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search recipient or subject…"
@@ -522,7 +516,7 @@ export function EmailLogView({ user, onBack, onPeople, onLogout }) {
                 key={r.days}
                 onClick={() => { setDays(r.days); setPage(0); }}
                 className={`px-2.5 py-2 text-sm font-medium transition-colors ${
-                  days === r.days ? "bg-blue-900 primary ink  text-white" : "text-stone-600 hover:bg-stone-100"
+                  days === r.days ? "bg-orange-600 text-white" : "text-stone-600 hover:bg-stone-100"
                 }`}
               >
                 {r.label}

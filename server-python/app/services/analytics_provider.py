@@ -1,7 +1,10 @@
+import logging
 import threading
 
 from ..config import GOOGLE_SERVICE_ACCOUNT_JSON
 from .response_cache import cached
+
+logger = logging.getLogger(__name__)
 
 # NOTE: positional order matters — _rows() and _totals() read these by index.
 # totalUsers is appended at the END so the existing indices stay valid.
@@ -181,7 +184,15 @@ def _analytics_client():
 
     from google.analytics.data_v1beta import BetaAnalyticsDataClient
 
-    raw = GOOGLE_SERVICE_ACCOUNT_JSON
+    raw = GOOGLE_SERVICE_ACCOUNT_JSON or ""
+    if not raw.strip():
+        # Every caller checks GOOGLE_SERVICE_ACCOUNT_JSON before getting here, but
+        # say so plainly rather than handing "" to from_service_account_json and
+        # getting a FileNotFoundError that reads like a broken key.
+        raise RuntimeError(
+            "GA4 is not configured on the server: set GOOGLE_SERVICE_ACCOUNT_JSON "
+            "to the service-account key path or its JSON contents."
+        )
     if raw.lstrip().startswith("{"):
         import json
         client = BetaAnalyticsDataClient.from_service_account_info(
@@ -261,8 +272,8 @@ def get_analytics(
 
     try:
         client = _analytics_client()
-    except Exception as exc:
-        print("GA4 service-account key load failed:", exc)
+    except Exception:
+        logger.exception("GA4 service-account key load failed")
         return {"error": "Google Analytics isn't configured correctly on the server."}
 
     prop = str(property_id).strip()
@@ -417,8 +428,8 @@ def run_custom_report(
 
     try:
         client = _analytics_client()
-    except Exception as exc:
-        print("GA4 service-account key load failed:", exc)
+    except Exception:
+        logger.exception("GA4 service-account key load failed")
         return {"error": "Google Analytics isn't configured correctly on the server."}
 
     prop = str(property_id).strip()
@@ -479,8 +490,8 @@ def run_custom_report(
             by_dims, ret_total = _returning_by_dims(
                 client, resource, start, end, dimensions, filters, match, limit
             )
-        except Exception as exc:
-            print("GA4 returning-users breakdown failed:", exc)
+        except Exception:
+            logger.exception("GA4 returning-users breakdown failed")
             by_dims, ret_total = {}, 0
         for row in report["rows"]:
             row["metrics"][RETURNING_USERS] = by_dims.get(tuple(row["dims"]), 0)
@@ -525,11 +536,18 @@ def get_returning_users(
     end_date: str | None = None,
     filters: list[dict] | None = None,
     match: str = "AND",
-) -> int:
+) -> int | None:
+    """Returning users for the range, or None when the figure isn't available.
+
+    None and 0 are different answers: 0 means GA4 said nobody came back, None
+    means we never got an answer (quota, auth, a transport error). They used to
+    be the same value, so a failed call rendered as a confident "0 returning
+    users" on the dashboard. Callers should show None as absent, not as zero.
+    """
     start_date = start_date or "28daysAgo"
     end_date = end_date or "today"
     if not property_id or not str(property_id).strip():
-        return 0
+        return None
 
     try:
         from google.analytics.data_v1beta import BetaAnalyticsDataClient
@@ -541,7 +559,7 @@ def get_returning_users(
         )
 
         if not GOOGLE_SERVICE_ACCOUNT_JSON:
-            return 0
+            return None
         client = _analytics_client()
         prop = str(property_id).strip()
         resource = prop if prop.startswith("properties/") else f"properties/{prop}"
@@ -558,7 +576,10 @@ def get_returning_users(
             if str(label).strip().lower() == "returning":
                 return _as_int(row.metric_values[0].value if row.metric_values else "0")
     except Exception:
-        return 0
+        logger.exception("GA4 returning-users query failed for property %s", property_id)
+        return None
+    # Reached only when GA4 answered and no "returning" row came back, which is a
+    # genuine zero — unlike the None above.
     return 0
 
 
