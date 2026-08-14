@@ -377,8 +377,40 @@ def generate(db, project_id: int, period_key: str | None, user_id: int) -> dict:
         raise HTTPException(status, reason)
 
     content = report_document.build_document(gathered)
+    _seed_header_logo(db, project_id, content)
     version_id = freeze(db, gathered, user_id, content=content)
     return get_version(db, version_id, include_data=True)
+
+
+def _seed_header_logo(db, project_id: int, content: dict) -> None:
+    """Copy the project's client logo into the new report's header block.
+
+    Written into the report rather than looked up when the PDF renders, so a
+    report is a fixed record of what was sent: changing a project's logo doesn't
+    silently restyle reports a client already received. The editor's own logo
+    control edits this same field, so per-report overrides keep working.
+
+    Injected here instead of being carried through the gathered blob on purpose —
+    the blob becomes data_json, and routing a ~100 KB data URI through it would
+    store the logo twice in every row. content_json is the only copy, and the only
+    one anything reads.
+
+    Never overwrites a logo the document already has, so a fork keeps whatever the
+    author chose.
+    """
+    row = db.execute(
+        "SELECT client_logo FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    logo = row["client_logo"] if row else None
+    if not logo:
+        return
+
+    for block in (content or {}).get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "report_header" and not block.get("clientLogo"):
+            block["clientLogo"] = logo
+            return
 
 
 def delete_version(db, version_id: int) -> dict:

@@ -17,6 +17,7 @@ import { api } from "../api";
 import { useToast } from "../toast.jsx";
 import { ErrorNote, BTN_PRIMARY, BTN_GHOST } from "../ui";
 import { createBlobNode } from "../lib/blobNode";
+import { processLogoFile } from "../lib/logoImage";
 import DownloadPdfButton from "../lib/DownloadPdfButton";
 import {
   makeSuggestion,
@@ -248,128 +249,24 @@ function TargetsGridEditor({ block, onSetValue }) {
   );
 }
 
-// The logo is rendered at most 230x56 CSS px (cover), 200x40 (running header).
-// Storing it at native resolution is what pushed content_json past the server's
-// 500,000-char cap and produced "Report document is too large." on save. ~3x the
-// largest print size is plenty sharp, and LOGO_MAX_CHARS keeps the encoded data
-// URI to a small fraction of the document budget.
-const LOGO_MAX_W = 720;
-const LOGO_MAX_H = 200;
-const LOGO_MAX_CHARS = 120000;
-
-function encodeScaled(src, sx, sy, sw, sh, scale) {
-  const o = document.createElement("canvas");
-  o.width = Math.max(1, Math.round(sw * scale));
-  o.height = Math.max(1, Math.round(sh * scale));
-  const ctx = o.getContext("2d");
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, o.width, o.height);
-  return o.toDataURL("image/png");
-}
-
-// Fit inside LOGO_MAX_W/H, then keep shrinking while the encoded string is over
-// budget (a photo-like logo can still be heavy at 720px wide).
-function encodeWithinBudget(src, sx, sy, sw, sh) {
-  let scale = Math.min(1, LOGO_MAX_W / sw, LOGO_MAX_H / sh);
-  let out = encodeScaled(src, sx, sy, sw, sh, scale);
-  while (out.length > LOGO_MAX_CHARS && scale > 0.08) {
-    scale *= 0.75;
-    out = encodeScaled(src, sx, sy, sw, sh, scale);
-  }
-  return out;
-}
-
-function trimLogo(dataUrl) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      try {
-        // Downscale BEFORE scanning. This used to draw at naturalWidth ×
-        // naturalHeight and walk every pixel in a nested JS loop — a 12MP phone
-        // photo is ~12 million iterations with four typed-array reads each, which
-        // froze the tab for seconds with no spinner and no size guard. The trim is
-        // only ever used to find the content bounds, and those scale, so working
-        // at logo resolution gives the same answer for a fraction of the work.
-        const SCAN_MAX = 900;
-        const scale = Math.min(1, SCAN_MAX / Math.max(img.naturalWidth, img.naturalHeight));
-        const c = document.createElement("canvas");
-        c.width = Math.max(1, Math.round(img.naturalWidth * scale));
-        c.height = Math.max(1, Math.round(img.naturalHeight * scale));
-        const ctx = c.getContext("2d");
-        ctx.drawImage(img, 0, 0, c.width, c.height);
-        const { data } = ctx.getImageData(0, 0, c.width, c.height);
-        let top = c.height, left = c.width, right = 0, bottom = 0, found = false;
-        for (let y = 0; y < c.height; y++) {
-          for (let x = 0; x < c.width; x++) {
-            const i = (y * c.width + x) * 4;
-            const a = data[i + 3], r = data[i], g = data[i + 1], b = data[i + 2];
-            const content = a > 12 && !(r > 245 && g > 245 && b > 245);
-            if (content) {
-              found = true;
-              if (x < left) left = x;
-              if (x > right) right = x;
-              if (y < top) top = y;
-              if (y > bottom) bottom = y;
-            }
-          }
-        }
-        if (!found) return resolve(encodeWithinBudget(c, 0, 0, c.width, c.height));
-        const pad = 2;
-        left = Math.max(0, left - pad); top = Math.max(0, top - pad);
-        right = Math.min(c.width - 1, right + pad); bottom = Math.min(c.height - 1, bottom + pad);
-        const w = right - left + 1, h = bottom - top + 1;
-        resolve(encodeWithinBudget(c, left, top, w, h));
-      } catch (e) {
-        resolve(dataUrl);
-      }
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
-}
-
-//: Reject before decoding. A 25 MB image is a mistake, not a logo, and finding
-//: out after the decode means the user has already waited for it.
-const LOGO_MAX_BYTES = 8 * 1024 * 1024;
-
 function HeaderEditor({ block, onSetLogo }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const onFile = (e) => {
     const f = e.target.files && e.target.files[0];
-    if (!f || !f.type.startsWith("image/")) return;
-    if (f.size > LOGO_MAX_BYTES) {
-      toast.error(
-        "That file is over 8 MB. Save it as a PNG or JPG a few hundred KB in size and try again.",
-        { title: "Image too large" }
-      );
-      return;
-    }
+    e.target.value = "";
+    if (!f) return;
     // The trim is CPU-bound even after downscaling, so say something while it
     // runs — silence read as a broken upload.
     setBusy(true);
-    const reader = new FileReader();
-    reader.onload = () => {
-      trimLogo(reader.result).then((trimmed) => {
-        // trimLogo falls back to the untouched data URI when the browser cannot
-        // decode the image. Storing that would fail the save with an unhelpful
-        // "too large", so say so here instead.
-        if (typeof trimmed === "string" && trimmed.length > LOGO_MAX_CHARS * 2) {
-          toast.error(
-            "That image couldn't be resized. Save it as a PNG or JPG under about 2 MB and try again.",
-            { title: "Logo too large" }
-          );
-          setBusy(false);
-          return;
-        }
-        onSetLogo(block.id, trimmed);
-        setBusy(false);
-      }).catch(() => setBusy(false));
-    };
-    reader.onerror = () => setBusy(false);
-    reader.readAsDataURL(f);
-    e.target.value = "";
+    processLogoFile(f).then((res) => {
+      setBusy(false);
+      if (!res.ok) {
+        toast.error(res.message, { title: res.title });
+        return;
+      }
+      onSetLogo(block.id, res.dataUrl);
+    });
   };
   return (
     <div>

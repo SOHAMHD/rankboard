@@ -18,6 +18,14 @@ dist/
 build/
 .vite/
 
+# Application logs — written next to the app so a shared-hosting user can read
+# them without journal access. Rotated by logging_setup, never committed.
+server-python/logs/
+
+# Kept by deploy-frontend.sh for one-command rollback.
+public_html.previous/
+*.staging.*
+
 # Editor / OS
 .vscode/
 .DS_Store

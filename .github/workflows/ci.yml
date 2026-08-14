@@ -1,0 +1,120 @@
+name: CI
+
+# Runs the test suite and builds the frontend on every push. Two things this is
+# for, both learned the hard way:
+#
+#   1. The suite exists but only ran when someone remembered. Three tests calling
+#      create_token() without its required `tfa` argument sat broken until a full
+#      run happened to catch them.
+#
+#   2. The deploy target's Node is v16 and can't build the frontend, so the zip
+#      has to be built somewhere else — and building it locally has meant a
+#      corrupt node_modules and a segfaulting esbuild binary. CI uploads a
+#      known-good zip on every push, ready for deploy-frontend.sh.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push makes an in-flight run irrelevant.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the server's python3.11.
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            server-python/requirements.txt
+            server-python/requirements-dev.txt
+
+      - name: Install
+        working-directory: server-python
+        # requirements.txt pulls playwright, google-api-python-client and
+        # psycopg[binary] — heavier than the suite needs, but installing exactly
+        # what the server installs is the point: an import that works only
+        # because a package is missing locally would pass a slimmer install.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Test
+        working-directory: server-python
+        # conftest.py supplies DATABASE_URL / JWT_SECRET / SKIP_DB_INIT, and no
+        # test opens a connection — so this needs no database service.
+        run: pytest
+
+      - name: Check every module imports
+        working-directory: server-python
+        # pytest only imports what the tests touch. A router or script broken by
+        # a rename — a deleted module still in an import list, say — passes the
+        # suite and fails at boot. This is the check that would have caught the
+        # locations router being removed while main.py still imported it.
+        env:
+          DATABASE_URL: postgresql://ci/ci
+          JWT_SECRET: ci-not-a-real-secret
+          SKIP_DB_INIT: "1"
+        run: |
+          python -c "import app.main" || exit 1
+          for f in scripts/*.py; do
+            python -c "import importlib,sys; importlib.import_module('scripts.$(basename "$f" .py))" \
+              || { echo "FAILED to import $f"; exit 1; }
+          done
+          echo "app.main and every script import cleanly"
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        working-directory: client
+        # Vite fails on an unresolved import, which is the class of mistake that
+        # has bitten this project most: a component referencing a helper that was
+        # just deleted, or a missing named export.
+        run: npm run build
+
+      - name: Package for deploy
+        working-directory: client/dist
+        # No wrapping folder — deploy-frontend.sh requires index.html at the top
+        # level, and unzips straight into the docroot.
+        run: zip -r -X ../../seo-frontend.zip .
+
+      - name: Report the entry bundle
+        run: |
+          ENTRY=$(grep -oE 'assets/index-[A-Za-z0-9_-]+\.js' client/dist/index.html | head -1)
+          echo "Entry bundle: $ENTRY" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deploy with: ./deploy-frontend.sh ~/seo-frontend.zip" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seo-frontend
+          path: seo-frontend.zip
+          # Long enough to still have the artifact for the release before last if
+          # a deploy needs undoing.
+          retention-days: 30

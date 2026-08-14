@@ -34,6 +34,7 @@ from ..services.search_console_provider import (
     query_performance,
 )
 from ..services.excel_service import build_sample_workbook, parse_keyword_workbook
+from ..services.images import normalize_logo
 from ..services import keyword_rank_service
 from ..services.email_service import clean_recipient_set, upsert_project_recipients
 
@@ -46,6 +47,11 @@ def row_to_project(p: sqlite3.Row, keyword_count: int | None = None) -> dict:
         "name": p["name"],
         "clientName": p["client_name"],
         "domain": p["domain"],
+        # A data URI, so this is by far the largest field on the row. Included in
+        # the list response regardless: the projects grid renders every card's
+        # logo, and fetching them one by one would be 14 extra round trips to
+        # paint one screen.
+        "clientLogo": p["client_logo"],
         "gaPropertyId": p["ga_property_id"],
         "gscSiteUrl": p["gsc_site_url"],
         "active": bool(p["active"]),
@@ -431,6 +437,19 @@ def normalize_client_name(raw: str | None) -> str | None:
     return " ".join(raw.split())[:120]
 
 
+def normalize_client_logo(raw: str | None) -> str | None:
+    """HTTP wrapper around the shared image validator.
+
+    The rules live in services/images.py because the PDF renderer applies the same
+    ones — a format accepted here but dropped there would look like a successful
+    upload and a missing logo.
+    """
+    try:
+        return normalize_logo(raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 def normalize_ga_property_id(raw: str | None) -> str | None:
     if not raw or not raw.strip():
         return None
@@ -601,6 +620,8 @@ class ProjectIn(BaseModel):
     name: str
     clientName: str | None = None
     domain: str | None = None
+    #: The client's logo as an uploaded data URI. See services/images.py.
+    clientLogo: str | None = None
     gaPropertyId: str | None = None
     #: Optional override. Normally the property is matched from `domain`; this is
     #: for the cases where it can't be — an ambiguous domain, or a property that
@@ -617,12 +638,14 @@ def create_project(body: ProjectIn, db: sqlite3.Connection = Depends(get_db)):
     gsc_site_url = resolve_gsc_site_url(domain, body.gscSiteUrl)
     verify_gsc_site_url(gsc_site_url)
     cur = db.execute(
-        "INSERT INTO projects (name, client_name, domain, ga_property_id, gsc_site_url, active)"
-        " VALUES (?, ?, ?, ?, ?, 1)",
+        "INSERT INTO projects (name, client_name, domain, client_logo, ga_property_id,"
+        " gsc_site_url, active)"
+        " VALUES (?, ?, ?, ?, ?, ?, 1)",
         (
             name,
             normalize_client_name(body.clientName),
             domain,
+            normalize_client_logo(body.clientLogo),
             normalize_ga_property_id(body.gaPropertyId),
             gsc_site_url,
         ),
@@ -635,6 +658,7 @@ class ProjectUpdateIn(BaseModel):
     active: bool | None = None
     clientName: str | None = None
     domain: str | None = None
+    clientLogo: str | None = None
     gaPropertyId: str | None = None
     gscSiteUrl: str | None = None
 
@@ -656,6 +680,11 @@ def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connectio
     if body.gaPropertyId is not None:
         fields.append("ga_property_id = ?")
         values.append(normalize_ga_property_id(body.gaPropertyId))
+    # model_fields_set, not "is not None": null is how the form removes a logo,
+    # and treating it as "unchanged" would make the remove button do nothing.
+    if "clientLogo" in body.model_fields_set:
+        fields.append("client_logo = ?")
+        values.append(normalize_client_logo(body.clientLogo))
 
     # Re-resolve when either side of the decision moved. Editing the domain alone
     # used to leave gsc_site_url pointing at the old site, silently — and the form

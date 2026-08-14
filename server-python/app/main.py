@@ -6,6 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from . import logging_setup
 from .config import CORS_ORIGINS, DEBUG
 from .db import close_pool, db_session, init_db
 from .services import report_pdf
@@ -25,10 +26,11 @@ from .routers import (
 # Modules across the app log through logging.getLogger(__name__); without a
 # handler configured here those records went nowhere and the app's only visible
 # diagnostics were stray print()s on stdout with no timestamp or source.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+#
+# This was logging.basicConfig(), i.e. stdout only, i.e. the systemd journal —
+# which the cPanel user has no permission to read. Every diagnostic was
+# effectively write-only. logging_setup adds a rotating file next to the app.
+LOG_FILE = logging_setup.configure()
 logger = logging.getLogger(__name__)
 
 init_db()

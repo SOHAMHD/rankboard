@@ -3,6 +3,7 @@ import re
 from html import escape as _e
 
 from ..config import AGENCY_NAME
+from .images import DATA_IMAGE_RE
 
 _ASSETS = os.path.join(os.path.dirname(__file__), "..", "assets", "report_design")
 
@@ -31,7 +32,11 @@ def _safe_color(v):
     return s if _COLOR_RE.match(s) else None
 
 
-_DATA_IMAGE_RE = re.compile(r"^data:image/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=\s]+$", re.I)
+#: Was defined here. Moved to services/images.py so the projects API validates
+#: uploads against the same expression the renderer accepts — two copies would
+#: eventually diverge, and the symptom would be a logo that saves fine and then
+#: silently doesn't appear in the PDF.
+_DATA_IMAGE_RE = DATA_IMAGE_RE
 
 
 def _safe_image_src(v) -> str:

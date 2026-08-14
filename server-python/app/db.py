@@ -81,12 +81,28 @@ CREATE TABLE IF NOT EXISTS projects (
   name            TEXT NOT NULL,
   client_name     TEXT,
   domain          TEXT,
+  client_logo     TEXT,
   ga_property_id  TEXT,
   gsc_site_url    TEXT,
   active          INTEGER NOT NULL DEFAULT 1,
   created_at      TEXT NOT NULL DEFAULT to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD HH24:MI:SS')
 );
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS client_name    TEXT;
+
+-- The client's logo, as a `data:image/...;base64,...` URI rather than a path or a
+-- Storage URL.
+--
+-- Held inline because the PDF renderer is headless Chromium: an external <img>
+-- src makes it fetch over the network mid-render, which can hang or silently
+-- produce a logo-less cover, and the render already runs behind a timeout on a
+-- single worker. A data URI has no such failure mode. It also means the logo
+-- travels with a database backup, and needs no writable asset directory on a
+-- shared host where file permissions have caused trouble before.
+--
+-- The client caps the encoded string well under 120 KB (see lib/logoImage.js),
+-- and normalize_client_logo rejects anything larger server-side, so this stays a
+-- small TEXT value and not a blob store.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS client_logo    TEXT;
 
 -- The location feature is gone from the code: a country/region/city taxonomy
 -- imported from DataForSEO, whose only purpose was scoping automated rank checks

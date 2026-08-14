@@ -1,6 +1,9 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import { LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
+import { processLogoFile } from "../lib/logoImage";
+import ProjectLogo from "../lib/ProjectLogo";
+import { useToast } from "../toast.jsx";
 import { TopBar, Modal, ConfirmModal, ErrorNote, Toggle, can, INPUT_CLS, BTN_PRIMARY } from "../ui";
 import ProjectRecipients from "../lib/ProjectRecipients";
 
@@ -309,6 +312,69 @@ function GscPropertyField({ gsc }) {
   );
 }
 
+function LogoField({ value, onChange }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+
+  const onFile = (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    setBusy(true);
+    processLogoFile(f).then((res) => {
+      setBusy(false);
+      if (!res.ok) {
+        toast.error(res.message, { title: res.title });
+        return;
+      }
+      onChange(res.dataUrl);
+    });
+  };
+
+  return (
+    <div className="mt-4">
+      <span className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+        Client logo <span className="normal-case font-normal">(optional)</span>
+      </span>
+      <div className="flex items-center gap-3">
+        {value ? (
+          <img
+            src={value}
+            alt="Client logo"
+            className="h-12 max-w-[10rem] rounded-lg border border-stone-200 bg-white p-1 object-contain"
+          />
+        ) : (
+          <span className="text-sm text-stone-400">None</span>
+        )}
+        <label
+          className={`text-xs px-2.5 py-1.5 rounded-md border border-stone-200 inline-flex items-center gap-1.5 ${
+            busy
+              ? "text-stone-400 cursor-wait"
+              : "text-stone-600 hover:bg-orange-50 hover:text-orange-700 cursor-pointer"
+          }`}
+        >
+          {busy && <LoaderCircle size={12} className="animate-spin" />}
+          {busy ? "Processing…" : value ? "Replace" : "Upload"}
+          <input type="file" accept="image/*" onChange={onFile} disabled={busy} className="hidden" />
+        </label>
+        {value && (
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            className="text-xs text-stone-400 hover:text-red-600"
+          >
+            Remove
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-stone-400 mt-2">
+        Shown on this project's card and on its report PDFs. Cropped of surrounding
+        whitespace and resized on upload. PNG with a transparent background works best.
+      </p>
+    </div>
+  );
+}
+
 function ProjectCard({ project, user, onOpen, onEdit, onToggle, onDelete }) {
   const showToggle = can(user, "toggleProject");
   const showEdit = can(user, "toggleProject");
@@ -332,7 +398,9 @@ function ProjectCard({ project, user, onOpen, onEdit, onToggle, onDelete }) {
       }`}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="flex min-w-0 items-start gap-3">
+          <ProjectLogo project={project} size={60} />
+          <div className="min-w-0">
           <h3 className="font-semibold text-stone-900 truncate font-display">
             {openable ? (
               <button
@@ -353,6 +421,7 @@ function ProjectCard({ project, user, onOpen, onEdit, onToggle, onDelete }) {
           <p className="text-xs text-stone-400 mt-0.5">
             Added {project.createdAt?.slice(0, 10)}
           </p>
+          </div>
         </div>
         <span
           className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${
@@ -421,6 +490,7 @@ function AddProjectModal({ onClose, onAdded }) {
   const [clientName, setClientName] = useState("");
   const [domain, setDomain] = useState("");
   const [gaPropertyId, setGaPropertyId] = useState("");
+  const [clientLogo, setClientLogo] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const gsc = useGscProperty(domain);
@@ -436,6 +506,7 @@ function AddProjectModal({ onClose, onAdded }) {
           name: name.trim(),
           clientName: clientName.trim() || null,
           domain: domain.trim() || null,
+          clientLogo,
           gaPropertyId: gaPropertyId.trim() || null,
           // Only sent when the domain couldn't decide on its own; otherwise the
           // server matches the property itself, from the list Google gives it.
@@ -507,6 +578,8 @@ function AddProjectModal({ onClose, onAdded }) {
       />
       <p className="text-xs text-stone-400 mt-2">Google Analytics 4 property ID — powers the Traffic (GA4) panel for this project.</p>
 
+      <LogoField value={clientLogo} onChange={setClientLogo} />
+
       {/* Was set on failure and never rendered, so "Create project" spun, stopped,
           and nothing happened — server validation was invisible. */}
       <ErrorNote>{error}</ErrorNote>
@@ -522,6 +595,7 @@ function EditProjectModal({ project, onClose, onSaved }) {
   const [clientName, setClientName] = useState(project.clientName || "");
   const [domain, setDomain] = useState(project.domain || "");
   const [gaPropertyId, setGaPropertyId] = useState(project.gaPropertyId || "");
+  const [clientLogo, setClientLogo] = useState(project.clientLogo || null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   // Seeded with what's stored: if the saved property isn't what this domain
@@ -538,6 +612,7 @@ function EditProjectModal({ project, onClose, onSaved }) {
         body: {
           clientName: clientName.trim() || null,
           domain: domain.trim() || null,
+          clientLogo,
           gaPropertyId: gaPropertyId.trim() || null,
           gscSiteUrl: gsc.override || null,
         },
@@ -596,6 +671,8 @@ function EditProjectModal({ project, onClose, onSaved }) {
         className={INPUT_CLS}
       />
       <p className="text-xs text-stone-400 mt-2">Google Analytics 4 property ID — powers the Traffic (GA4) panel for this project.</p>
+
+      <LogoField value={clientLogo} onChange={setClientLogo} />
 
       {/* Its own endpoint and its own save button — a rejected address here
           shouldn't stop you changing the domain above. */}

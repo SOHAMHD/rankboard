@@ -4,7 +4,6 @@ import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef
 // both for a logo rendered at 28px.
 const logoUrl = "/infapp-logo.png";
 import {
-  BarChart3,
   RefreshCw,
   ChevronDown,
   ChevronLeft,
@@ -29,6 +28,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { ChangePasswordModal, can, isAuthor, BTN_PRIMARY, BTN_GHOST } from "../ui";
+import ProjectLogo from "../lib/ProjectLogo";
 import { useToast } from "../toast.jsx";
 // Only one of these is ever mounted at a time (see the activeNav switch below),
 // so they don't belong in the Dashboard's own chunk. Importing them eagerly meant
@@ -217,9 +217,10 @@ export function ProjectDashboard({ user, projectId, onBack, onLogout }) {
             <ChevronLeft size={14} /> All projects
           </button>
           <div className="flex items-center gap-2.5">
-            <div className="h-9 w-9 rounded-xl bg-orange-600 flex items-center justify-center shrink-0 shadow-sm">
-              <BarChart3 size={17} className="text-white" />
-            </div>
+            {/* The client's logo when the project has one, otherwise the chart
+                tile this used to be unconditionally. Same component as the
+                projects list so the two can't diverge. */}
+            <ProjectLogo project={project} size={36} />
             <div className="min-w-0">
               <p className="text-stone-900 text-sm font-semibold leading-tight truncate font-display">{project.name}</p>
               <p className="text-xs text-stone-500 flex items-center gap-1.5 mt-0.5">

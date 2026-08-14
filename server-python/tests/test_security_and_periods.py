@@ -24,7 +24,7 @@ def claims(token: str) -> dict:
 # what makes a password change end other sessions.
 
 def test_the_token_version_is_embedded():
-    assert claims(create_token(7, "Admin", token_version=3))["tv"] == 3
+    assert claims(create_token(7, "Admin", "verified", token_version=3))["tv"] == 3
 
 
 def test_a_pending_token_carries_it_too():
@@ -36,7 +36,11 @@ def test_a_pending_token_carries_it_too():
 def test_it_defaults_to_zero():
     # Tokens minted before the claim existed decode as 0, which must compare equal
     # to a fresh user's token_version of 0 — otherwise a deploy signs everyone out.
-    assert claims(create_token(7, "Admin"))["tv"] == 0
+    #
+    # `tfa` is passed explicitly here and in every other call: it has no default,
+    # deliberately, so that a caller which forgets to think about the second
+    # factor can't mint a fully verified session by omission.
+    assert claims(create_token(7, "Admin", "verified"))["tv"] == 0
 
 
 def test_a_pending_token_is_marked_pending_and_short_lived():
@@ -59,7 +63,7 @@ def test_the_version_comparison(token_tv, user_tv, accepted):
 
 def test_the_subject_is_a_string():
     # require_auth does int(payload["sub"]); PyJWT requires `sub` to be a string.
-    assert claims(create_token(42, "Team"))["sub"] == "42"
+    assert claims(create_token(42, "Team", "verified"))["sub"] == "42"
 
 
 # ── redaction ─────────────────────────────────────────────────────────
