@@ -1,13 +1,13 @@
 """Who can do what to a report.
 
-Report deletion is destructive and unrecoverable — `delete_version` removes the
-row, and a sent report is a record of something a client received. Team members
-author reports but must not be able to delete them.
+Team authors reports and, by request, can delete them — a mis-generated draft is
+theirs to clear up. Sending stays Admin-only: a deleted report can be regenerated,
+an email to a client cannot be recalled.
 
 These assertions are about the wiring, not the logic: the gate is a decorator on
 the route, so the failure mode isn't a wrong answer, it's a missing dependency
-nobody notices. Asserted against the route table so that adding a delete route,
-or loosening this one, fails here.
+nobody notices. Asserted against the route table so that adding a second delete
+route, or dropping the gate from this one, fails here.
 """
 
 import inspect
@@ -26,8 +26,9 @@ from app.routers import reports
 
 # ── the role sets ─────────────────────────────────────────────────────
 
-def test_team_cannot_delete_reports():
-    assert "Team" not in DELETER_ROLES
+def test_team_can_delete_reports():
+    # Changed deliberately: Team used to be excluded.
+    assert "Team" in DELETER_ROLES
 
 
 def test_team_cannot_send_reports():
@@ -36,18 +37,28 @@ def test_team_cannot_send_reports():
 
 
 def test_team_can_still_author_reports():
-    # The point of the role — Team writes reports, Admin releases and removes them.
+    # Team writes reports and now removes its own; Admin is what stands between a
+    # report and the client's inbox.
     assert "Team" in AUTHOR_ROLES
 
 
 def test_clients_can_do_none_of_the_three():
+    # Widening DELETER_ROLES must not have reached Client, who only ever reads.
     for role_set in (AUTHOR_ROLES, SENDER_ROLES, DELETER_ROLES):
         assert "Client" not in role_set
 
 
-def test_only_admins_delete_or_send():
-    assert set(DELETER_ROLES) == {"Super Admin", "Admin"}
+def test_only_admins_send():
     assert set(SENDER_ROLES) == {"Super Admin", "Admin"}
+
+
+def test_deleting_is_open_to_the_three_staff_roles():
+    assert set(DELETER_ROLES) == {"Super Admin", "Admin", "Team"}
+
+
+def test_deleting_is_still_not_open_to_everyone():
+    # The set is wider than it was; it must not have become "any signed-in user".
+    assert set(DELETER_ROLES) < set(PERMISSIONS)
 
 
 # ── the route wiring ──────────────────────────────────────────────────

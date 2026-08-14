@@ -27,7 +27,12 @@ export const isManager = (user) => user?.role === ROLE.MANAGER;
 // isAuthor below needs it.
 const isTeamMember = (user) => user?.role === ROLE.TEAM_MEMBER;
 export const isAuthor = (user) => isAdmin(user) || isManager(user) || isTeamMember(user);
-export const isReportDeleter = (user) => isAdmin(user) || isManager(user);
+// Team included: they author reports, so clearing up a mis-generated draft
+// shouldn't need an Admin. Mirrors DELETER_ROLES in permissions.py — the server is
+// the actual gate, this only decides whether the button is drawn.
+export const isReportDeleter = (user) => isAdmin(user) || isManager(user) || isTeamMember(user);
+// Sending stays Admin-only. A deleted report can be regenerated; an email to a
+// client can't be recalled.
 export const isReportSender = (user) => isAdmin(user) || isManager(user);
 
 export const ROLE_LABELS = {

@@ -16,7 +16,18 @@ ADMIN_ROLE = "Super Admin"
 SCOPED_ROLES = frozenset({"Team", "Client"})
 AUTHOR_ROLES = frozenset({"Super Admin", "Admin", "Team"})
 SENDER_ROLES = frozenset({"Super Admin", "Admin"})
-DELETER_ROLES = frozenset({"Super Admin", "Admin"})
+
+#: Who can delete a report. Includes Team by request: they author reports, so a
+#: mis-generated draft is theirs to clear up without waiting for an Admin.
+#:
+#: Deliberately still narrower than it looks. `_require_version_access` applies as
+#: well, so a Team member can only delete reports on projects they're assigned to,
+#: and the client asks for a second confirmation before destroying a report whose
+#: status is 'sent' — that one is a record of something a client received.
+#:
+#: Sending stays Admin-only: deleting is recoverable by regenerating, emailing a
+#: client is not.
+DELETER_ROLES = frozenset({"Super Admin", "Admin", "Team"})
 
 
 def can(role: str, action: str) -> bool:
