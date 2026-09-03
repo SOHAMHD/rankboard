@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Send, LoaderCircle, X, Plus, Mail, Users, Save, Bookmark } from "lucide-react";
 import { api } from "../api";
-import { BTN_PRIMARY, BTN_GHOST, INPUT_CLS } from "../ui";
+import { BTN_PRIMARY, BTN_GHOST, INPUT_CLS, monthLabel } from "../ui";
 import { useToast } from "../toast.jsx";
 import AddressInput, { foldDraft } from "./AddressInput";
+
+//: Order matters — it's the order the attachments arrive in, and the order the
+//: server splits them into when sending separately.
+const ATTACH_OPTIONS = [
+  { key: "pdf", label: "Standard Report (PDF)" },
+  { key: "xlsx", label: "Excel Report (.xlsx)" },
+];
 
 export default function SendReportButton({
   versionId,
@@ -28,6 +35,10 @@ export default function SendReportButton({
   const [savedError, setSavedError] = useState(null);
   const [savingDefault, setSavingDefault] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
+  // PDF only by default: attaching the Excel roll-up to a client email should be
+  // something somebody chose, not something they inherited from the last send.
+  const [formats, setFormats] = useState(["pdf"]);
+  const [separate, setSeparate] = useState(false);
   const toast = useToast();
   const panelRef = useRef(null);
 
@@ -68,6 +79,8 @@ export default function SendReportButton({
     setError(null);
     setSavedAt(null);
     setSavedError(null);
+    setFormats(["pdf"]);
+    setSeparate(false);
   };
 
   // Prefill from the project's saved recipients.
@@ -128,6 +141,7 @@ export default function SendReportButton({
     setCcDraft("");
 
     if (to.values.length === 0) { setError("Add at least one email address."); return; }
+    if (formats.length === 0) { setError("Choose at least one format to attach."); return; }
 
     setSending(true);
     setError(null);
@@ -140,6 +154,8 @@ export default function SendReportButton({
           cc: copies.values.length ? copies.values : undefined,
           subject: subject.trim() || undefined,
           message: message.trim() || undefined,
+          formats,
+          separate: separate && formats.length > 1,
         },
       });
       const failed = res.failed || 0;
@@ -220,6 +236,15 @@ export default function SendReportButton({
   const totalAddresses = emails.length + cc.length;
   const busy = sending || savingDefault;
 
+  // Rebuilt from ATTACH_OPTIONS rather than appended to, so the list stays in a
+  // fixed order however the boxes are clicked.
+  const toggleFormat = (key, on) =>
+    setFormats((prev) =>
+      ATTACH_OPTIONS.map((o) => o.key).filter((k) =>
+        k === key ? on : prev.includes(k)
+      )
+    );
+
   const trigger = label ? (
     <button onClick={() => setOpen(true)} className={`${BTN_GHOST} px-3 py-1.5 ${className}`}>
       <Send size={14} /> Send report
@@ -260,12 +285,42 @@ export default function SendReportButton({
                   Send report by email
                 </h3>
                 <p className="text-sm text-stone-500 mt-0.5">
-                  {periodKey ? `${periodKey} report` : "This report"} will be attached as a PDF.
+                  {periodKey ? `${monthLabel(periodKey)} report` : "This report"} — choose what to attach.
                 </p>
               </div>
               <button onClick={close} disabled={busy} className="text-stone-400 hover:text-stone-700 disabled:opacity-40">
                 <X size={18} />
               </button>
+            </div>
+
+            <div className="mt-4">
+              <span className="block text-xs font-medium text-stone-600 mb-1.5">Attach</span>
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {ATTACH_OPTIONS.map((opt) => (
+                  <label key={opt.key} className="inline-flex items-center gap-2 text-sm text-stone-700">
+                    <input
+                      type="checkbox"
+                      checked={formats.includes(opt.key)}
+                      onChange={(e) => toggleFormat(opt.key, e.target.checked)}
+                      disabled={busy}
+                      className="accent-orange-600 cursor-pointer"
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+              {formats.length > 1 && (
+                <label className="mt-2 inline-flex items-center gap-2 text-xs text-stone-600">
+                  <input
+                    type="checkbox"
+                    checked={separate}
+                    onChange={(e) => setSeparate(e.target.checked)}
+                    disabled={busy}
+                    className="accent-orange-600 cursor-pointer"
+                  />
+                  Send as two separate emails
+                </label>
+              )}
             </div>
 
             <div className="flex items-baseline justify-between mt-4 mb-1">

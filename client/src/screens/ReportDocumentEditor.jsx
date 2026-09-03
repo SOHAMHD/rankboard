@@ -15,10 +15,10 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import { useToast } from "../toast.jsx";
-import { ErrorNote, BTN_PRIMARY, BTN_GHOST } from "../ui";
+import { ErrorNote, BTN_PRIMARY, BTN_GHOST, monthLabel } from "../ui";
 import { createBlobNode } from "../lib/blobNode";
 import { processLogoFile } from "../lib/logoImage";
-import DownloadPdfButton from "../lib/DownloadPdfButton";
+import DownloadReportButton from "../lib/DownloadReportButton";
 import {
   makeSuggestion,
   SuggestionMenu,
@@ -557,7 +557,7 @@ function EditableDoc({ version, blobs, canSend = false }) {
       <div className="sticky top-0 z-30 -mx-6 px-6 py-3 mb-3 flex flex-wrap items-center justify-between gap-3 bg-stone-100/90 backdrop-blur-sm border-b border-stone-200">
         <div>
           <h2 className="text-lg font-bold text-stone-900 font-display">
-            Edit report · {version.periodKey}
+            Edit report · {monthLabel(version.periodKey)}
           </h2>
           <p className="text-xs text-stone-400">#{version.id} · draft</p>
         </div>
@@ -565,7 +565,7 @@ function EditableDoc({ version, blobs, canSend = false }) {
           {savedAt && !saveError && (
             <span className="text-xs text-emerald-600">Saved {savedAt.toLocaleTimeString()}</span>
           )}
-          <DownloadPdfButton
+          <DownloadReportButton
             versionId={version.id}
             periodKey={version.periodKey}
             projectName={version.content?.blocks?.find((b) => b.type === "report_header")?.projectName}

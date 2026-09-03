@@ -187,6 +187,11 @@ def resend_invite(user_id: int, db: sqlite3.Connection = Depends(get_db)):
         "       token_version = token_version + 1 WHERE id = ?",
         (bcrypt.hashpw(temp_password.encode(), bcrypt.gensalt()).decode(), user_id),
     )
+    # The backup codes go with the secret. Clearing totp_enabled but leaving these
+    # behind left the old second factor working: anyone still holding a code from
+    # before the re-invite could present it instead of enrolling again, which is
+    # exactly what the reset above exists to prevent.
+    db.execute("DELETE FROM twofa_backup_codes WHERE user_id = ?", (user_id,))
     email_record = send_invite_email(
         db, name=user["name"], email=user["email"], role=user["role"], temp_password=temp_password
     )

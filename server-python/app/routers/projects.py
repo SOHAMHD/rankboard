@@ -545,6 +545,8 @@ def resolve_gsc_site_url(
     domain: str | None,
     explicit: str | None,
     current: str | None = None,
+    *,
+    domain_changed: bool = True,
 ) -> str | None:
     """Decide a project's Search Console property.
 
@@ -567,7 +569,15 @@ def resolve_gsc_site_url(
       4. several match (a bare *and* a www property) -> keep `current` if it is
          one of them, otherwise give up rather than guess; picking one would
          silently report a different site's numbers
-      5. none match -> None, the domain genuinely has no property
+      5. none match -> None when the domain just changed, because the property the
+         project holds belongs to the site it is moving away from. Otherwise
+         `current`: a save that never touched the domain must not drop a working
+         property just because the service account can't see it from here.
+
+    That last distinction is not hypothetical. The project form no longer has a
+    field for the property, so every save re-resolves — and without it, opening
+    Edit project on a project whose property the service account can't currently
+    enumerate and pressing Save silently emptied its Search Console panel.
     """
     if explicit and explicit.strip():
         return normalize_gsc_site_url(explicit)
@@ -584,7 +594,7 @@ def resolve_gsc_site_url(
         return matches[0]
     if len(matches) > 1:
         return current if current in matches else None
-    return None
+    return None if domain_changed else current
 
 
 @router.get("/gsc-properties/match",
@@ -656,6 +666,7 @@ def create_project(body: ProjectIn, db: sqlite3.Connection = Depends(get_db)):
 
 class ProjectUpdateIn(BaseModel):
     active: bool | None = None
+    name: str | None = None
     clientName: str | None = None
     domain: str | None = None
     clientLogo: str | None = None
@@ -669,6 +680,18 @@ def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connectio
     if body.active is not None:
         fields.append("active = ?")
         values.append(1 if body.active else 0)
+    # Deliberately NOT keyed off model_fields_set like clientName and clientLogo
+    # below: those are optional and null is how the form clears them, but `name`
+    # is NOT NULL and is what every report, email subject and project card is
+    # labelled with. Blank has to be a rejection, not an erasure.
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, "Project name can't be empty.")
+        if len(name) > 120:
+            raise HTTPException(400, "Project name is too long (120 characters max).")
+        fields.append("name = ?")
+        values.append(name)
     domain = normalize_domain(body.domain) if body.domain is not None else None
     if body.domain is not None:
         fields.append("domain = ?")
@@ -696,10 +719,18 @@ def update_project(project_id: int, body: ProjectUpdateIn, db: sqlite3.Connectio
         ).fetchone()
         if row is None:
             raise HTTPException(404, "Project not found.")
+        # Whether the domain actually moved, not merely whether the form sent it.
+        # The form posts every field on every save, so "domain in fields_set" is
+        # true even when the user only swapped the logo — and treating that as a
+        # move let an unmatched lookup clear a working property.
+        domain_changed = (
+            "domain" in body.model_fields_set and domain != row["domain"]
+        )
         gsc_site_url = resolve_gsc_site_url(
             domain if "domain" in body.model_fields_set else row["domain"],
             body.gscSiteUrl,
             current=row["gsc_site_url"],
+            domain_changed=domain_changed,
         )
         verify_gsc_site_url(gsc_site_url)
         fields.append("gsc_site_url = ?")

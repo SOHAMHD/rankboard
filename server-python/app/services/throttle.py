@@ -32,6 +32,20 @@ RESET_MAX = 5
 RESET_WINDOW = 3600
 RESET_LOCK = 3600
 
+#: Caps for the account-only counters that sit under the per-(IP, email) ones.
+#:
+#: The pair key on its own can never actually lock anything. Spraying one common
+#: password across many accounts from a single address files every attempt in its
+#: own bucket, and brute-forcing one account only takes a changing source IP —
+#: neither reaches five. These counters are the floor that both of those hit.
+#:
+#: Deliberately looser than LOGIN_MAX/RESET_MAX: an account-wide counter is
+#: reachable by anyone who knows the address, so a cap of five would hand an
+#: attacker a trivial way to lock a real user out. Loose enough not to be a
+#: weapon, tight enough that a spray or a distributed brute force still stops.
+LOGIN_ACCOUNT_MAX = 20
+RESET_ACCOUNT_MAX = 10
+
 #: Rows older than this are pruned opportunistically. Long enough to cover the
 #: widest window and lock above, with room to spare.
 _KEEP_SECONDS = max(LOGIN_WINDOW + LOGIN_LOCK, RESET_WINDOW + RESET_LOCK) + 3600
@@ -121,6 +135,11 @@ def login_failed(key: str) -> None:
     _record_failure(_SCOPE_LOGIN, key, LOGIN_MAX, LOGIN_WINDOW, LOGIN_LOCK)
 
 
+def login_account_failed(key: str) -> None:
+    """Same scope, same window, looser cap. See LOGIN_ACCOUNT_MAX."""
+    _record_failure(_SCOPE_LOGIN, key, LOGIN_ACCOUNT_MAX, LOGIN_WINDOW, LOGIN_LOCK)
+
+
 def login_ok(key: str) -> None:
     _clear(_SCOPE_LOGIN, key)
 
@@ -151,6 +170,11 @@ def reset_retry_after(key: str) -> int:
 
 def reset_requested(key: str) -> None:
     _record_failure(_SCOPE_RESET, key, RESET_MAX, RESET_WINDOW, RESET_LOCK)
+
+
+def reset_account_requested(key: str) -> None:
+    """Same scope, same window, looser cap. See RESET_ACCOUNT_MAX."""
+    _record_failure(_SCOPE_RESET, key, RESET_ACCOUNT_MAX, RESET_WINDOW, RESET_LOCK)
 
 
 # ── one-time-code replay protection ───────────────────────────────────

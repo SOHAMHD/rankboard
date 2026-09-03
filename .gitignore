@@ -1,6 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────
 # Secrets — never commit
+#
+# Patterns, not filenames. The service-account key used to be listed by its
+# exact name, so the day it is rotated the replacement has a different name and
+# lands straight in a commit. Same for every .env variant beyond the bare one.
+# ─────────────────────────────────────────────────────────────────────
 .env
-seo-dashboard-499607-25e8ccaf16ad.json
+.env.*
+!.env.example
+
+# Google service-account keys. `seo-dashboard-*.json` covers any rotation of the
+# current key; the rest cover a key that arrives under its default download name.
+seo-dashboard-*.json
+service-account*.json
+service_account*.json
+client_secret*.json
+credentials*.json
+gcp-*.json
+
+# Private keys and certificates in any form
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
 
 # Python
 __pycache__/
@@ -11,16 +34,39 @@ __pycache__/
 .venv/
 venv/
 env/
+*.egg-info/
+
+# Test and lint caches. pytest writes its own .gitignore inside .pytest_cache,
+# which is why it has never shown up — listed here so it doesn't depend on that.
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Node / Vite frontend
 node_modules/
 dist/
 build/
 .vite/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# The frontend bundle CI builds and deploy-frontend.sh consumes. Produced on
+# every push and attached as a workflow artifact — a copy in the repo is only
+# ever stale.
+seo-frontend.zip
 
 # Application logs — written next to the app so a shared-hosting user can read
 # them without journal access. Rotated by logging_setup, never committed.
 server-python/logs/
+*.log
+
+# Report cover PNGs — REPORT_ASSET_DIR's default. Written per send under a random
+# filename and served straight back out; nothing here belongs in the repo.
+server-python/app/assets/public/
 
 # Kept by deploy-frontend.sh for one-command rollback.
 public_html.previous/
@@ -28,10 +74,11 @@ public_html.previous/
 
 # Editor / OS
 .vscode/
+.idea/
+*.swp
+*~
 .DS_Store
 Thumbs.db
 
-
-SEO Dashboard/client/dist/
-
+# Agent/session scratch
 .claude/

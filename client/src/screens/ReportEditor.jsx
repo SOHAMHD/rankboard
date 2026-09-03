@@ -17,7 +17,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, BASE, getToken } from "../api";
-import { ConfirmModal, ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor, isReportDeleter, isReportSender } from "../ui";
+import { ConfirmModal, ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor, isReportDeleter, isReportSender, monthLabel } from "../ui";
 import { useToast } from "../toast.jsx";
 import { createBlobNode } from "../lib/blobNode";
 import {
@@ -27,7 +27,7 @@ import {
 } from "../lib/blobFormats";
 import ReportDocument from "./ReportDocument";
 import ReportDocumentEditor from "./ReportDocumentEditor";
-import DownloadPdfButton from "../lib/DownloadPdfButton";
+import DownloadReportButton from "../lib/DownloadReportButton";
 import SendReportButton from "../lib/SendReportButton";
 
 const GROUP_ORDER = ["GA4", "GSC", "Moz", "Changes"];
@@ -284,7 +284,7 @@ export function ReportsPanel({ user, project }) {
             <div key={v.id} className="flex items-center justify-between gap-3 px-4 py-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-stone-900">
-                  {v.periodKey}
+                  {monthLabel(v.periodKey)}
                   {v.parentVersionId ? <span className="text-stone-400"> · forked from #{v.parentVersionId}</span> : null}
                 </p>
                 <p className="text-xs text-stone-400">#{v.id} · {v.createdAt}</p>
@@ -293,7 +293,7 @@ export function ReportsPanel({ user, project }) {
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_BADGE[v.status] || "bg-stone-200 text-stone-600"}`}>
                   {v.status}
                 </span>
-                <DownloadPdfButton
+                <DownloadReportButton
                   versionId={v.id}
                   projectName={project.name}
                   periodKey={v.periodKey}
@@ -340,13 +340,13 @@ export function ReportsPanel({ user, project }) {
         >
           {pendingDelete.status === "sent" ? (
             <p>
-              Report <span className="font-data">#{pendingDelete.id}</span> ({pendingDelete.periodKey}) was{" "}
+              Report <span className="font-data">#{pendingDelete.id}</span> ({monthLabel(pendingDelete.periodKey)}) was{" "}
               <strong>sent to the client</strong>. Deleting it permanently removes it and{" "}
               <strong>may break the client's link</strong>. This cannot be undone.
             </p>
           ) : (
             <p>
-              Delete report <span className="font-data">#{pendingDelete.id}</span> ({pendingDelete.periodKey})?
+              Delete report <span className="font-data">#{pendingDelete.id}</span> ({monthLabel(pendingDelete.periodKey)})?
               This can't be undone.
             </p>
           )}
@@ -501,7 +501,7 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div>
           <h2 className="text-lg font-bold text-stone-900 font-display">
-            Report content · {version.periodKey}
+            Report content · {monthLabel(version.periodKey)}
           </h2>
           <p className="text-xs text-stone-400">#{version.id}</p>
         </div>
@@ -509,7 +509,7 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
           {savedAt && !saveError && (
             <span className="text-xs text-emerald-600">Saved {savedAt.toLocaleTimeString()}</span>
           )}
-          <DownloadPdfButton versionId={version.id} periodKey={version.periodKey} label onError={setSaveError} />
+          <DownloadReportButton versionId={version.id} periodKey={version.periodKey} label onError={setSaveError} />
           {isDraft ? (
             <button onClick={save} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
               {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft

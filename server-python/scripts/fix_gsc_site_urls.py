@@ -1,7 +1,15 @@
-"""Repoint projects whose gsc_site_url doesn't match a real Search Console property.
+"""Point projects at the right Search Console property.
 
     python -m scripts.fix_gsc_site_urls            # dry run
     python -m scripts.fix_gsc_site_urls --commit
+
+Covers both ways a project ends up without working Search Console data:
+
+  * gsc_site_url is set but isn't a property the service account can read — a
+    stale value, or one typed in the wrong notation.
+  * gsc_site_url is empty, and the project's domain does match a visible
+    property. This is what happens when the service account is added to the
+    property after the project was created: nothing re-resolves it on its own.
 
 Only rewrites where exactly one visible property matches after normalising away
 the scheme, `www.` and the trailing slash — i.e. where the intent is unambiguous.
@@ -33,22 +41,32 @@ def main() -> int:
         return 1
 
     with db_session() as db:
+        # Empty ones are included deliberately. A project resolves its property
+        # when it is created or saved, and nothing re-resolves it in between — so
+        # granting the service account access to a property AFTER the project was
+        # made leaves that project permanently blank until somebody happens to
+        # open it and press Save. Those are matched on `domain` instead, which is
+        # the same thing resolve_gsc_site_url() would match on.
         projects = db.execute(
-            "SELECT id, name, gsc_site_url FROM projects"
-            " WHERE gsc_site_url IS NOT NULL AND gsc_site_url <> ''"
-            " ORDER BY id"
+            "SELECT id, name, domain, gsc_site_url FROM projects ORDER BY id"
         ).fetchall()
 
         fixes, unresolved = [], []
         for p in projects:
-            current = p["gsc_site_url"]
-            if current in sites:
+            current = (p["gsc_site_url"] or "").strip()
+            if current and current in sites:
                 continue
-            matches = [s for s in sites if core(s) == core(current)]
+            against = current or (p["domain"] or "").strip()
+            if not against:
+                unresolved.append((p["id"], p["name"], "(no property, no domain)", []))
+                continue
+            matches = [s for s in sites if core(s) == core(against)]
             if len(matches) == 1:
-                fixes.append((p["id"], p["name"], current, matches[0]))
+                fixes.append((p["id"], p["name"], current or f"(empty, domain {against})",
+                              matches[0]))
             else:
-                unresolved.append((p["id"], p["name"], current, matches))
+                unresolved.append((p["id"], p["name"], current or f"(empty, domain {against})",
+                                   matches))
 
         for pid, name, old, new in fixes:
             print(f"#{pid} {name}\n    {old!r}\n -> {new!r}")

@@ -700,38 +700,55 @@ function OnboardWizard({ onClose, onCreated }) {
       wide
       dismissOnBackdrop={step === "sent"}
     >
+      {/* Only the current step is named.
+          Every step used to carry its label, which needed about 434px of the
+          ~400px this dialog has inside its padding — so the row overflowed, and
+          because Modal sets overflow-y-auto (which makes the x-axis auto too) the
+          dialog grew a horizontal scrollbar and clipped "Review". A breakpoint
+          wouldn't have fixed it: max-w-md applies at every viewport width.
+          The unlabelled circles carry their step name as a tooltip and an
+          accessible name instead. */}
       {step !== "sent" && (
-        <div className="flex items-center mb-6 mt-1">
-          {flow.map((key, i) => {
-            const done = i < stepIndex;
-            const current = i === stepIndex;
-            return (
-              <Fragment key={key}>
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
-                      done || current
-                        ? "bg-orange-600 text-white"
-                        : "border-2 border-stone-300 text-stone-400 bg-white"
-                    }`}
-                  >
-                    {done ? <Check size={13} strokeWidth={3} /> : i + 1}
-                  </span>
-                  <span
-                    className={`text-xs ${
-                      current ? "font-semibold text-stone-900" : done ? "font-medium text-stone-600" : "font-medium text-stone-400"
-                    }`}
-                  >
-                    {STEP_LABELS[key]}
-                  </span>
-                </div>
-                {i < flow.length - 1 && (
-                  <span className={`flex-1 h-px mx-2 ${done ? "bg-orange-300" : "bg-stone-200"}`} />
-                )}
-              </Fragment>
-            );
-          })}
-        </div>
+        <nav aria-label="Progress" className="mb-6 mt-1">
+          <p className="sr-only">
+            Step {stepIndex + 1} of {flow.length}: {STEP_LABELS[step]}
+          </p>
+          <div className="flex items-center">
+            {flow.map((key, i) => {
+              const done = i < stepIndex;
+              const current = i === stepIndex;
+              return (
+                <Fragment key={key}>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span
+                      title={STEP_LABELS[key]}
+                      aria-label={STEP_LABELS[key]}
+                      aria-current={current ? "step" : undefined}
+                      className={`h-6 w-6 shrink-0 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
+                        done || current
+                          ? "bg-orange-600 text-white"
+                          : "border-2 border-stone-300 text-stone-400 bg-white"
+                      }`}
+                    >
+                      {done ? <Check size={13} strokeWidth={3} /> : i + 1}
+                    </span>
+                    {current && (
+                      <span className="text-xs font-semibold text-stone-900 whitespace-nowrap">
+                        {STEP_LABELS[key]}
+                      </span>
+                    )}
+                  </div>
+                  {i < flow.length - 1 && (
+                    <span
+                      aria-hidden="true"
+                      className={`h-px flex-1 min-w-[8px] mx-1.5 ${done ? "bg-orange-300" : "bg-stone-200"}`}
+                    />
+                  )}
+                </Fragment>
+              );
+            })}
+          </div>
+        </nav>
       )}
 
       {step === "details" && (

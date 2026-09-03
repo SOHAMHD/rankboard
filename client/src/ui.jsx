@@ -4,6 +4,24 @@ import { api, setToken } from "./api";
 
 export const ROLES = ["Super Admin", "Admin", "Team", "Client"];
 
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/** "2026-08" -> "Aug 2026". Returns the input unchanged if it isn't a period key.
+ *
+ * The server's periods.label_for does the same job for anything it renders. This
+ * is the client's copy, kept short so it fits a dense list row.
+ */
+export function monthLabel(key) {
+  const parts = String(key || "").split("-");
+  const idx = Number(parts[1]) - 1;
+  return parts.length === 2 && idx >= 0 && idx < 12
+    ? `${MONTH_NAMES[idx].slice(0, 3)} ${parts[0]}`
+    : String(key || "");
+}
+
 /**
  * A wizard-only pseudo-role for a client who receives reports but never signs in.
  *

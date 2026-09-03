@@ -490,6 +490,21 @@ def list_versions(db, project_id: int) -> list[dict]:
     return [version_to_dict(r) for r in rows]
 
 
+def versions_with_data(db, project_id: int) -> list[dict]:
+    """Every saved report for a project, oldest month first, carrying its payload.
+
+    The opposite trade to list_versions above: this one deliberately does pull
+    data_json and content_json, because the Excel roll-up needs each month's own
+    figures and each month's own row selection. Ordered by period so the caller
+    reads left to right.
+    """
+    rows = db.execute(
+        "SELECT * FROM report_version WHERE project_id = ? ORDER BY period_key, id",
+        (project_id,),
+    ).fetchall()
+    return [version_to_dict(r, include_data=True) for r in rows]
+
+
 def available_blobs(db, version_id: int) -> list[dict]:
     row = db.execute(
         "SELECT data_json FROM report_version WHERE id = ?", (version_id,)

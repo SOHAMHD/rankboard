@@ -1,3 +1,4 @@
+import logging
 from datetime import date, datetime, timedelta, timezone
 
 from ..config import GOOGLE_SERVICE_ACCOUNT_JSON
@@ -25,6 +26,14 @@ _GSC_LAG_DAYS = 3
 _DATA_STATE = "all"
 
 import threading
+
+logger = logging.getLogger(__name__)
+
+#: See the note in analytics_provider — Search Console errors quote the same
+#: service-account detail back at whoever triggered them.
+_SC_FAILED = "Couldn't reach Search Console — try again shortly."
+_SC_CREDS = "Search Console isn't configured correctly on the server."
+
 
 _local = threading.local()
 
@@ -84,15 +93,17 @@ def _construct_service(Credentials, build):
                 raw, scopes=_SCOPES
             )
     except Exception as exc:
-        return None, f"Could not load the Google service-account key: {exc}"
+        logger.exception("GSC credentials could not be loaded")
+        return None, _SC_CREDS
 
     try:
         service = build("searchconsole", "v1", credentials=credentials)
     except Exception:
         try:
             service = build("webmasters", "v3", credentials=credentials)
-        except Exception as exc:
-            return None, f"Could not build the Search Console service: {exc}"
+        except Exception:
+            logger.exception("Search Console service could not be built")
+            return None, _SC_CREDS
 
     return service, None
 
@@ -112,7 +123,8 @@ def list_sites() -> tuple[list[str], str | None]:
     try:
         entries = service.sites().list().execute().get("siteEntry", []) or []
     except Exception as exc:
-        return [], f"Could not list Search Console properties: {exc}"
+        logger.exception("GSC property list failed")
+        return [], _SC_FAILED
     return sorted(e.get("siteUrl", "") for e in entries if e.get("siteUrl")), None
 
 
@@ -217,7 +229,8 @@ def get_search_console(
             key=lambda d: d["date"],
         )
     except Exception as exc:
-        return {"error": f"Search Console request failed: {exc}"}
+        logger.exception("GSC query failed")
+        return {"error": _SC_FAILED}
 
     return {"totals": totals, "queries": queries, "pages": pages, "trend": trend}
 
@@ -267,7 +280,8 @@ def query_performance(
 
     try:
         raw_rows = _query(service, str(site_url).strip(), body)
-    except Exception as exc:
-        return {"error": f"Search Console request failed: {exc}"}
+    except Exception:
+        logger.exception("GSC performance query failed")
+        return {"error": _SC_FAILED}
 
     return [{"keys": r.get("keys") or [], **_metrics(r)} for r in raw_rows]

@@ -177,27 +177,26 @@ export function ProjectsView({ user, onOpenProject, onPeople, onEmailLog, onLogo
   );
 }
 
-/** Which Search Console property a domain resolves to, asked of the server.
+/** Whether the domain resolves to a Search Console property, asked of the server.
  *
- * Replaces a second free-text field that asked for the same site in Google's
- * notation. That field is where both of this install's misconfigurations came
- * from — one project carried a spurious `www.`, another was missing the trailing
- * slash a URL-prefix property always has — and neither showed a symptom beyond
- * an empty Search Console panel.
+ * The domain field is the only thing anyone types. Google's own notation is not
+ * derivable from it — `https://www.example.com/`, `https://example.com/` and
+ * `sc-domain:example.com` are three distinct properties and querying the wrong
+ * one 403s — so the server matches the domain against the properties the service
+ * account can actually read, and that answer is the property.
  *
- * `override` is only surfaced when the domain can't decide on its own: no
- * property matches, or several do (a site with both a bare and a www property,
- * where guessing would report the wrong numbers).
+ * Nothing is shown while that works. This hook exists only so the form can say
+ * something when it doesn't, rather than saving a project whose Search Console
+ * panel will be silently empty.
  */
-function useGscProperty(domain, initialOverride = "") {
-  const [state, setState] = useState({ status: "idle", matches: [], properties: [], error: null });
-  const [override, setOverride] = useState(initialOverride);
+function useGscProperty(domain) {
+  const [state, setState] = useState({ status: "idle", matches: [], error: null });
 
   const trimmed = (domain || "").trim();
 
   useEffect(() => {
     if (!trimmed) {
-      setState({ status: "idle", matches: [], properties: [], error: null });
+      setState({ status: "idle", matches: [], error: null });
       return;
     }
     let live = true;
@@ -208,14 +207,9 @@ function useGscProperty(domain, initialOverride = "") {
       api(`/projects/gsc-properties/match?domain=${encodeURIComponent(trimmed)}`)
         .then((d) => {
           if (!live) return;
-          setState({
-            status: "done",
-            matches: d.matches || [],
-            properties: d.properties || [],
-            error: d.error || null,
-          });
+          setState({ status: "done", matches: d.matches || [], error: d.error || null });
         })
-        .catch((err) => live && setState({ status: "done", matches: [], properties: [], error: err.message }));
+        .catch((err) => live && setState({ status: "done", matches: [], error: err.message }));
     }, 500);
     return () => {
       live = false;
@@ -223,92 +217,32 @@ function useGscProperty(domain, initialOverride = "") {
     };
   }, [trimmed]);
 
-  const auto = state.matches.length === 1 ? state.matches[0] : null;
+  // Several matches is as unresolved as none: a site with both a bare and a www
+  // property can't be picked between without reporting some other site's numbers.
+  const matched = state.matches.length === 1 ? state.matches[0] : null;
+  const unmatched = state.status === "done" && !state.error && !matched && !!trimmed;
 
-  // A stored value that happens to equal the automatic match isn't an override.
-  // Collapsing it keeps the dialog honest ("matched automatically") and lets the
-  // server re-resolve if the property is later renamed.
-  useEffect(() => {
-    if (auto && override === auto) setOverride("");
-  }, [auto, override]);
-
-  const needsChoice = state.status === "done" && !state.error && !auto && !override && !!trimmed;
-
-  return { ...state, auto, needsChoice, override, setOverride, resolved: override || auto };
+  return { ...state, matched, unmatched };
 }
 
-function GscPropertyField({ gsc }) {
-  const { status, auto, needsChoice, properties, error, override, setOverride } = gsc;
-
+/** Silent when the domain resolves. One line when it doesn't. */
+function GscPropertyNote({ gsc }) {
+  if (gsc.error) {
+    // Not fatal: the server saves the project either way and re-resolves the
+    // property the next time it can reach Google.
+    return (
+      <p className="mt-2 text-xs text-stone-500">
+        Couldn't reach Search Console to check ({gsc.error}). The project will save, and the
+        property gets matched on the next attempt.
+      </p>
+    );
+  }
+  if (!gsc.unmatched) return null;
   return (
-    <div className="mt-4">
-      <span className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
-        Search Console property
-      </span>
-
-      {status === "loading" && (
-        <p className="flex items-center gap-2 text-sm text-stone-500">
-          <LoaderCircle size={14} className="animate-spin" /> Looking up the property…
-        </p>
-      )}
-
-      {status === "idle" && (
-        <p className="text-sm text-stone-400">Enter a domain above and it'll be matched automatically.</p>
-      )}
-
-      {override ? (
-        <p className="text-sm text-stone-700">
-          <span className="font-data">{override}</span>{" "}
-          <span className="text-xs text-stone-400">— set explicitly</span>
-        </p>
-      ) : status === "done" && auto ? (
-        <p className="text-sm text-stone-700">
-          <span className="font-data">{auto}</span>{" "}
-          <span className="text-xs text-stone-400">— matched automatically</span>
-        </p>
-      ) : null}
-
-      {status === "done" && error && (
-        // Not fatal: the server saves the project either way and re-resolves the
-        // property the next time it can reach Google.
-        <p className="text-xs text-stone-500">
-          Couldn't reach Search Console to check ({error}). The project will save, and the
-          property gets matched on the next attempt.
-        </p>
-      )}
-
-      {needsChoice && (
-        <div className="space-y-2">
-          <p className="text-xs text-stone-500">
-            {properties.length
-              ? "No single property matches that domain — pick one, or leave it blank to set it later."
-              : "The service account can't see any properties yet. Add it as a user in Search Console, then reopen this."}
-          </p>
-          {properties.length > 0 && (
-            <select
-              value={override}
-              onChange={(e) => setOverride(e.target.value)}
-              className={INPUT_CLS}
-            >
-              <option value="">— none —</option>
-              {properties.map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-          )}
-        </div>
-      )}
-
-      {override && (
-        <button
-          type="button"
-          onClick={() => setOverride("")}
-          className="mt-2 text-xs text-orange-600 hover:underline"
-        >
-          Clear and match from the domain instead
-        </button>
-      )}
-    </div>
+    <p className="mt-2 text-xs text-stone-500">
+      Couldn't match a Search Console property for this domain — check the site is shared with
+      the service account.
+    </p>
   );
 }
 
@@ -510,7 +444,7 @@ function AddProjectModal({ onClose, onAdded }) {
           gaPropertyId: gaPropertyId.trim() || null,
           // Only sent when the domain couldn't decide on its own; otherwise the
           // server matches the property itself, from the list Google gives it.
-          gscSiteUrl: gsc.override || null,
+          gscSiteUrl: null,
         },
       });
       onAdded();
@@ -563,7 +497,7 @@ function AddProjectModal({ onClose, onAdded }) {
       />
       <p className="text-xs text-stone-400 mt-2">The client's website — used for Moz Authority, Search Console and Analytics.</p>
 
-      <GscPropertyField gsc={gsc} />
+      <GscPropertyNote gsc={gsc} />
 
       <label htmlFor="proj-new-ga4" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         GA4 Property ID <span className="normal-case font-normal">(optional)</span>
@@ -592,6 +526,7 @@ function AddProjectModal({ onClose, onAdded }) {
 }
 
 function EditProjectModal({ project, onClose, onSaved }) {
+  const [name, setName] = useState(project.name || "");
   const [clientName, setClientName] = useState(project.clientName || "");
   const [domain, setDomain] = useState(project.domain || "");
   const [gaPropertyId, setGaPropertyId] = useState(project.gaPropertyId || "");
@@ -601,20 +536,25 @@ function EditProjectModal({ project, onClose, onSaved }) {
   // Seeded with what's stored: if the saved property isn't what this domain
   // resolves to, that's a deliberate override and reopening the dialog must not
   // quietly replace it.
-  const gsc = useGscProperty(domain, project.gscSiteUrl || "");
+  const gsc = useGscProperty(domain);
 
   const submit = async () => {
+    if (!name.trim()) {
+      setError("Project name can't be empty.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       await api(`/projects/${project.id}`, {
         method: "PATCH",
         body: {
+          name: name.trim(),
           clientName: clientName.trim() || null,
           domain: domain.trim() || null,
           clientLogo,
           gaPropertyId: gaPropertyId.trim() || null,
-          gscSiteUrl: gsc.override || null,
+          gscSiteUrl: null,
         },
       });
       onSaved();
@@ -630,7 +570,25 @@ function EditProjectModal({ project, onClose, onSaved }) {
         Settings for <span className="font-medium text-stone-800">{project.name}</span>.
       </p>
 
-      <label htmlFor="proj-edit-client" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+      <label htmlFor="proj-edit-name" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+        Project name
+      </label>
+      <input
+        id="proj-edit-name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        placeholder="e.g. Byron Bay Hinterland"
+        maxLength={120}
+        autoFocus
+        className={INPUT_CLS}
+      />
+      <p className="text-xs text-stone-400 mt-2">
+        The business this project is about. Used on the project card, in report headings and in the
+        subject line of every report email.
+      </p>
+
+      <label htmlFor="proj-edit-client" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         Client name <span className="normal-case font-normal">(optional)</span>
       </label>
       <input
@@ -639,7 +597,6 @@ function EditProjectModal({ project, onClose, onSaved }) {
         onChange={(e) => setClientName(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
         placeholder="e.g. John Jacobs"
-        autoFocus
         className={INPUT_CLS}
       />
       <p className="text-xs text-stone-400 mt-2">Who the work is for — the person or company behind this project.</p>
@@ -657,7 +614,7 @@ function EditProjectModal({ project, onClose, onSaved }) {
       />
       <p className="text-xs text-stone-400 mt-2">The client's website — used for Moz Authority, Search Console and Analytics.</p>
 
-      <GscPropertyField gsc={gsc} />
+      <GscPropertyNote gsc={gsc} />
 
       <label htmlFor="proj-edit-ga4" className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5 mt-4">
         GA4 Property ID <span className="normal-case font-normal">(optional)</span>

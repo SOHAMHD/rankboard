@@ -20,13 +20,21 @@ def _authorise(request: Request) -> None:
         raise HTTPException(
             503,
             "Email event tracking isn't configured. Set BREVO_WEBHOOK_SECRET on the "
-            "server, then point Brevo's webhook at /api/webhooks/brevo?token=<secret>.",
+            "server, then point Brevo's webhook at /api/webhooks/brevo and have it "
+            "send the secret as an x-webhook-token header.",
         )
-    presented = (
-        request.query_params.get("token")
-        or request.headers.get("x-webhook-token")
-        or ""
-    )
+    # Header first. The query-string form still works because Brevo may already be
+    # configured that way and dropping it would silently stop event tracking on
+    # deploy — but a secret in a URL lands in every proxy and platform access log
+    # it passes through, so it is the fallback, and it says so in the log.
+    header_token = request.headers.get("x-webhook-token") or ""
+    query_token = request.query_params.get("token") or ""
+    presented = header_token or query_token
+    if not header_token and query_token:
+        logger.warning(
+            "Brevo webhook authenticated by query-string token; move the secret to "
+            "the x-webhook-token header — URLs are logged, headers are not."
+        )
     if not secrets.compare_digest(presented.encode("utf-8"),
                                   BREVO_WEBHOOK_SECRET.encode("utf-8")):
         raise HTTPException(403, "Invalid webhook token.")

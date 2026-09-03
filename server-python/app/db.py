@@ -1,3 +1,4 @@
+import atexit
 import logging
 import os
 import re
@@ -741,6 +742,15 @@ def close_pool() -> None:
         if _pool is not None:
             _pool.close()
             _pool = None
+
+
+# The server closes the pool from its lifespan handler, but the CLI scripts in
+# scripts/ have no shutdown hook — so every one of them ended by printing four
+# "couldn't stop thread 'pool-1-worker-N' within 5.0 seconds" warnings over its
+# own output. close_pool() is idempotent (it clears _pool), so registering it
+# here is harmless for the server: lifespan runs first and this then finds
+# nothing to do.
+atexit.register(close_pool)
 
 
 def init_db() -> None:

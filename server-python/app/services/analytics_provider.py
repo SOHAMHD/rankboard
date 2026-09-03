@@ -6,6 +6,15 @@ from .response_cache import cached
 
 logger = logging.getLogger(__name__)
 
+#: Returned to the caller in place of the raw exception. Google's client
+#: stringifies an HttpError to the full request URI and response body, which name
+#: the service-account principal, the GCP project and — when the key is a file
+#: path — where it sits on disk. Any user with access to a project sees this
+#: response, so the detail goes to the log and a fixed string goes to them.
+_GA_FAILED = "Couldn't reach Google Analytics — try again shortly."
+_GA_CREDS = "Google Analytics isn't configured correctly on the server."
+
+
 # NOTE: positional order matters — _rows() and _totals() read these by index.
 # totalUsers is appended at the END so the existing indices stay valid.
 # activeUsers is still requested because GA4 defines "average engagement time
@@ -327,7 +336,8 @@ def get_analytics(
             for key, value in pool.map(_run, jobs):
                 out[key] = value
     except Exception as exc:
-        return {"error": f"Google Analytics request failed: {exc}"}
+        logger.exception("GA4 batch request failed")
+        return {"error": _GA_FAILED}
     return out
 
 
@@ -365,7 +375,8 @@ def get_dimension_breakdown(
     try:
         client = _analytics_client()
     except Exception as exc:
-        return {"error": f"Could not load the Google service-account key: {exc}", "dimension": dimension}
+        logger.exception("GA4 credentials could not be loaded")
+        return {"error": _GA_CREDS, "dimension": dimension}
 
     prop = str(property_id).strip()
     resource = prop if prop.startswith("properties/") else f"properties/{prop}"
@@ -383,7 +394,8 @@ def get_dimension_breakdown(
         )
         response = client.run_report(request)
     except Exception as exc:
-        return {"error": f"Google Analytics request failed: {exc}", "dimension": dimension}
+        logger.exception("GA4 breakdown request failed")
+        return {"error": _GA_FAILED, "dimension": dimension}
 
     return {
         "dimension": dimension,
@@ -481,7 +493,8 @@ def run_custom_report(
 
         response = client.run_report(RunReportRequest(**kwargs))
     except Exception as exc:
-        return {"error": f"Google Analytics request failed: {exc}"}
+        logger.exception("GA4 custom report failed")
+        return {"error": _GA_FAILED}
 
     report = _custom_report(response, dimensions, ga_metrics)
 

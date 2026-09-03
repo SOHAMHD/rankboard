@@ -288,7 +288,10 @@ def _deliver(db: sqlite3.Connection, *, email, subject: str, body: str,
         if cc_logged:
             print(f"cc: {cc_logged}")
         print(f"subject: {subject}")
-        print(body)
+        # The redacted copy, not `body`. An invite body holds a working temporary
+        # password and a code body a live OTP, and stdout here is the systemd
+        # journal or the host's log stream — the one place those must not land.
+        print(stored_body)
         print("=" * 64)
     return {**dict(row), "delivery": delivery}
 
@@ -361,14 +364,17 @@ def send_report_email(
     email,
     subject: str,
     body: str,
-    pdf_bytes: bytes,
-    pdf_filename: str,
+    attachments: list,
     html: str | None = None,
     cc=None,
     project_id: int | None = None,
     sent_by: int | None = None,
 ) -> dict:
     """Send one report email. `email` may be a single address or a list.
+
+    `attachments` is whatever the caller wants attached — the PDF, the Excel
+    roll-up, or both — as {filename, content, mime} entries. It used to be a
+    hardcoded single PDF; the caller decides now because the send dialog does.
 
     Recipients on a report send go out together in one message so the Cc is
     meaningful — a Cc header is only honest if the To it sits beside is the real
@@ -382,7 +388,7 @@ def send_report_email(
         body=body,
         html=html,
         cc=cc,
-        attachments=[{"filename": pdf_filename, "content": pdf_bytes, "mime": "application/pdf"}],
+        attachments=attachments,
         category="report",
         project_id=project_id,
         sent_by=sent_by,

@@ -22,6 +22,7 @@ from ..security import require_roles
 from ..access import user_can_access_project
 from ..services import report_service
 from ..services import report_pdf
+from ..services import report_excel
 from ..services import email_service
 
 logger = logging.getLogger(__name__)
@@ -230,11 +231,56 @@ def download_report_pdf(
     )
 
 
+@router.get("/{version_id}/xlsx")
+def download_report_xlsx(
+    version_id: int,
+    user: sqlite3.Row = Depends(require_roles(*AUTHOR_ROLES)),
+):
+    """One report as a month-by-month roll-up, a column per month up to this one.
+
+    Version-scoped, exactly like download_report_pdf beside it. The country and
+    landing-page rows are this version's own selection, so the sheet and the PDF
+    for a given report always describe the same set.
+
+    Follows the PDF route in releasing the connection before building: this pulls
+    every month's data_json at once, which is the largest read in the app, and
+    there is no reason to hold a pooled connection while openpyxl works.
+    """
+    with db_session() as db:
+        _require_version_access(db, user, version_id)
+        pinned = report_service.get_version(db, version_id, include_data=True)
+        project = db.execute(
+            "SELECT name, client_name FROM projects WHERE id = ?", (pinned["projectId"],)
+        ).fetchone()
+        if project is None:
+            raise HTTPException(404, "Project not found.")
+        rows = report_service.versions_with_data(db, pinned["projectId"])
+
+    # No database connection held from here on.
+    versions = report_excel.columns_for(rows, pinned)
+
+    meta = {"name": project["name"], "clientName": project["client_name"]}
+    data = report_excel.build_workbook(meta, versions)
+    filename = report_excel.excel_filename(meta, versions)
+    return Response(
+        content=data,
+        media_type=report_excel.MIME,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+#: What a send can attach. "pdf" alone is the default so that turning the Excel
+#: report on is always a deliberate act by whoever presses send.
+SEND_FORMATS = ("pdf", "xlsx")
+
+
 class SendReportIn(BaseModel):
     recipients: list[str]
     cc: list[str] = []
     subject: str | None = None
     message: str | None = None
+    formats: list[str] = ["pdf"]
+    separate: bool = False
 
 
 def _clean_addresses(raw, seen: set[str]) -> tuple[list[str], list[str]]:
@@ -281,6 +327,10 @@ def send_report(
     if not valid:
         raise HTTPException(422, "Add at least one valid email address.")
 
+    formats = [f for f in dict.fromkeys(body.formats or []) if f in SEND_FORMATS]
+    if not formats:
+        raise HTTPException(422, "Choose at least one format to attach.")
+
     with db_session() as db:
         _require_version_access(db, user, version_id)
         version = report_service.get_version(db, version_id, include_data=True)
@@ -289,11 +339,33 @@ def send_report(
         proj = db.execute(
             "SELECT name, client_name, domain FROM projects WHERE id = ?", (version["projectId"],)
         ).fetchone()
+        # Read here rather than after the render: the Excel roll-up needs every
+        # month's data_json, and this is the only block holding a connection.
+        xlsx_rows = (
+            report_service.versions_with_data(db, version["projectId"])
+            if "xlsx" in formats else []
+        )
 
     # No connection held across the render or the upload below. The send itself
     # needs one to write the emails row, so it takes a fresh short-lived session.
-    pdf_bytes = report_pdf.render_pdf(version, blobs)
-    filename = report_pdf.pdf_filename(version)
+    #
+    # Built per requested format, so a send of the Excel alone never pays for a
+    # Chromium render it isn't going to attach.
+    attachments = []
+    if "pdf" in formats:
+        attachments.append({
+            "filename": report_pdf.pdf_filename(version),
+            "content": report_pdf.render_pdf(version, blobs),
+            "mime": "application/pdf",
+        })
+    if "xlsx" in formats:
+        meta = {"name": proj["name"], "clientName": proj["client_name"]} if proj else {}
+        xlsx_versions = report_excel.columns_for(xlsx_rows, version)
+        attachments.append({
+            "filename": report_excel.excel_filename(meta, xlsx_versions),
+            "content": report_excel.build_workbook(meta, xlsx_versions),
+            "mime": report_excel.MIME,
+        })
     # Two different names, used in two different places:
     #   project_name  - who the mail is addressed to. client_name is the contact
     #                   person ("Dr. Anuranjan"), so this drives the greeting.
@@ -402,23 +474,39 @@ def send_report(
     # A fresh short-lived session for the write. The send itself is the slow part
     # and it needs a connection to log the emails row, so this is scoped as
     # tightly as it can be rather than spanning the render above.
+    # One message per group. Normally that's a single group holding every chosen
+    # attachment; `separate` splits them so each format goes out as its own email,
+    # each with its own Email Log row.
+    groups = [[a] for a in attachments] if body.separate and len(attachments) > 1 else [attachments]
+
     with db_session() as db:
-        outcome = email_service.send_report_email(
-            db,
-            email=valid,
-            cc=cc_valid,
-            subject=subject,
-            body=email_body,
-            html=html_body,
-            pdf_bytes=pdf_bytes,
-            pdf_filename=filename,
-            # Attribution for the Email Log: which client this went out for, and who
-            # pressed send. Only the report path has both — the invite and code
-            # emails aren't tied to a project.
-            project_id=version["projectId"],
-            sent_by=user["id"],
-        )
-        delivery = outcome["delivery"]
+        deliveries = []
+        for group in groups:
+            outcome = email_service.send_report_email(
+                db,
+                email=valid,
+                cc=cc_valid,
+                subject=subject,
+                body=email_body,
+                html=html_body,
+                attachments=group,
+                # Attribution for the Email Log: which client this went out for, and who
+                # pressed send. Only the report path has both — the invite and code
+                # emails aren't tied to a project.
+                project_id=version["projectId"],
+                sent_by=user["id"],
+            )
+            deliveries.append(outcome["delivery"])
+
+        # Worst outcome across the groups, so a split send that half-failed never
+        # reports success.
+        if all(d == "sent" for d in deliveries):
+            delivery = "sent"
+        elif all(d in ("sent", "outbox") for d in deliveries):
+            delivery = "outbox"
+        else:
+            delivery = next(d for d in deliveries if d not in ("sent", "outbox"))
+
         # Nothing else in the app ever advanced report_version.status past
         # 'draft', so a version stayed a draft forever: re-generating the same
         # period kept 409-ing against a report that had already gone out, and a

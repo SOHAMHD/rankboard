@@ -106,12 +106,32 @@ class LoginIn(BaseModel):
     password: str
 
 
+def _pair_key(ip: str, email: str) -> str:
+    return f"{ip}|{email}"
+
+
+def _account_key(email: str) -> str:
+    """The account-only counter that sits under the per-(IP, email) one.
+
+    Without it the pair key is the only limit, and a limit that fine-grained
+    never fires: one password sprayed across 500 known addresses from one host
+    files 500 separate attempts, and brute-forcing a single account only needs a
+    rotating source IP. Neither reaches five.
+
+    It matters more than usual here because DEPLOY.md runs uvicorn behind
+    --proxy-headers, so `request.client.host` is whatever the proxy reports —
+    spoofable outright if FORWARDED_ALLOW_IPS is ever set to "*".
+    """
+    return f"acct:{email}"
+
+
 @router.post("/login")
 def login(body: LoginIn, request: Request, db: sqlite3.Connection = Depends(get_db)):
     email = body.email.strip().lower()
     ip = request.client.host if request.client else "?"
-    key = f"{ip}|{email}"
-    wait = throttle.login_retry_after(key)
+    key = _pair_key(ip, email)
+    acct = _account_key(email)
+    wait = max(throttle.login_retry_after(key), throttle.login_retry_after(acct))
     if wait:
         raise HTTPException(429, f"Too many attempts. Try again in about {wait} seconds.")
 
@@ -125,13 +145,16 @@ def login(body: LoginIn, request: Request, db: sqlite3.Connection = Depends(get_
     # throttle hit so it isn't a free probe.
     if len(body.password.encode()) > 72:
         throttle.login_failed(key)
+        throttle.login_account_failed(acct)
         raise HTTPException(401, "No account matches that email and password.")
     password_ok = bcrypt.checkpw(body.password.encode(), hashed.encode())
     if user is None or not password_ok:
         throttle.login_failed(key)
+        throttle.login_account_failed(acct)
         raise HTTPException(401, "No account matches that email and password.")
 
     throttle.login_ok(key)
+    throttle.login_ok(acct)
     token = create_pending_token(user["id"], user["role"],
                                  token_version=_token_version(db, user["id"]))
     return {
@@ -267,6 +290,11 @@ def twofa_verify_backup(
     wait = throttle.twofa_retry_after(user["id"])
     if wait:
         raise HTTPException(429, f"Too many attempts. Try again in about {wait} seconds.")
+    # Gated on enrolment, exactly as /2fa/verify is. A backup code is only a
+    # second factor for an account that has one; without this check any code that
+    # outlived a 2FA reset stayed a way past it.
+    if not user["totp_enabled"]:
+        raise HTTPException(400, "Two-factor authentication isn't set up on this account.")
     rows = db.execute(
         "SELECT id, code_hash FROM twofa_backup_codes WHERE user_id = ? AND used_at IS NULL",
         (user["id"],),
@@ -366,10 +394,13 @@ def forgot_password_request(
 ):
     email = body.email.strip().lower()
     ip = request.client.host if request.client else "?"
-    key = f"{ip}|{email}"
-    if throttle.reset_retry_after(key):
+    key = _pair_key(ip, email)
+    acct = _account_key(email)
+    # Both silently, as before: a 429 here would confirm the address exists.
+    if throttle.reset_retry_after(key) or throttle.reset_retry_after(acct):
         return {"ok": True}
     throttle.reset_requested(key)
+    throttle.reset_account_requested(acct)
     user = db.execute("SELECT id, name, email FROM users WHERE email = ?", (email,)).fetchone()
     if user is not None:
         _issue_password_code(user, db)
@@ -412,6 +443,14 @@ def forgot_password_reset(body: ForgotResetIn, db: sqlite3.Connection = Depends(
     db.execute(
         # token_version bump ends every other session: see security.create_token.
         "UPDATE users SET password_hash = ?, must_change_password = 0,"
+        #
+        # status is set alongside it for the same reason /set-password does it.
+        # Clearing must_change_password on an account still marked 'invited' left
+        # it in a state nothing could recover: refused by require_active_user on
+        # status, refused by /set-password because must_change_password is now 0,
+        # and /password/change sits behind require_active_user. Only a Super Admin
+        # re-invite got the user back in.
+        "       status = 'active',"
         "       token_version = token_version + 1 WHERE id = ?",
         (new_hash, user["id"]),
     )
