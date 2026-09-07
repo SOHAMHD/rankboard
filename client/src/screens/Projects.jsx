@@ -323,9 +323,15 @@ function ProjectCard({ project, user, onOpen, onEdit, onToggle, onDelete }) {
     // The card stays clickable as an affordance, but the title below is a real
     // button — this was a bare <div onClick>, which made opening a project
     // impossible without a mouse.
+    // min-w-0: as a grid item this defaults to min-width:auto, so the card was
+    // sized to its own min-content — the 60px logo, the gap, the text block and
+    // the shrink-0 status pill add up to 397px, which is wider than a 375px
+    // phone. The card overflowed the viewport and the pill and the delete icon
+    // sat off-screen. Clamping it here lets the column win and the text truncate,
+    // and covers the sm/lg columns too rather than just the one-column case.
     <div
       onClick={openable ? onOpen : undefined}
-      className={`group bg-white rounded-xl border p-5 transition-all border-stone-200 focus-within:border-orange-400 ${
+      className={`group min-w-0 bg-white rounded-xl border p-5 transition-all border-stone-200 focus-within:border-orange-400 ${
         openable
           ? "cursor-pointer hover:shadow-md hover:border-orange-400"
           : "opacity-75 hover:opacity-100"

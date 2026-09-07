@@ -1,37 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Download, FileText, LoaderCircle, Table } from "lucide-react";
-import { BASE, getToken } from "../api";
+import { ChevronDown, Download, Eye, FileText, LoaderCircle, Table } from "lucide-react";
 import { BTN_GHOST } from "../ui";
 import { useToast } from "../toast.jsx";
+import PdfPreviewModal from "./PdfPreviewModal";
+import { clearPdfCache } from "./usePdfBlob";
+import { reportFileName, useReportDownload } from "./useReportDownload";
 
-function slug(s) {
-  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "report";
-}
-
-function fileName({ projectName, periodKey, versionId }) {
-  if (projectName && periodKey) return `${slug(projectName)}-${slug(periodKey)}-seo-report.pdf`;
-  if (projectName) return `${slug(projectName)}-seo-report.pdf`;
-  return `report-${versionId}.pdf`;
-}
-
-// The Excel roll-up is named by the server, which knows the client name and the
-// newest month in the sheet. Parsed rather than rebuilt here so the two can't drift.
-function nameFromDisposition(header, fallback) {
-  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header || "");
-  return match ? decodeURIComponent(match[1]) : fallback;
-}
-
-const SAVE_TO_DISK = (blob, name) => {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-};
-
+/**
+ * Compact preview + download pair for the editor toolbars.
+ *
+ * The reports list uses ReportVersionCard instead, which lays the same actions
+ * out as labelled rows — a dropdown is the wrong shape when there's room to show
+ * the choices. Both share useReportDownload so the fetch, filename and
+ * save-first rules exist once.
+ */
 export default function DownloadReportButton({
   versionId,
   projectName,
@@ -41,10 +23,21 @@ export default function DownloadReportButton({
   onError,
   beforeDownload,
 }) {
-  const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // Separate from the download's busy flag so saving a draft ahead of a preview
+  // doesn't spin the download control, and vice versa.
+  const [previewBusy, setPreviewBusy] = useState(false);
   const wrapRef = useRef(null);
   const toast = useToast();
+
+  const { download, busy } = useReportDownload({
+    versionId,
+    projectName,
+    periodKey,
+    beforeDownload,
+    onError,
+  });
 
   useEffect(() => {
     if (!open) return undefined;
@@ -60,40 +53,32 @@ export default function DownloadReportButton({
     };
   }, [open]);
 
-  const download = async (kind) => {
-    if (busy) return;
+  const pick = (kind) => {
     setOpen(false);
-    setBusy(true);
-    const excel = kind === "xlsx";
-    const failure = excel
-      ? "Couldn't build the Excel report — try again."
-      : "Couldn't generate the PDF — try again.";
-    try {
-      // Runs for both formats. The Excel sheet reads the selected countries and
-      // pages out of the saved document, so an unsaved draft would export the
-      // previous selection.
-      if (beforeDownload) await beforeDownload();
-      const url = `${BASE}/api/reports/${versionId}/${excel ? "xlsx" : "pdf"}`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${getToken()}` } });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || body.detail || failure);
+    download(kind);
+  };
+
+  const openPreview = async () => {
+    if (busy || previewBusy) return;
+    setOpen(false);
+    if (beforeDownload) {
+      setPreviewBusy(true);
+      try {
+        await beforeDownload();
+        clearPdfCache(String(versionId));
+      } catch (e) {
+        // beforeDownload is the caller's save, which reports its own failure
+        // through onError. Previewing an unsaved draft would show the wrong
+        // document, so we stop rather than open something misleading.
+        const msg = e?.message || "Couldn't save the draft — preview cancelled.";
+        onError?.(msg);
+        toast.error(msg, { title: "Preview failed" });
+        return;
+      } finally {
+        setPreviewBusy(false);
       }
-      const blob = await res.blob();
-      SAVE_TO_DISK(
-        blob,
-        excel
-          ? nameFromDisposition(res.headers.get("Content-Disposition"), "seo-report.xlsx")
-          : fileName({ projectName, periodKey, versionId })
-      );
-      toast.success("Report downloaded.", { title: excel ? "Excel ready" : "PDF ready" });
-    } catch (e) {
-      const msg = e.message || failure;
-      onError?.(msg);
-      toast.error(msg, { title: "Download failed" });
-    } finally {
-      setBusy(false);
     }
+    setPreviewOpen(true);
   };
 
   const menu = open && (
@@ -103,14 +88,14 @@ export default function DownloadReportButton({
     >
       <button
         role="menuitem"
-        onClick={() => download("pdf")}
+        onClick={() => pick("pdf")}
         className="w-full flex items-center gap-2 px-3 py-2 text-sm text-stone-700 hover:bg-orange-50 hover:text-orange-700 text-left"
       >
         <FileText size={14} /> Standard Report
       </button>
       <button
         role="menuitem"
-        onClick={() => download("xlsx")}
+        onClick={() => pick("xlsx")}
         className="w-full flex items-center gap-2 px-3 py-2 text-sm text-stone-700 hover:bg-orange-50 hover:text-orange-700 text-left"
       >
         <Table size={14} /> Excel Report
@@ -118,9 +103,29 @@ export default function DownloadReportButton({
     </div>
   );
 
+  const preview = (
+    <PdfPreviewModal
+      open={previewOpen}
+      onClose={() => setPreviewOpen(false)}
+      versionId={versionId}
+      periodKey={periodKey}
+      projectName={projectName}
+      filename={reportFileName({ projectName, periodKey, versionId })}
+      cacheKey={String(versionId)}
+    />
+  );
+
   if (label) {
     return (
-      <div className="relative" ref={wrapRef}>
+      <div className="relative flex items-center gap-2" ref={wrapRef}>
+        <button
+          onClick={openPreview}
+          disabled={busy || previewBusy}
+          title="Open the report in the app"
+          className={`${BTN_GHOST} px-3 py-1.5`}
+        >
+          {previewBusy ? <LoaderCircle size={14} className="animate-spin" /> : <Eye size={14} />} Preview
+        </button>
         <button
           onClick={() => setOpen((v) => !v)}
           disabled={busy}
@@ -132,12 +137,22 @@ export default function DownloadReportButton({
           <ChevronDown size={13} className="opacity-60" />
         </button>
         {menu}
+        {preview}
       </div>
     );
   }
 
   return (
-    <div className="relative" ref={wrapRef}>
+    <div className="relative flex items-center gap-0.5" ref={wrapRef}>
+      <button
+        onClick={openPreview}
+        disabled={busy || previewBusy}
+        aria-label={`Preview ${periodKey || `report ${versionId}`}`}
+        title="Preview"
+        className="inline-flex items-center justify-center rounded-lg p-1.5 text-stone-400 hover:text-orange-600 hover:bg-orange-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {previewBusy ? <LoaderCircle size={15} className="animate-spin" /> : <Eye size={15} />}
+      </button>
       <button
         onClick={() => setOpen((v) => !v)}
         disabled={busy}
@@ -150,6 +165,7 @@ export default function DownloadReportButton({
         {busy ? <LoaderCircle size={15} className="animate-spin" /> : <Download size={15} />}
       </button>
       {menu}
+      {preview}
     </div>
   );
 }

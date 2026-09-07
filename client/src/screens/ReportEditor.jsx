@@ -14,10 +14,9 @@ import {
   LoaderCircle,
   Plus,
   Save,
-  Trash2,
 } from "lucide-react";
 import { api, BASE, getToken } from "../api";
-import { ConfirmModal, ErrorNote, BTN_PRIMARY, BTN_GHOST, INPUT_CLS, isAuthor, isReportDeleter, isReportSender, monthLabel } from "../ui";
+import { ConfirmModal, ErrorNote, BTN_PRIMARY, INPUT_CLS, isAuthor, isReportDeleter, isReportSender, monthLabel } from "../ui";
 import { useToast } from "../toast.jsx";
 import { createBlobNode } from "../lib/blobNode";
 import {
@@ -28,7 +27,7 @@ import {
 import ReportDocument from "./ReportDocument";
 import ReportDocumentEditor from "./ReportDocumentEditor";
 import DownloadReportButton from "../lib/DownloadReportButton";
-import SendReportButton from "../lib/SendReportButton";
+import ReportVersionCard from "../lib/ReportVersionCard";
 
 const GROUP_ORDER = ["GA4", "GSC", "Moz", "Changes"];
 
@@ -46,12 +45,6 @@ export function blobInsertNodes(item) {
     { type: "text", text: " " },
   ];
 }
-const STATUS_BADGE = {
-  draft: "bg-emerald-100 text-emerald-700",
-  in_review: "bg-amber-100 text-amber-700",
-  sent: "bg-stone-200 text-stone-600",
-};
-
 const emptyDoc = () => ({ type: "doc", content: [{ type: "paragraph" }] });
 
 function lastCompletedMonth() {
@@ -279,48 +272,21 @@ export function ReportsPanel({ user, project }) {
           No report versions yet. Pick a month above and generate one — it'll appear here to edit.
         </p>
       ) : (
-        <div className="mt-4 bg-white border border-stone-200 rounded-xl divide-y divide-stone-100">
+        // Separate cards rather than rows in one panel: each version expands on
+        // its own, and the gap marks the boundary without a divider doing it.
+        <div className="mt-4 space-y-2">
           {versions.map((v) => (
-            <div key={v.id} className="flex items-center justify-between gap-3 px-4 py-3">
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-stone-900">
-                  {monthLabel(v.periodKey)}
-                  {v.parentVersionId ? <span className="text-stone-400"> · forked from #{v.parentVersionId}</span> : null}
-                </p>
-                <p className="text-xs text-stone-400">#{v.id} · {v.createdAt}</p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_BADGE[v.status] || "bg-stone-200 text-stone-600"}`}>
-                  {v.status}
-                </span>
-                <DownloadReportButton
-                  versionId={v.id}
-                  projectName={project.name}
-                  periodKey={v.periodKey}
-                  onError={(m) => setGenMsg({ tone: "warn", text: m })}
-                />
-                {canSend && (
-                  <SendReportButton
-                    versionId={v.id}
-                    periodKey={v.periodKey}
-                    projectId={project.id}
-                  />
-                )}
-                <button onClick={() => setOpenId(v.id)} className={`${BTN_GHOST} px-3 py-1.5`}>
-                  {v.status === "draft" ? "Edit" : "Open"}
-                </button>
-                {canDelete && (
-                  <button
-                    onClick={() => askDelete(v)}
-                    className="inline-flex items-center justify-center rounded-lg p-1.5 text-stone-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                    aria-label={`Delete report ${v.periodKey}`}
-                    title="Delete report"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                )}
-              </div>
-            </div>
+            <ReportVersionCard
+              key={v.id}
+              version={v}
+              projectName={project.name}
+              projectId={project.id}
+              canSend={canSend}
+              canDelete={canDelete}
+              onOpen={() => setOpenId(v.id)}
+              onDelete={() => askDelete(v)}
+              onError={(m) => setGenMsg({ tone: "warn", text: m })}
+            />
           ))}
         </div>
       )}

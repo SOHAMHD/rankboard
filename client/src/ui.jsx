@@ -97,20 +97,48 @@ export function TopBar({ user, onLogout, onPeople, onEmailLog, onHome }) {
   const [showPw, setShowPw] = useState(false);
   return (
     <>
+    {/* Two rows on a phone, one from sm up.
+     *
+     * As a single row it overflowed badly at 375px: "SEO Dashboard" wrapped to
+     * two lines, which pushed the People and Email Log icons back over the
+     * title, and the role pill wrapped inside its own rounded background. The
+     * pieces don't fit on one 375px line, and hiding the role and the user's
+     * name — the two things telling you which account you're in — is the wrong
+     * thing to drop. So identity keeps the top row and the actions get their
+     * own beneath it. */}
     <header className="bg-white border-b border-stone-200 sticky top-0 z-10">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
-        <button onClick={onHome} className="flex items-center gap-2.5 cursor-pointer" aria-label="Go to projects">
-          <img src="/infapp-logo.png" alt="InfyApp" className="h-7 w-auto" />
-          <span className="h-5 w-px bg-stone-200" aria-hidden="true" />
-          <span className="font-bold text-stone-900 font-display">SEO Dashboard</span>
-        </button>
-        <div className="flex items-center gap-2 sm:gap-3">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row sm:items-center sm:justify-between sm:h-14">
+        <div className="flex items-center justify-between gap-2 h-12 sm:h-auto">
+          <button onClick={onHome} className="flex items-center gap-2.5 cursor-pointer min-w-0" aria-label="Go to projects">
+            <img src="/infapp-logo.png" alt="InfyApp" className="h-7 w-auto shrink-0" />
+            <span className="h-5 w-px bg-stone-200 shrink-0" aria-hidden="true" />
+            <span className="font-bold text-stone-900 font-display truncate">SEO Dashboard</span>
+          </button>
+          {/* Identity rides the top row on mobile and folds into the action
+              group from sm up, where there's width for one line. */}
+          <div className="flex items-center gap-2 shrink-0 sm:hidden">
+            {isReadOnly(user) && (
+              <span
+                title="Your access is read-only — you can view everything but can't make changes."
+                className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-stone-200 text-stone-600"
+              >
+                <Eye size={12} /> Read-only
+              </span>
+            )}
+            <span className={`text-xs font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${ROLE_STYLES[user.role]}`}>
+              {roleLabel(user.role)}
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 sm:gap-3 h-11 sm:h-auto border-t border-stone-100 sm:border-0 -mx-4 px-4 sm:mx-0 sm:px-0">
           {onPeople && (can(user, "manageUsers") || can(user, "assignProjects")) && (
             <button
               onClick={onPeople}
               className="inline-flex items-center gap-1.5 text-sm font-medium text-stone-600 hover:text-stone-900 px-2.5 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
             >
-              <Users size={15} /> <span className="hidden sm:inline">People</span>
+              {/* Labelled on mobile too: the action row has width to spare, and
+                  two unlabelled icons side by side are a guessing game. */}
+              <Users size={15} /> People
             </button>
           )}
           {onEmailLog && can(user, "viewEmailLog") && (
@@ -119,24 +147,26 @@ export function TopBar({ user, onLogout, onPeople, onEmailLog, onHome }) {
               title="Every email the system has sent, and what happened to it"
               className="inline-flex items-center gap-1.5 text-sm font-medium text-stone-600 hover:text-stone-900 px-2.5 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
             >
-              <MailCheck size={15} /> <span className="hidden sm:inline">Email Log</span>
+              <MailCheck size={15} /> Email Log
             </button>
           )}
           <span className="text-sm text-stone-600 hidden sm:inline">{user.name}</span>
+          {/* Both of these are drawn on the identity row below sm — hidden here
+              so they aren't rendered twice. */}
           {isReadOnly(user) && (
             <span
               title="Your access is read-only — you can view everything but can't make changes."
-              className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-stone-200 text-stone-600"
+              className="hidden sm:inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-stone-200 text-stone-600"
             >
               <Eye size={12} /> Read-only
             </span>
           )}
-          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ROLE_STYLES[user.role]}`}>{roleLabel(user.role)}</span>
+          <span className={`hidden sm:inline text-xs font-medium px-2 py-0.5 rounded-full ${ROLE_STYLES[user.role]}`}>{roleLabel(user.role)}</span>
           <button
             onClick={() => setShowPw(true)}
             aria-label="Change password"
             title="Change password"
-            className="p-1.5 rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors"
+            className="ml-auto sm:ml-0 p-1.5 rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors"
           >
             <KeyRound size={16} />
           </button>

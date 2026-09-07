@@ -254,18 +254,6 @@ def _month_label(period_key):
         return str(period_key)
 
 
-def _source_failures(versions):
-    """Months whose GA4 or GSC fetch failed, so a gap is never passed off as zero."""
-    out = []
-    for v in versions:
-        sources = (v.get("data") or {}).get("sources") or {}
-        for name in ("ga4", "gsc"):
-            entry = sources.get(name) or {}
-            if not entry.get("present", True):
-                out.append((v.get("periodKey"), name.upper(), entry.get("reason") or "unavailable"))
-    return out
-
-
 def columns_for(rows, pinned):
     """The month columns for one report, oldest first.
 
@@ -405,15 +393,16 @@ def build_workbook(project, versions):
     section("Top Performing Pages (Top Performing Pages)", pages,
             PAGE_BLOCK, "by_landing_page", PAGE_METRIC)
 
-    failures = _source_failures(versions)
-    if failures:
-        row += 1
-        _write(ws, row, 2, "Data gaps", font=_LABEL_FONT, border=Border())
-        row += 1
-        for period, source, reason in failures:
-            _write(ws, row, 2, f"{_month_label(period)} — {source}: {reason}",
-                   font=_NOTE_FONT, border=Border())
-            row += 1
+    # There used to be a "Data gaps" footer here listing why a month's GA4 or GSC
+    # fetch failed. It printed sources.<provider>.reason verbatim, and those
+    # strings are raw Google client errors — the full request URI, the response
+    # body, the service-account principal. This workbook is emailed to the client,
+    # which made it the only place that detail reached anyone outside the team.
+    #
+    # A failed month already reads as a gap: every cell in its column renders the
+    # greyed em-dash rather than a zero. The reason itself stays where it is
+    # useful and safe — the report view in the dashboard, which is gated to
+    # author roles.
 
     ws.column_dimensions["A"].width = 4.5
     ws.column_dimensions["B"].width = 46

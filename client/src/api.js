@@ -33,14 +33,25 @@ function onUnauthorised() {
 }
 
 export async function api(path, { method = "GET", body } = {}) {
-  const res = await fetch(`${BASE}/api${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE}/api${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (cause) {
+    // fetch() rejects only when the request never completed — the dev server is
+    // down, the network dropped, or the request was blocked. Left unwrapped this
+    // surfaced as "Failed to fetch", which every screen then rendered verbatim.
+    const err = new Error("Couldn't reach the server. Check your connection and try again.");
+    err.status = 0;
+    err.cause = cause;
+    throw err;
+  }
 
   const data = await res.json().catch(() => ({}));
 
@@ -52,7 +63,25 @@ export async function api(path, { method = "GET", body } = {}) {
   }
 
   if (!res.ok) {
-    const err = new Error(data.error || "Something went wrong.");
+    // Both keys are in use: FastAPI's own handlers raise `detail`, ours return
+    // `error`. Reading only `error` meant a genuine server message was thrown
+    // away in favour of the generic fallback.
+    const fromServer = data.error || data.detail;
+
+    // A 5xx with no JSON body at all is not an application error — it's the API
+    // failing to answer. In dev that is nearly always Vite's proxy reporting
+    // ECONNREFUSED because the FastAPI process isn't running, which arrives here
+    // as a 500 with an empty text/plain body. Reporting that as "Something went
+    // wrong." sends you looking for a bug in the app instead of starting the
+    // backend.
+    const upstreamSilent = res.status >= 500 && !fromServer;
+
+    const err = new Error(
+      fromServer ||
+        (upstreamSilent
+          ? `The server didn't respond (${res.status}). It may be restarting or not running.`
+          : "Something went wrong.")
+    );
     err.status = res.status;
     throw err;
   }
