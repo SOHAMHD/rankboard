@@ -81,7 +81,10 @@ _SECTION_FILL = PatternFill("solid", start_color=_BLUE_TINT)
 _BAND_FILL = PatternFill("solid", start_color=_BLUE_FAINT)
 
 _HEADER_FONT = Font(bold=True, color="FFFFFF", name="Arial", size=11)
-_SECTION_FONT = Font(bold=True, name="Arial", color=_BLUE_DARK, size=10)
+#: Section headings are bold, not coloured. Colour is reserved for the header
+#: band at the top of each sheet — a tinted band plus zebra striping plus blue
+#: heading text left the page competing with the figures on it.
+_SECTION_FONT = Font(bold=True, name="Arial", color=_INK, size=10)
 _BODY_FONT = Font(name="Arial", color=_INK, size=10)
 _LABEL_FONT = Font(name="Arial", color=_INK, size=10, bold=True)
 _MUTED_FONT = Font(name="Arial", color=_MUTED, size=10)
@@ -334,12 +337,23 @@ def columns_for(rows, pinned):
     selection.
 
     Later months are dropped: an August report has no September column.
+
+    The window is also one calendar year. A workbook covers the pinned report's
+    year and nothing before it, so January 2027's export starts a fresh sheet
+    rather than carrying twelve 2026 columns forward — a workbook that grew
+    without bound would eventually be unreadable, and a client's 2027 report is
+    not the place to restate 2026.
     """
     cutoff = pinned.get("periodKey")
+    year = str(cutoff or "")[:4]
     best = {}
     for r in rows:
         key = r.get("periodKey")
         if key is None or (cutoff is not None and key > cutoff):
+            continue
+        # Same-year only. Compared on the period key's own "YYYY-MM" text, which
+        # is how every other window in this module is decided.
+        if year and not str(key).startswith(year):
             continue
         if key not in best or (r.get("id") or 0) > (best[key].get("id") or 0):
             best[key] = r
@@ -392,12 +406,23 @@ def _write(ws, row, col, value, *, fmt=None, font=None, fill=None,
         cell.fill = fill
     if fmt and numeric:
         cell.number_format = fmt
-    cell.alignment = align or (_RIGHT if numeric else _CENTRE if value == _EMPTY else _LEFT)
+    # Figures centre in their column. Right-aligning them lined the digits up
+    # against the next month's column rule instead of sitting under the month
+    # heading, which is what the eye tracks when reading along a row.
+    cell.alignment = align or (_CENTRE if numeric or value == _EMPTY else _LEFT)
     return cell
 
 
-def build_workbook(project, versions):
-    """One column per month, oldest first. Sections flow — nothing is at a fixed row."""
+def build_workbook(project, versions, keyword_order=None):
+    """Three sheets: the month-by-month roll-up, Keywords, and Backlinks.
+
+    One column per month on the first two, oldest first. Sections flow — nothing
+    is at a fixed row.
+
+    `keyword_order` is optional so existing callers keep working; without it the
+    Keywords sheet falls back to the order the stored report sections present,
+    which is by rank rather than the dashboard's.
+    """
     if not versions:
         raise ValueError("This project has no saved reports yet, so there is nothing to export.")
 
@@ -442,10 +467,10 @@ def build_workbook(project, versions):
     def section(title, entities, block_id, section_key, metric):
         nonlocal row, index
         index += 1
-        _write(ws, row, 1, index, font=_SECTION_FONT, fill=_SECTION_FILL, align=_CENTRE)
-        _write(ws, row, 2, title, font=_SECTION_FONT, fill=_SECTION_FILL)
+        _write(ws, row, 1, index, font=_SECTION_FONT, align=_CENTRE)
+        _write(ws, row, 2, title, font=_SECTION_FONT)
         for i in range(len(versions)):
-            _write(ws, row, 3 + i, None, fill=_SECTION_FILL)
+            _write(ws, row, 3 + i, None)
         ws.row_dimensions[row].height = 20
         row += 1
 
@@ -457,16 +482,12 @@ def build_workbook(project, versions):
             row += 1
             return
 
-        # Banded, because these two sections are the long ones — a client tracking
-        # one page across four month columns is reading along a row.
-        for n, name in enumerate(entities):
-            band = _BAND_FILL if n % 2 else None
-            _write(ws, row, 1, None, fill=band)
-            _write(ws, row, 2, name, fill=band, align=_LEFT_INDENT)
+        for name in entities:
+            _write(ws, row, 1, None)
+            _write(ws, row, 2, name, align=_LEFT_INDENT)
             for i, version in enumerate(versions):
                 value = _entity_value(version, block_id, section_key, metric, name)
-                _write(ws, row, 3 + i, _EMPTY if value is None else value,
-                       fmt=_INT_FMT, fill=band)
+                _write(ws, row, 3 + i, _EMPTY if value is None else value, fmt=_INT_FMT)
             ws.row_dimensions[row].height = 17
             row += 1
 
@@ -503,6 +524,146 @@ def build_workbook(project, versions):
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
 
+    _keywords_sheet(wb, versions, keyword_order)
+    _backlinks_sheet(wb, versions)
+
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+def _sheet_header(ws, label, months):
+    """The shared chrome: numbered first column, a label column, then months.
+
+    `months` empty means the sheet has no month columns at all — the backlinks
+    list is one month's, so drawing Jun and Jul over it would imply data that
+    doesn't exist.
+    """
+    ws.sheet_view.showGridLines = False
+    for col, title in enumerate(["#", label], start=1):
+        _write(ws, 1, col, title, font=_HEADER_FONT, fill=_HEADER_FILL,
+               align=_CENTRE if col == 1 else _LEFT, border=_HEADER_BORDER)
+    for i, month in enumerate(months):
+        _write(ws, 1, 3 + i, month, font=_HEADER_FONT, fill=_HEADER_FILL,
+               align=_CENTRE, border=_HEADER_BORDER)
+    ws.row_dimensions[1].height = 26
+
+
+def _sheet_layout(ws, label_width, month_count):
+    ws.column_dimensions["A"].width = 4.5
+    ws.column_dimensions["B"].width = label_width
+    for i in range(month_count):
+        ws.column_dimensions[get_column_letter(3 + i)].width = 13
+    ws.freeze_panes = "C2" if month_count else "A2"
+    ws.print_title_rows = "1:1"
+    ws.print_title_cols = "A:B"
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+
+def _keyword_ranks(data):
+    """term -> that month's position, for one version."""
+    kw = ((data or {}).get("sections") or {}).get("keywords") or {}
+    out = {}
+    for item in kw.get("items") or []:
+        term = (item.get("term") or "").strip()
+        if term:
+            out[term] = _num(item.get("current_rank"))
+    return out
+
+
+def _keyword_rows(versions, keyword_order):
+    """Every term seen in the workbook's months, in the dashboard's order.
+
+    The union matters: a keyword added in July still gets its August rank and an
+    empty June, rather than vanishing from the sheet because it wasn't tracked all
+    year.
+
+    `keyword_order` is the project's terms as the Keywords screen lists them
+    (created_at, id). It's passed in because the stored report sections are
+    rank-sorted and their items carry no created_at, so that order can't be
+    recovered from the report data. Terms not in the list — renamed or deleted
+    since — follow in the order the months themselves present them, so nothing is
+    dropped just because the live keyword list has moved on.
+    """
+    seen = []
+    for version in versions:
+        for term in _keyword_ranks(version.get("data")):
+            if term not in seen:
+                seen.append(term)
+    if not keyword_order:
+        return seen
+    known = [t for t in keyword_order if t in seen]
+    return known + [t for t in seen if t not in set(known)]
+
+
+def _keywords_sheet(wb, versions, keyword_order):
+    ws = wb.create_sheet("Keywords")
+    months = [_month_label(v.get("periodKey")) for v in versions]
+    _sheet_header(ws, "Keyword", months)
+
+    terms = _keyword_rows(versions, keyword_order)
+    per_month = [_keyword_ranks(v.get("data")) for v in versions]
+
+    row = 2
+    if not terms:
+        _write(ws, row, 2, "No keywords are tracked for this project.",
+               font=_NOTE_FONT, align=_LEFT_INDENT)
+        for i in range(len(months)):
+            _write(ws, row, 3 + i, None)
+    else:
+        for n, term in enumerate(terms, start=1):
+            _write(ws, row, 1, n, align=_CENTRE)
+            _write(ws, row, 2, term)
+            for i, ranks in enumerate(per_month):
+                rank = ranks.get(term)
+                # A tracked keyword holding no position is a gap, not a zero —
+                # and not a 0 that would sort as the best rank on the sheet.
+                _write(ws, row, 3 + i, _EMPTY if rank is None else rank, fmt=_INT_FMT)
+            ws.row_dimensions[row].height = 17
+            row += 1
+    _sheet_layout(ws, 46, len(months))
+
+
+def _backlinks_sheet(wb, versions):
+    """The report month's backlinks, and only that month's.
+
+    No month columns. Each month's backlinks are an independent list — the data
+    holds a URL and nothing else per link, so there is no figure to put under
+    Jun or Jul, and repeating the same URL across columns would say only that it
+    was imported twice.
+    """
+    ws = wb.create_sheet("Backlinks")
+    _sheet_header(ws, "Backlink URL", [])
+
+    newest = versions[-1] if versions else {}
+    bl = (((newest.get("data") or {}).get("sections") or {}).get("backlinks")) or {}
+    urls = [(i.get("url") or "").strip() for i in bl.get("items") or []]
+    urls = [u for u in urls if u]
+    count = _num(bl.get("count"))
+    if count is None:
+        count = len(urls)
+
+    _write(ws, 2, 1, None)
+    _write(ws, 2, 2, f"Total backlinks · {_month_label(newest.get('periodKey'))}",
+           font=_LABEL_FONT)
+    _write(ws, 2, 3, count, fmt=_INT_FMT)
+    ws.row_dimensions[2].height = 18
+
+    row = 3
+    if not urls:
+        _write(ws, row, 2, "No backlinks recorded for this month.",
+               font=_NOTE_FONT, align=_LEFT_INDENT)
+        _write(ws, row, 3, None)
+    else:
+        for n, url in enumerate(urls, start=1):
+            _write(ws, row, 1, n, align=_CENTRE)
+            _write(ws, row, 2, url)
+            _write(ws, row, 3, None)
+            ws.row_dimensions[row].height = 17
+            row += 1
+    # Wider than the other sheets' label column: these are full URLs, and the
+    # total sits in C so the count isn't stranded off to the right.
+    _sheet_layout(ws, 86, 1)

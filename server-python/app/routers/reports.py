@@ -255,12 +255,23 @@ def download_report_xlsx(
         if project is None:
             raise HTTPException(404, "Project not found.")
         rows = report_service.versions_with_data(db, pinned["projectId"])
+        # The Keywords sheet lists terms in the order the Keywords screen does.
+        # The stored report sections are rank-sorted and their items carry no
+        # created_at, so that order can only come from the live table — read here,
+        # inside the session, rather than reopening one after the connection has
+        # gone back to the pool.
+        keyword_order = [
+            r["term"] for r in db.execute(
+                "SELECT term FROM keywords WHERE project_id = ? ORDER BY created_at, id",
+                (pinned["projectId"],),
+            ).fetchall()
+        ]
 
     # No database connection held from here on.
     versions = report_excel.columns_for(rows, pinned)
 
     meta = {"name": project["name"], "clientName": project["client_name"]}
-    data = report_excel.build_workbook(meta, versions)
+    data = report_excel.build_workbook(meta, versions, keyword_order=keyword_order)
     filename = report_excel.excel_filename(meta, versions)
     return Response(
         content=data,
@@ -345,6 +356,19 @@ def send_report(
             report_service.versions_with_data(db, version["projectId"])
             if "xlsx" in formats else []
         )
+        # Same keyword ordering the download uses, read in the same block. Without
+        # it the emailed workbook would list keywords by rank while the one the
+        # author downloaded listed them in dashboard order — the client and the
+        # team would be looking at differently ordered copies of one report.
+        xlsx_keyword_order = (
+            [
+                r["term"] for r in db.execute(
+                    "SELECT term FROM keywords WHERE project_id = ? ORDER BY created_at, id",
+                    (version["projectId"],),
+                ).fetchall()
+            ]
+            if "xlsx" in formats else []
+        )
 
     # No connection held across the render or the upload below. The send itself
     # needs one to write the emails row, so it takes a fresh short-lived session.
@@ -363,7 +387,9 @@ def send_report(
         xlsx_versions = report_excel.columns_for(xlsx_rows, version)
         attachments.append({
             "filename": report_excel.excel_filename(meta, xlsx_versions),
-            "content": report_excel.build_workbook(meta, xlsx_versions),
+            "content": report_excel.build_workbook(
+                meta, xlsx_versions, keyword_order=xlsx_keyword_order
+            ),
             "mime": report_excel.MIME,
         })
     # Two different names, used in two different places:
