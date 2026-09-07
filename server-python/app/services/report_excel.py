@@ -80,7 +80,34 @@ _CENTRE = Alignment(horizontal="center", vertical="center")
 _INT_FMT = "#,##0"
 _PCT_FMT = "0.00%"
 _SEC_FMT = '0"s"'
+_MIN_FMT = '0.0"m"'
 _RANK_FMT = "0.0"
+
+
+def _duration_cell(seconds):
+    """Render a second count as seconds under a minute, minutes at or above one.
+
+    GA4 gives engagement time as raw seconds, and the sheet used to print it that
+    way whatever the size — "372s" left the reader doing the division.
+
+    The unit switch can't be done with an Excel number format alone: a format can
+    branch on the value (`[<60]…;[>=60]…`) but it cannot scale one, so a 372 cell
+    formatted as minutes would read "372m". The value is therefore converted here
+    and the matching format returned with it.
+
+    Returns (value, number_format). Non-numeric input passes straight through so
+    the sentinel used for missing months keeps its own handling in _write.
+    """
+    if seconds is None or isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+        return seconds, _SEC_FMT
+    # Rounded before the comparison, not after: 59.9s rounds to 60, and deciding
+    # on the raw value would have shown that as "60s".
+    whole = round(seconds)
+    if abs(whole) < 60:
+        # Whole seconds — GA4's fractional precision is noise at this scale.
+        return whole, _SEC_FMT
+    # One decimal keeps 90s distinguishable from 120s as 1.5m vs 2.0m.
+    return round(seconds / 60.0, 1), _MIN_FMT
 
 
 def _num(v):
@@ -278,8 +305,16 @@ def columns_for(rows, pinned):
 
 
 def excel_filename(project, versions):
-    client = (project.get("clientName") or project.get("name") or "report").strip()
-    slug = "".join(c if c.isalnum() else "_" for c in client).strip("_") or "report"
+    # The company, not the contact.
+    #
+    # `clientName` is the person the work is for — "Richa" — while `name` is the
+    # business, "Gaia Pharmacy". Preferring clientName here named the download
+    # after whoever happened to be the contact, so several unrelated projects
+    # sharing an account manager all exported as Richa_SEO_Report_Aug_2026.xlsx
+    # and overwrote each other in the downloads folder. The PDF has always been
+    # named from the project, so this also makes the two formats agree.
+    company = (project.get("name") or project.get("clientName") or "report").strip()
+    slug = "".join(c if c.isalnum() else "_" for c in company).strip("_") or "report"
     period = versions[-1].get("periodKey") if versions else ""
     try:
         year, month = str(period).split("-")
@@ -353,7 +388,12 @@ def build_workbook(project, versions):
         _write(ws, row, 2, label, font=_LABEL_FONT)
         for i, version in enumerate(versions):
             value = resolve(version.get("data"))
-            _write(ws, row, 3 + i, _EMPTY if value is None else value, fmt=fmt)
+            cell_fmt = fmt
+            if fmt is _SEC_FMT:
+                # Duration rows pick their own unit per cell, so a month averaging
+                # 45s and one averaging 6m each read naturally in the same row.
+                value, cell_fmt = _duration_cell(value)
+            _write(ws, row, 3 + i, _EMPTY if value is None else value, fmt=cell_fmt)
         ws.row_dimensions[row].height = 17
         row += 1
 

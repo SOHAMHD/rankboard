@@ -359,16 +359,34 @@ def generate(db, project_id: int, period_key: str | None, user_id: int) -> dict:
     if not period:
         (period,) = db.execute("SELECT strftime('%Y-%m','now')").fetchone()
 
-    placeholders = ",".join("?" * len(UNSENT_STATUSES))
+    # One generated report per project per month.
+    #
+    # This used to match only UNSENT_STATUSES, which meant the guard stopped
+    # firing the moment a report was sent: pressing "Generate report" for a month
+    # already delivered to the client silently produced a second, unrelated draft
+    # for the same period. The list then showed two rows both labelled e.g.
+    # "Aug 2026" with nothing to say which one the client actually received.
+    #
+    # Any existing version for the period now blocks generation. Making a
+    # revision of a sent report is still possible, but only through fork, which
+    # records parent_version_id so the lineage is explicit rather than accidental.
     existing = db.execute(
-        f"SELECT id FROM report_version WHERE project_id = ? AND period_key = ?"
-        f" AND status IN ({placeholders}) ORDER BY id DESC LIMIT 1",
-        (project_id, period, *UNSENT_STATUSES),
+        "SELECT id, status FROM report_version"
+        " WHERE project_id = ? AND period_key = ?"
+        " ORDER BY id DESC LIMIT 1",
+        (project_id, period),
     ).fetchone()
     if existing is not None:
+        if existing["status"] == "sent":
+            raise HTTPException(
+                409,
+                f"The {period} report (#{existing['id']}) has already been sent."
+                " Open it and use Changes to make a revision.",
+            )
         raise HTTPException(
             409,
-            f"an unsent report for {period} exists; use changes to fork it.",
+            f"A {period} report (#{existing['id']}) already exists as a"
+            f" {existing['status'].replace('_', ' ')}. Open it instead of generating another.",
         )
 
     gathered = gather(db, project_id, period)
