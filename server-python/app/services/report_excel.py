@@ -92,6 +92,12 @@ _SECTION_FONT = Font(bold=True, name="Arial", color=_INK, size=10)
 _BODY_FONT = Font(name="Arial", color=_INK, size=10)
 _LABEL_FONT = Font(name="Arial", color=_INK, size=10, bold=True)
 _MUTED_FONT = Font(name="Arial", color=_MUTED, size=10)
+
+#: Rank movement on the Keywords sheet, applied to the figure itself rather than
+#: as a cell fill — the sheet's only block of colour is the header band, and a
+#: green wash behind every improved month would put that back.
+_RANK_UP_FONT = Font(name="Arial", color="15803D", size=10, bold=True)    # green-700
+_RANK_DOWN_FONT = Font(name="Arial", color="B91C1C", size=10, bold=True)  # red-700
 _NOTE_FONT = Font(name="Arial", color=_MUTED, size=9, italic=True)
 
 _HAIR = Side(style="thin", color=_GRID)
@@ -605,6 +611,37 @@ def _keyword_rows(versions, keyword_order):
     return known + [t for t in seen if t not in set(known)]
 
 
+def _rank_font(current, previous, tracked_before):
+    """Colour for one rank figure, judged against the month before it.
+
+    Search rank counts down: position 3 beats position 12. So an improvement is a
+    *smaller* number, which is the opposite of every other figure in this workbook
+    and the reason this can't be a generic "went up / went down" helper.
+
+    Returns None — meaning leave the figure in the ordinary body font — whenever
+    there is nothing honest to compare against:
+
+    * the first month in the workbook, which has no previous column;
+    * a keyword that wasn't tracked the month before, so its "change" would be
+      measured from nothing;
+    * a month where the keyword holds no position at all (the cell is the greyed
+      em-dash, and colouring a gap would imply a movement nobody can see);
+    * an unchanged position, which is news only by being absent.
+
+    A keyword that was tracked but unranked and now holds a position counts as an
+    improvement: entering the results at all is the movement.
+    """
+    if current is None or not tracked_before:
+        return None
+    if previous is None:
+        return _RANK_UP_FONT
+    if current < previous:
+        return _RANK_UP_FONT
+    if current > previous:
+        return _RANK_DOWN_FONT
+    return None
+
+
 def _keywords_sheet(wb, versions, keyword_order):
     ws = wb.create_sheet("Keywords")
     months = [_month_label(v.get("periodKey")) for v in versions]
@@ -625,9 +662,17 @@ def _keywords_sheet(wb, versions, keyword_order):
             _write(ws, row, 2, term)
             for i, ranks in enumerate(per_month):
                 rank = ranks.get(term)
+                # Compared against the column immediately to the left, which is
+                # the previous month — `versions` is oldest-first. `term in prev`
+                # rather than prev.get(term) is not None, so "tracked but
+                # unranked" is distinguishable from "not tracked yet".
+                prev = per_month[i - 1] if i else None
+                font = _rank_font(rank, (prev or {}).get(term),
+                                  tracked_before=bool(prev) and term in prev)
                 # A tracked keyword holding no position is a gap, not a zero —
                 # and not a 0 that would sort as the best rank on the sheet.
-                _write(ws, row, 3 + i, _EMPTY if rank is None else rank, fmt=_INT_FMT)
+                _write(ws, row, 3 + i, _EMPTY if rank is None else rank,
+                       fmt=_INT_FMT, font=font)
             ws.row_dimensions[row].height = 17
             row += 1
     _sheet_layout(ws, 46, len(months))
