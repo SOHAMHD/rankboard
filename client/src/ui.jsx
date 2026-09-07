@@ -52,6 +52,13 @@ export const isReportDeleter = (user) => isAdmin(user) || isManager(user) || isT
 // Sending stays Admin-only. A deleted report can be regenerated; an email to a
 // client can't be recalled.
 export const isReportSender = (user) => isAdmin(user) || isManager(user);
+// Who may edit a report that has left draft, including one already sent.
+//
+// Mirrors LOCKED_EDITOR_ROLES on the server, which is the actual gate — this
+// only decides whether the editor is drawn as editable. Same trust level as
+// sending: if you can put a report in front of a client, you can correct one you
+// got wrong. Team members author drafts and can't.
+export const canEditLockedReport = (user) => isAdmin(user) || isManager(user);
 
 export const ROLE_LABELS = {
   "Super Admin": "Super Admin",

@@ -17,7 +17,7 @@ from ..config import (
     UNSUBSCRIBE_URL,
 )
 from ..db import db_session, get_db
-from ..permissions import AUTHOR_ROLES, DELETER_ROLES, SENDER_ROLES
+from ..permissions import AUTHOR_ROLES, DELETER_ROLES, LOCKED_EDITOR_ROLES, SENDER_ROLES
 from ..security import require_roles
 from ..access import user_can_access_project
 from ..services import report_service
@@ -596,5 +596,11 @@ def save_report_content(
     _require_version_access(db, user, version_id)
     if len(json.dumps(body.content)) > 500_000:
         raise HTTPException(413, "Report document is too large.")
-    version = report_service.save_content(db, version_id, body.content, user["id"])
+    # Admin and above may correct a report that has left draft, including one
+    # already sent. _require_version_access still applies, so this doesn't widen
+    # which projects anyone can touch — only which statuses.
+    version = report_service.save_content(
+        db, version_id, body.content, user["id"],
+        allow_locked=user["role"] in LOCKED_EDITOR_ROLES,
+    )
     return {"version": version}

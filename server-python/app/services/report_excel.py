@@ -66,6 +66,10 @@ MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 _EMPTY = "—"
 
+#: Heading for the row-number column, on every sheet. Spelt out rather than "#",
+#: which reads as a code or an id in a sheet a client opens.
+_INDEX_HEADING = "Sr no"
+
 #: Built around the app's own primary, Tailwind blue-600, so a client opening the
 #: workbook sees the same blue as the dashboard it came from.
 _BLUE = "2563EB"        # blue-600  — header band
@@ -439,7 +443,7 @@ def build_workbook(project, versions, keyword_order=None):
 
     width = 2 + len(versions)
 
-    for col, title in enumerate(["#", "Parameters"], start=1):
+    for col, title in enumerate([_INDEX_HEADING, "Parameters"], start=1):
         _write(ws, 1, col, title, font=_HEADER_FONT, fill=_HEADER_FILL,
                align=_CENTRE if col == 1 else _LEFT, border=_HEADER_BORDER)
     for i, version in enumerate(versions):
@@ -510,7 +514,8 @@ def build_workbook(project, versions, keyword_order=None):
     # useful and safe — the report view in the dashboard, which is gated to
     # author roles.
 
-    ws.column_dimensions["A"].width = 4.5
+    # Wide enough for the "Sr no" heading itself, not just the digits under it.
+    ws.column_dimensions["A"].width = 7
     ws.column_dimensions["B"].width = 46
     for i in range(len(versions)):
         ws.column_dimensions[get_column_letter(3 + i)].width = 13
@@ -540,7 +545,7 @@ def _sheet_header(ws, label, months):
     doesn't exist.
     """
     ws.sheet_view.showGridLines = False
-    for col, title in enumerate(["#", label], start=1):
+    for col, title in enumerate([_INDEX_HEADING, label], start=1):
         _write(ws, 1, col, title, font=_HEADER_FONT, fill=_HEADER_FILL,
                align=_CENTRE if col == 1 else _LEFT, border=_HEADER_BORDER)
     for i, month in enumerate(months):
@@ -550,7 +555,8 @@ def _sheet_header(ws, label, months):
 
 
 def _sheet_layout(ws, label_width, month_count):
-    ws.column_dimensions["A"].width = 4.5
+    # Wide enough for the "Sr no" heading itself, not just the digits under it.
+    ws.column_dimensions["A"].width = 7
     ws.column_dimensions["B"].width = label_width
     for i in range(month_count):
         ws.column_dimensions[get_column_letter(3 + i)].width = 13
@@ -646,24 +652,32 @@ def _backlinks_sheet(wb, versions):
     if count is None:
         count = len(urls)
 
+    # Label and figure in one cell, in the URL column.
+    #
+    # The count used to sit in C, which put it in a column of its own with no
+    # heading over it and nothing else beneath it — it read as a stray number
+    # floating beside the list rather than the list's total. This sheet has no
+    # month columns, so B is the only column that means anything here.
     _write(ws, 2, 1, None)
-    _write(ws, 2, 2, f"Total backlinks · {_month_label(newest.get('periodKey'))}",
+    _write(ws, 2, 2,
+           f"Total backlinks · {_month_label(newest.get('periodKey'))} — {count:,}",
            font=_LABEL_FONT)
-    _write(ws, 2, 3, count, fmt=_INT_FMT)
     ws.row_dimensions[2].height = 18
 
     row = 3
     if not urls:
         _write(ws, row, 2, "No backlinks recorded for this month.",
                font=_NOTE_FONT, align=_LEFT_INDENT)
-        _write(ws, row, 3, None)
     else:
         for n, url in enumerate(urls, start=1):
             _write(ws, row, 1, n, align=_CENTRE)
             _write(ws, row, 2, url)
-            _write(ws, row, 3, None)
             ws.row_dimensions[row].height = 17
             row += 1
-    # Wider than the other sheets' label column: these are full URLs, and the
-    # total sits in C so the count isn't stranded off to the right.
-    _sheet_layout(ws, 86, 1)
+
+    # Sized to the longest URL actually present rather than a fixed guess, so the
+    # links sit inside the column instead of spilling across D, E, F. Capped
+    # because a single tracking URL with a long query string would otherwise push
+    # the column past anything printable.
+    longest = max((len(u) for u in urls), default=0)
+    _sheet_layout(ws, min(max(longest + 3, 48), 130), 0)

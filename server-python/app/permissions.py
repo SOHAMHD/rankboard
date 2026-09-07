@@ -17,6 +17,17 @@ SCOPED_ROLES = frozenset({"Team", "Client"})
 AUTHOR_ROLES = frozenset({"Super Admin", "Admin", "Team"})
 SENDER_ROLES = frozenset({"Super Admin", "Admin"})
 
+#: Who can edit a report that is no longer a draft — including one already sent.
+#:
+#: A sent report is a record of what a client received, so unlocking it is not a
+#: thing to hand to whoever happens to be editing. It is the same trust level as
+#: sending: if you are allowed to put a report in front of a client, you are
+#: allowed to correct one you got wrong. Team members author drafts and cannot.
+#:
+#: Kept as its own name rather than reusing SENDER_ROLES at the call site, so the
+#: two can diverge later without having to work out which meaning was intended.
+LOCKED_EDITOR_ROLES = frozenset({"Super Admin", "Admin"})
+
 #: Who can delete a report. Includes Team by request: they author reports, so a
 #: mis-generated draft is theirs to clear up without waiting for an Admin.
 #:

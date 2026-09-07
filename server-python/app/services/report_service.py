@@ -543,16 +543,31 @@ def template_blocks(db, version_id: int) -> list[dict]:
     return report_document.build_document_from_data(data)["blocks"]
 
 
-def save_content(db, version_id: int, content: dict, user_id: int) -> dict:
+def save_content(db, version_id: int, content: dict, user_id: int,
+                 *, allow_locked: bool = False) -> dict:
+    """Write a report's document.
+
+    Drafts are editable by any author. Anything else — in_review, or sent — is
+    locked unless `allow_locked`, which the router sets from the caller's role
+    (LOCKED_EDITOR_ROLES). Authorisation stays in the router; this only enforces
+    the decision it was handed, so the rule lives in one place next to the other
+    role checks rather than being re-derived down here.
+
+    Correcting a sent report is deliberately possible: a mistake a client has
+    already received is the case where editing matters most. The cost is that
+    content_json then differs from the PDF that was emailed, which is why the
+    editor warns about it rather than doing it quietly.
+    """
     row = db.execute(
         "SELECT status FROM report_version WHERE id = ?", (version_id,)
     ).fetchone()
     if row is None:
         raise HTTPException(404, "Report version not found.")
-    if row["status"] != "draft":
+    if row["status"] != "draft" and not allow_locked:
         raise HTTPException(
             409,
-            f"This report is {row['status']} and locked — only drafts can be edited.",
+            f"This report is {row['status']} and locked."
+            " Only an Admin can change a report once it has left draft.",
         )
     db.execute(
         "UPDATE report_version SET content_json = ? WHERE id = ?",

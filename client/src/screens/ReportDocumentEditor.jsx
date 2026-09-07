@@ -9,6 +9,7 @@ import {
   Plus,
   Save,
   LoaderCircle,
+  AlertTriangle,
   Lock,
   Type,
   LayoutGrid,
@@ -172,8 +173,12 @@ function ReadOnlyDataBlock({ block, hideTitle }) {
   }
 }
 
-export default function ReportDocumentEditor({ version, blobs, canSend = false }) {
-  if (version.status !== "draft") {
+export default function ReportDocumentEditor({ version, blobs, canSend = false, canEditLocked = false }) {
+  const isDraft = version.status === "draft";
+  // An Admin correcting a mistake gets the editor even once the report has left
+  // draft. The server enforces the same rule, so this only decides which of the
+  // two views is mounted.
+  if (!isDraft && !canEditLocked) {
     return (
       <div className="w-full">
         <p className="mb-3 text-sm text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 flex items-center gap-2">
@@ -183,7 +188,14 @@ export default function ReportDocumentEditor({ version, blobs, canSend = false }
       </div>
     );
   }
-  return <EditableDoc version={version} blobs={blobs} canSend={canSend} />;
+  return (
+    <EditableDoc
+      version={version}
+      blobs={blobs}
+      canSend={canSend}
+      unlockedNotice={!isDraft ? version.status : null}
+    />
+  );
 }
 
 function NarrativeEditor({ block, BlobNode, suggestion, onDocChange, onFocusEditor }) {
@@ -345,7 +357,7 @@ function IconBtn({ label, onClick, disabled, danger, children }) {
   );
 }
 
-function EditableDoc({ version, blobs, canSend = false }) {
+function EditableDoc({ version, blobs, canSend = false, unlockedNotice = null }) {
   const blobsByName = useMemo(() => new Map((blobs || []).map((b) => [b.name, b])), [blobs]);
   const paletteItems = useMemo(() => buildPaletteItems(blobs || []), [blobs]);
   const BlobNode = useMemo(() => createBlobNode(blobsByName), [blobsByName]);
@@ -559,7 +571,7 @@ function EditableDoc({ version, blobs, canSend = false }) {
           <h2 className="text-lg font-bold text-stone-900 font-display">
             Edit report · {monthLabel(version.periodKey)}
           </h2>
-          <p className="text-xs text-stone-400">#{version.id} · draft</p>
+          <p className="text-xs text-stone-400">#{version.id} · {version.status}</p>
         </div>
         <div className="flex items-center gap-2">
           {savedAt && !saveError && (
@@ -574,10 +586,25 @@ function EditableDoc({ version, blobs, canSend = false }) {
             onError={setSaveError}
           />
           <button onClick={() => save().catch(() => {})} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
-            {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft
+            {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} {unlockedNotice ? "Save changes" : "Save draft"}
           </button>
         </div>
       </div>
+
+      {/* Only when an Admin has opened something that already left draft. The
+          client's copy is whatever was emailed, so a silent correction here
+          would leave the two permanently out of step. */}
+      {unlockedNotice && (
+        <p className="mb-3 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-2">
+          <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+          <span>
+            This report is <b>{unlockedNotice}</b>. You can edit it because you're an Admin, but
+            {unlockedNotice === "sent"
+              ? " the client already has the copy that was emailed — send it again after correcting it, or they won't see the change."
+              : " it has already left draft."}
+          </span>
+        </p>
+      )}
 
       <ErrorNote>{saveError}</ErrorNote>
 

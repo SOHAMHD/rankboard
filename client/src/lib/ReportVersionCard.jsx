@@ -27,6 +27,7 @@ export default function ReportVersionCard({
   projectId,
   canSend,
   canDelete,
+  canEditLocked,
   onOpen,
   onDelete,
   onError,
@@ -81,7 +82,9 @@ export default function ReportVersionCard({
         </button>
 
         <button onClick={onOpen} className={`${BTN_PRIMARY} shrink-0 px-3 py-1.5`}>
-          {version.status === "draft" ? "Edit" : "Open"}
+          {/* "Open" is honest for a locked report, but misleading for an Admin
+              who can in fact change it. */}
+          {version.status === "draft" || canEditLocked ? "Edit" : "Open"}
         </button>
       </div>
 

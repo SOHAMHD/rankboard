@@ -16,7 +16,7 @@ import {
   Save,
 } from "lucide-react";
 import { api, BASE, getToken } from "../api";
-import { ConfirmModal, ErrorNote, BTN_PRIMARY, INPUT_CLS, isAuthor, isReportDeleter, isReportSender, monthLabel } from "../ui";
+import { ConfirmModal, ErrorNote, BTN_PRIMARY, INPUT_CLS, canEditLockedReport, isAuthor, isReportDeleter, isReportSender, monthLabel } from "../ui";
 import { useToast } from "../toast.jsx";
 import { createBlobNode } from "../lib/blobNode";
 import {
@@ -118,6 +118,7 @@ export function ReportsPanel({ user, project }) {
   const [genMsg, setGenMsg] = useState(null);
   const canDelete = isReportDeleter(user);
   const canSend = isReportSender(user);
+  const canEditLocked = canEditLockedReport(user);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [sentAck, setSentAck] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -210,6 +211,7 @@ export function ReportsPanel({ user, project }) {
       <ReportEditor
         versionId={openId}
         canSend={canSend}
+        canEditLocked={canEditLocked}
         onBack={() => {
           setOpenId(null);
           load();
@@ -283,6 +285,7 @@ export function ReportsPanel({ user, project }) {
               projectId={project.id}
               canSend={canSend}
               canDelete={canDelete}
+              canEditLocked={canEditLocked}
               onOpen={() => setOpenId(v.id)}
               onDelete={() => askDelete(v)}
               onError={(m) => setGenMsg({ tone: "warn", text: m })}
@@ -334,7 +337,7 @@ export function ReportsPanel({ user, project }) {
   );
 }
 
-function ReportEditor({ versionId, onBack, canSend = false }) {
+function ReportEditor({ versionId, onBack, canSend = false, canEditLocked = false }) {
   const [version, setVersion] = useState(null);
   const [blobs, setBlobs] = useState(null);
   const [error, setError] = useState(null);
@@ -370,16 +373,20 @@ function ReportEditor({ versionId, onBack, canSend = false }) {
       ) : error || !version || !blobs ? (
         <ErrorNote>{error || "Could not load this report version."}</ErrorNote>
       ) : version.content?.type === "report_document" ? (
-        <ReportDocumentEditor key={versionId} version={version} blobs={blobs} canSend={canSend} />
+        <ReportDocumentEditor key={versionId} version={version} blobs={blobs} canSend={canSend} canEditLocked={canEditLocked} />
       ) : (
-        <ReportEditorInner key={versionId} version={version} blobs={blobs} canSend={canSend} />
+        <ReportEditorInner key={versionId} version={version} blobs={blobs} canSend={canSend} canEditLocked={canEditLocked} />
       )}
     </div>
   );
 }
 
-function ReportEditorInner({ version, blobs, canSend = false }) {
+function ReportEditorInner({ version, blobs, canSend = false, canEditLocked = false }) {
+  // Editable when it's a draft, or when an Admin is correcting one that has
+  // already left draft. `unlocked` is the flag the toolbar and the banner read;
+  // the server re-checks the role, so this only decides what is drawn.
   const isDraft = version.status === "draft";
+  const unlocked = isDraft || canEditLocked;
   const blobsByName = useMemo(() => new Map(blobs.map((b) => [b.name, b])), [blobs]);
   const paletteItems = useMemo(() => buildPaletteItems(blobs), [blobs]);
 
@@ -415,7 +422,7 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
 
   const editor = useEditor(
     {
-      editable: isDraft,
+      editable: unlocked,
       immediatelyRender: false,
       extensions: [StarterKit, TabIndent, BlobNode.configure({ suggestion })],
       content: doc,
@@ -442,7 +449,7 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
   const unresolved = useMemo(() => findUnresolved(doc, blobsByName), [doc, blobsByName]);
 
   const insert = (item) => {
-    if (!editor || !isDraft) return;
+    if (!editor || !unlocked) return;
     editor.chain().focus().insertContent(blobInsertNodes(item)).run();
   };
 
@@ -476,9 +483,9 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
             <span className="text-xs text-emerald-600">Saved {savedAt.toLocaleTimeString()}</span>
           )}
           <DownloadReportButton versionId={version.id} periodKey={version.periodKey} label onError={setSaveError} />
-          {isDraft ? (
+          {unlocked ? (
             <button onClick={save} disabled={saving} className={`${BTN_PRIMARY} px-3 py-1.5`}>
-              {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} Save draft
+              {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} {isDraft ? "Save draft" : "Save changes"}
             </button>
           ) : (
             <span className="inline-flex items-center gap-1.5 text-xs font-medium text-stone-500 bg-stone-100 border border-stone-200 px-2.5 py-1 rounded-lg">
@@ -488,20 +495,34 @@ function ReportEditorInner({ version, blobs, canSend = false }) {
         </div>
       </div>
 
-      {!isDraft && (
+      {/* Three states: an editable draft says nothing, a locked report explains
+          why it's read-only, and a report an Admin has unlocked warns that the
+          client already has the version that went out. */}
+      {!isDraft && !canEditLocked && (
         <p className="mb-3 text-sm text-stone-600 bg-stone-50 border border-stone-200 rounded-lg px-3 py-2 flex items-center gap-2">
           <Lock size={14} /> This report is <b>{version.status}</b> and can't be edited. You're viewing it read-only.
         </p>
       )}
+      {!isDraft && canEditLocked && (
+        <p className="mb-3 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-2">
+          <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+          <span>
+            This report is <b>{version.status}</b>. You can edit it because you're an Admin, but
+            {version.status === "sent"
+              ? " the client already has the copy that was emailed — send it again after correcting it, or they won't see the change."
+              : " it has already left draft."}
+          </span>
+        </p>
+      )}
       <ErrorNote>{saveError}</ErrorNote>
 
-      <FinalizeGate unresolved={unresolved} isDraft={isDraft} />
+      <FinalizeGate unresolved={unresolved} isDraft={unlocked} />
 
       <div className="mt-3 grid grid-cols-1 lg:grid-cols-[15rem_minmax(0,1fr)_minmax(0,1fr)] gap-4">
-        {isDraft && <BlobPalette items={paletteItems} onInsert={insert} />}
+        {unlocked && <BlobPalette items={paletteItems} onInsert={insert} />}
 
         <div className="min-w-0">
-          {isDraft && <Toolbar editor={editor} />}
+          {unlocked && <Toolbar editor={editor} />}
           <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
             <EditorContent editor={editor} />
           </div>
