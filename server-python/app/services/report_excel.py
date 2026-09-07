@@ -28,6 +28,32 @@ from .periods import MONTH_NAMES
 COUNTRY_METRIC = "activeUsers"
 PAGE_METRIC = "activeUsers"
 
+#: GA4 metric id -> what to call it in a section heading.
+#:
+#: The country and landing-page tables are bare counts, and nothing on the sheet
+#: said which count. A client looking at "/blog · 143" couldn't tell whether that
+#: was active users, total users, sessions or views — and the two sections don't
+#: have to report the same metric. The heading now names it, and it is derived
+#: from the constants above so changing one changes the label with it.
+_METRIC_LABELS = {
+    "activeUsers": "Active Users",
+    "totalUsers": "Total Users",
+    "newUsers": "New Users",
+    "sessions": "Sessions",
+    "screenPageViews": "Page Views",
+    "engagedSessions": "Engaged Sessions",
+}
+
+
+def _metric_label(metric):
+    """Human name for a GA4 metric id, falling back to the id itself.
+
+    An unmapped metric shows its raw id rather than silently omitting the label:
+    an ugly heading is a prompt to add it here, a missing one is the bug this
+    whole mapping exists to fix.
+    """
+    return _METRIC_LABELS.get(metric) or str(metric)
+
 #: How the per-keyword ranks collapse into the single "Keywords Rank" figure.
 #: "ranked_count" — how many tracked keywords hold a position at all.
 #: "avg_position" — mean position of those that do.
@@ -185,25 +211,28 @@ def _backlinks(data):
     return _num(bl.get("count"))
 
 
-#: (number, label, resolver, number format). A number of None marks a row that
-#: continues the one above it, which is why the sample sheet skips 4 and 6 —
-#: paid/organic pairs share an index.
+#: (label, resolver, number format).
+#:
+#: Every row is numbered in its own right. Paid/organic pairs used to share an
+#: index, leaving the second of each pair with a blank number cell — so the sheet
+#: skipped 4 and 6, and "Traffic from Organic Social" read as a footnote to the
+#: paid row above it rather than a figure of its own.
 _SCALAR_ROWS = (
-    (1, "Total Users", lambda d: _overview(d, "totalUsers"), _INT_FMT),
-    (2, "New/Unique Users", lambda d: _overview(d, "newUsers"), _INT_FMT),
-    (3, "Direct User Traffic", lambda d: _channel(d, "Direct"), _INT_FMT),
-    (4, "Traffic from Organic Search", lambda d: _channel(d, "Organic Search"), _INT_FMT),
-    (None, "Traffic from Paid Search", lambda d: _channel(d, "Paid Search"), _INT_FMT),
-    (5, "Traffic from Referrals", lambda d: _channel(d, "Referral"), _INT_FMT),
-    (6, "Traffic from Paid Social", lambda d: _channel(d, "Paid Social"), _INT_FMT),
-    (None, "Traffic from Organic Social", lambda d: _channel(d, "Organic Social"), _INT_FMT),
-    (7, "Avg. Engagement Time", lambda d: _overview(d, "avgEngagementSeconds"), _SEC_FMT),
-    (8, "Clicks", lambda d: _num(_gsc_totals(d).get("clicks")), _INT_FMT),
-    (9, "Impression", lambda d: _num(_gsc_totals(d).get("impressions")), _INT_FMT),
-    (10, "CTR", _ctr, _PCT_FMT),
-    (11, "Bounce Rate", _bounce_rate, _PCT_FMT),
-    (12, "Keywords Rank", _keywords_rank, _RANK_FMT if KEYWORDS_RANK_MODE == "avg_position" else _INT_FMT),
-    (13, "Backlinks", _backlinks, _INT_FMT),
+    ("Total Users", lambda d: _overview(d, "totalUsers"), _INT_FMT),
+    ("New/Unique Users", lambda d: _overview(d, "newUsers"), _INT_FMT),
+    ("Direct User Traffic", lambda d: _channel(d, "Direct"), _INT_FMT),
+    ("Traffic from Organic Search", lambda d: _channel(d, "Organic Search"), _INT_FMT),
+    ("Traffic from Paid Search", lambda d: _channel(d, "Paid Search"), _INT_FMT),
+    ("Traffic from Referrals", lambda d: _channel(d, "Referral"), _INT_FMT),
+    ("Traffic from Paid Social", lambda d: _channel(d, "Paid Social"), _INT_FMT),
+    ("Traffic from Organic Social", lambda d: _channel(d, "Organic Social"), _INT_FMT),
+    ("Avg. Engagement Time", lambda d: _overview(d, "avgEngagementSeconds"), _SEC_FMT),
+    ("Clicks", lambda d: _num(_gsc_totals(d).get("clicks")), _INT_FMT),
+    ("Impression", lambda d: _num(_gsc_totals(d).get("impressions")), _INT_FMT),
+    ("CTR", _ctr, _PCT_FMT),
+    ("Bounce Rate", _bounce_rate, _PCT_FMT),
+    ("Keywords Rank", _keywords_rank, _RANK_FMT if KEYWORDS_RANK_MODE == "avg_position" else _INT_FMT),
+    ("Backlinks", _backlinks, _INT_FMT),
 )
 
 
@@ -381,10 +410,9 @@ def build_workbook(project, versions):
 
     row = 2
     index = 0
-    for number, label, resolve, fmt in _SCALAR_ROWS:
-        if number is not None:
-            index = number
-        _write(ws, row, 1, index if number is not None else None, align=_CENTRE)
+    for label, resolve, fmt in _SCALAR_ROWS:
+        index += 1
+        _write(ws, row, 1, index, align=_CENTRE)
         _write(ws, row, 2, label, font=_LABEL_FONT)
         for i, version in enumerate(versions):
             value = resolve(version.get("data"))
@@ -428,9 +456,12 @@ def build_workbook(project, versions):
             ws.row_dimensions[row].height = 17
             row += 1
 
-    section("Traffic from Countries (Top Countries)", countries,
+    # The parenthetical carries the metric, not a restatement of the title —
+    # "Top Performing Pages (Top Performing Pages)" spent the only space
+    # available for saying what the numbers actually are.
+    section(f"Top Countries ({_metric_label(COUNTRY_METRIC)})", countries,
             COUNTRY_BLOCK, "by_country_city", COUNTRY_METRIC)
-    section("Top Performing Pages (Top Performing Pages)", pages,
+    section(f"Top Performing Pages ({_metric_label(PAGE_METRIC)})", pages,
             PAGE_BLOCK, "by_landing_page", PAGE_METRIC)
 
     # There used to be a "Data gaps" footer here listing why a month's GA4 or GSC
