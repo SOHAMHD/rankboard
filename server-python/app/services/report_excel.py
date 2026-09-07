@@ -105,21 +105,38 @@ _CENTRE = Alignment(horizontal="center", vertical="center")
 
 _INT_FMT = "#,##0"
 _PCT_FMT = "0.00%"
-_SEC_FMT = '0"s"'
-_MIN_FMT = '0.0"m"'
 _RANK_FMT = "0.0"
+
+#: Duration formats. Both are written against an Excel time serial (see
+#: _duration_cell), and both use bracketed elapsed codes — `[s]` / `[m]` — rather
+#: than bare `s` / `m`. Bare `m` is ambiguous in a number format (Excel reads it
+#: as "month" unless it can infer otherwise from neighbouring codes), and the
+#: unbracketed forms roll over: 90 minutes would display as 30, having silently
+#: carried an hour. Bracketed codes mean "total elapsed", which is what a
+#: duration is.
+_SEC_FMT = '[s]"s"'                 # 45  -> 45s
+_MIN_FMT = '[m]"m" ss"s"'           # 84  -> 1m 24s
+
+#: Seconds in a day. An Excel time is a fraction of one.
+_DAY_SECONDS = 86400.0
 
 
 def _duration_cell(seconds):
-    """Render a second count as seconds under a minute, minutes at or above one.
+    """Render a second count as a duration: seconds under a minute, m + s above.
 
     GA4 gives engagement time as raw seconds, and the sheet used to print it that
-    way whatever the size — "372s" left the reader doing the division.
+    way whatever the size — "372s" left the reader doing the division. Showing
+    decimal minutes instead was worse: "1.4m" reads as 1m 4s but means 1m 24s.
 
-    The unit switch can't be done with an Excel number format alone: a format can
-    branch on the value (`[<60]…;[>=60]…`) but it cannot scale one, so a 372 cell
-    formatted as minutes would read "372m". The value is therefore converted here
-    and the matching format returned with it.
+    So the cell holds a real Excel duration — the second count over 86400 — and
+    the number format renders it. That keeps the value numeric and sortable, and
+    lets Excel do the minutes-and-seconds arithmetic rather than this function
+    formatting a string that only looks like a number.
+
+    The unit choice can't live in the format alone: a format can branch on a
+    value (`[<60]…;[>=60]…`) but not scale one, and both branches here need the
+    same scaling. So the branch is here and the matching format comes back with
+    the value.
 
     Returns (value, number_format). Non-numeric input passes straight through so
     the sentinel used for missing months keeps its own handling in _write.
@@ -129,11 +146,8 @@ def _duration_cell(seconds):
     # Rounded before the comparison, not after: 59.9s rounds to 60, and deciding
     # on the raw value would have shown that as "60s".
     whole = round(seconds)
-    if abs(whole) < 60:
-        # Whole seconds — GA4's fractional precision is noise at this scale.
-        return whole, _SEC_FMT
-    # One decimal keeps 90s distinguishable from 120s as 1.5m vs 2.0m.
-    return round(seconds / 60.0, 1), _MIN_FMT
+    fmt = _SEC_FMT if abs(whole) < 60 else _MIN_FMT
+    return whole / _DAY_SECONDS, fmt
 
 
 def _num(v):
